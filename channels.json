@@ -1,0 +1,486 @@
+{
+  "Canada_Job": [
+    {
+      "name": "Canada Job Bank",
+      "username": "canadajobbankTG",
+      "country": "Canada",
+      "description": "Official and community job opportunities across Canada."
+    },
+    {
+      "name": "Toronto Iranians Job Group",
+      "username": "Toronto_Iranians",
+      "country": "Canada",
+      "description": "Job opportunities shared by the Iranian community in Toronto."
+    },
+    {
+      "name": "Canada Jobs Toronto Ontario",
+      "username": "jobs_toronto_ontario",
+      "country": "Canada",
+      "description": "Jobs in Toronto and Ontario."
+    },
+    {
+      "name": "Canada Jobs",
+      "username": "T_QEavJUeqJb31AI",
+      "country": "Canada",
+      "description": "General Canada job listings."
+    },
+    {
+      "name": "Toronto Hiring",
+      "username": "TorontoHiring",
+      "country": "Canada",
+      "description": "Hiring announcements in Toronto."
+    },
+    {
+      "name": "Job Found Toronto",
+      "username": "jobfoundtoronto",
+      "country": "Canada",
+      "description": "Employment opportunities in Toronto."
+    }
+  ],
+  "Canada_Immigrate": [
+    {
+      "name": "Baal For Canada",
+      "username": "BaalForCanada",
+      "country": "Canada",
+      "description": "Persian community for Canada immigration."
+    },
+    {
+      "name": "Canadian Visa Experience",
+      "username": "Canadian_Visa_Exp",
+      "country": "Canada",
+      "description": "Canadian visa experiences and discussions."
+    },
+    {
+      "name": "Caregivers Canada",
+      "username": "caregiverscanada",
+      "country": "Canada",
+      "description": "Caregiver immigration and employment."
+    },
+    {
+      "name": "Canada Immigrants Group",
+      "username": "canadaimmigrantsgroup",
+      "country": "Canada",
+      "description": "General immigration community."
+    },
+    {
+      "name": "AFCANADA",
+      "username": "AFCANADA",
+      "country": "Canada",
+      "description": "Iranian community and immigration information."
+    },
+    {
+      "name": "Canada Apply Abroad",
+      "username": "CanadaApplyAbroad",
+      "country": "Canada",
+      "description": "Immigration and visa application guidance."
+    },
+    {
+      "name": "Italy2Canada",
+      "username": "Italy2canada",
+      "country": "Canada",
+      "description": "Immigration from Italy to Canada."
+    },
+    {
+      "name": "Canada Visa Group",
+      "username": "CanadaVisaGroup",
+      "country": "Canada",
+      "description": "Visitor and immigration visa discussions."
+    },
+    {
+      "name": "HealthComma",
+      "username": "HealthComma",
+      "country": "Canada",
+      "description": "Healthcare professionals immigrating to Canada."
+    },
+    {
+      "name": "Canada Visa admission",
+      "username": "canada_farshad",
+      "country": "Canada",
+      "description": "Immigration and visa admission discussions for Canada."
+    },
+    {
+      "name": "Austrian & Germany Visa Group",
+      "username": "Austriavisa",
+      "country": "Canada",
+      "description": "Visa discussions for Austria and Germany."
+    },
+    {
+      "name": "Canada PR & Job Group",
+      "username": "FarshadPRJobCanada",
+      "country": "Canada",
+      "description": "Work permits, PR and job pathways for Canada."
+    },
+    {
+      "name": "Canada Student Visa Jobs Network",
+      "username": "StudentVISAforCanada",
+      "country": "Canada",
+      "description": "Student visa and related opportunities for Canada."
+    },
+    {
+      "name": "Canada Admission Comma",
+      "username": "AdmissionComma",
+      "country": "Canada",
+      "description": "University admission guidance for Canada and USA."
+    },
+    {
+      "name": "Apply Comma Canada Visa",
+      "username": "ApplyComma",
+      "country": "Canada",
+      "description": "Student visa application guidance for Canada."
+    },
+    {
+      "name": "PR Comma Canada",
+      "username": "PRcomma",
+      "country": "Canada",
+      "description": "Permanent residency discussions for Canada."
+    }
+  ],
+  "Canada_Rent": [
+    {
+      "name": "CANADA RENT",
+      "username": "CANADARENT",
+      "country": "Canada",
+      "description": "Rental listings in Canada."
+    },
+    {
+      "name": "Toronto Rental",
+      "username": "Toronto_Rental",
+      "country": "Canada",
+      "description": "Toronto rentals."
+    },
+    {
+      "name": "Rent Toronto",
+      "username": "RentToronto",
+      "country": "Canada",
+      "description": "Rental properties in Toronto."
+    },
+    {
+      "name": "Vancouver Rent Home",
+      "username": "VancouverRentHome",
+      "country": "Canada",
+      "description": "Vancouver housing."
+    },
+    {
+      "name": "Montreal Rent Home",
+      "username": "MontrealRentHome",
+      "country": "Canada",
+      "description": "Montreal housing."
+    },
+    {
+      "name": "Ejare Toronto",
+      "username": "EjareToronto",
+      "country": "Canada",
+      "description": "Persian Toronto rentals."
+    },
+    {
+      "name": "Ejareh Canada",
+      "username": "EjarehCanada",
+      "country": "Canada",
+      "description": "Persian Canada rentals."
+    },
+    {
+      "name": "Canada Accommodation",
+      "username": "canadaaccomo",
+      "country": "Canada",
+      "description": "Student accommodation in Canada."
+    },
+    {
+      "name": "Canada India Accommodation",
+      "username": "canadaindianaccommodation",
+      "country": "Canada",
+      "description": "Accommodation listings for Canada (India community focus)."
+    },
+    {
+      "name": "Vancouver Today Rent",
+      "username": "VancouverTodayRent",
+      "country": "Canada",
+      "description": "Daily rental listings in Vancouver."
+    },
+    {
+      "name": "Rent in BC and Vancouver",
+      "username": "rentvancouver",
+      "country": "Canada",
+      "description": "Rental listings in British Columbia and Vancouver."
+    }
+  ],
+  "Canada_Flight": [
+    {
+      "name": "Iran Australia Flights",
+      "username": "IranAustraliaFlight",
+      "country": "Australia",
+      "description": "Discussion about Iran-Australia flights, travel experiences, passenger cargo, luggage shipping, and finding companions for parents and family members."
+    },
+    {
+      "name": "Hilfen Shipping Germany",
+      "username": "hilfenChat",
+      "country": "Germany",
+      "description": "Hilfen group for shipping luggage and cargo from Germany."
+    },
+    {
+      "name": "Italy Iran Shipping",
+      "username": "ersalebarbeiran",
+      "country": "Italy",
+      "description": "Shipping cargo between Italy and Iran and vice versa."
+    },
+    {
+      "name": "Canada Shipping Group",
+      "username": "CanadaShipping",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping services between Canada and Iran."
+    },
+    {
+      "name": "Pakat USA Shipping",
+      "username": "PakatUSA",
+      "country": "USA",
+      "description": "Coordination group for sending packages and cargo to the USA."
+    },
+    {
+      "name": "Germany Iran Passenger Shipping",
+      "username": "ersal_bar_chamedani",
+      "country": "Germany",
+      "description": "Coordination for passenger cargo shipping between Germany and Iran."
+    },
+    {
+      "name": "Iran Hungary Passenger Cargo",
+      "username": "Passenger_cargo_iran_hungary",
+      "country": "Hungary",
+      "description": "Passenger cargo shipping between Iran and Hungary."
+    },
+    {
+      "name": "Canada Iran Passenger Cargo",
+      "username": "BarVaMosaferi",
+      "country": "Canada",
+      "description": "Passenger cargo shipping services between Canada and Iran."
+    },
+    {
+      "name": "Iran USA Canada Shipping",
+      "username": "baritous",
+      "country": "USA",
+      "description": "Service group for shipping cargo between USA, Canada, and Iran."
+    },
+    {
+      "name": "Iran Germany Shipping Ads",
+      "username": "IranAlmanchat",
+      "country": "Germany",
+      "description": "Free advertising group for shipping cargo between Iran and Germany."
+    },
+    {
+      "name": "China Iran Passenger Cargo",
+      "username": "china_chamedan",
+      "country": "China",
+      "description": "Passenger cargo shipping between China and Iran."
+    },
+    {
+      "name": "Denmark Iran Passenger Shipping",
+      "username": "Dk_Ir_personal_shipping",
+      "country": "Denmark",
+      "description": "Shipping personal items and documents through passengers between Iran and Denmark, including travel companion coordination."
+    },
+    {
+      "name": "Austria Vienna Needs",
+      "username": "Austria_vienna_niazmandiha",
+      "country": "Austria",
+      "description": "Needs and classifieds group for life in Austria."
+    },
+    {
+      "name": "China Iran Import Export",
+      "username": "Import_Export_from_china4675",
+      "country": "China",
+      "description": "Group for shipping goods from China to Iran."
+    },
+    {
+      "name": "Worldwide Iran Passenger Shipping",
+      "username": "Iran_Dutch",
+      "country": "International",
+      "description": "Passenger cargo transfer services from around the world to Iran and vice versa."
+    },
+    {
+      "name": "Iran Germany Cargo",
+      "username": "ersalbar_alman",
+      "country": "Germany",
+      "description": "Passenger cargo shipping services between Germany and Iran."
+    },
+    {
+      "name": "Iranian Germany Needs",
+      "username": "iraniangermanyy",
+      "country": "Germany",
+      "description": "Needs and classifieds group for Iranians living in Germany."
+    },
+    {
+      "name": "Italeader Italy Ads",
+      "username": "italeader360",
+      "country": "Italy",
+      "description": "Italian classifieds and advertising group."
+    },
+    {
+      "name": "Iranian Passenger Cargo Chat",
+      "username": "RezaSBK90",
+      "country": "International",
+      "description": "Chat group for Iranian passenger cargo transportation services."
+    }
+  ],
+  "Canada_Language": [
+    {
+      "name": "English To Canada Chatroom",
+      "username": "English_To_Canada_Chatroom",
+      "country": "Canada",
+      "description": "English practice for newcomers."
+    }
+  ],
+  "Canada_Marketplace": [
+    {
+      "name": "Home Appliances Canada",
+      "username": "Home_Appliances_CA",
+      "country": "Canada",
+      "description": "Buy and sell home appliances."
+    },
+    {
+      "name": "Divar Canada",
+      "username": "canadajoo_com",
+      "country": "Canada",
+      "description": "Classified ads and marketplace listings in Canada."
+    },
+    {
+      "name": "Toronto Deals",
+      "username": "Toronto_Deals",
+      "country": "Canada",
+      "description": "Buy and sell goods in Toronto."
+    },
+    {
+      "name": "Canada Kioosk Business Platform",
+      "username": "kioosk1",
+      "country": "Canada",
+      "description": "Business listings and classifieds platform in Canada."
+    }
+  ],
+  "Canada_Education": [
+    {
+      "name": "Canada Student Immigration",
+      "username": "immigrationcaanada",
+      "country": "Canada",
+      "description": "Student immigration information."
+    },
+    {
+      "name": "OJC Study Group Canada",
+      "username": "ojcstudygroup",
+      "country": "Canada",
+      "description": "Network for students and newcomers in Canada."
+    },
+    {
+      "name": "Canada School Exchange Group",
+      "username": "canada_school",
+      "country": "Canada",
+      "description": "Education-related exchange and community group."
+    }
+  ],
+  "Canada_Community": [
+    {
+      "name": "Iranian Canada Affairs Group",
+      "username": "AFCANADA",
+      "country": "Canada",
+      "description": "Iranian community in Canada."
+    },
+    {
+      "name": "Fanofa Canada Community",
+      "username": "fanofa_canada",
+      "country": "Canada",
+      "description": "Iranian community in Canada."
+    },
+    {
+      "name": "Welcome to Canada Newcomers",
+      "username": "Welcome_ToCanada",
+      "country": "Canada",
+      "description": "Information and support for newcomers to Canada."
+    },
+    {
+      "name": "Canada Paradise Chat",
+      "username": "canadapa",
+      "country": "Canada",
+      "description": "Community chat for Canada-related discussions."
+    }
+  ],
+  "Canada_Other": [
+    {
+      "name": "Parsmont Sports & Nature Club",
+      "username": "parsmont",
+      "country": "Canada",
+      "description": "Sports and outdoor activities."
+    },
+    {
+      "name": "Iranians of Canada",
+      "username": "Iranians_ofCanada",
+      "country": "Canada",
+      "description": "Iranian community."
+    },
+    {
+      "name": "Divar Canada",
+      "username": "divarcanada",
+      "country": "Canada",
+      "description": "Classified ads."
+    },
+    {
+      "name": "Canada Shipping",
+      "username": "CanadaShipping",
+      "country": "Canada",
+      "description": "Shipping and cargo."
+    },
+    {
+      "name": "V Women Canada",
+      "username": "V_Women",
+      "country": "Canada",
+      "description": "Women's community."
+    },
+    {
+      "name": "London Canada Persian Businesses",
+      "username": "LondonCanadaPersianBusinesses",
+      "country": "Canada",
+      "description": "Persian businesses."
+    },
+    {
+      "name": "Pets to Canada",
+      "username": "petstocanada",
+      "country": "Canada",
+      "description": "Pet transportation."
+    },
+    {
+      "name": "Guelph Community Group",
+      "username": "Guelphian",
+      "country": "Canada",
+      "description": "Community group for residents of Guelph."
+    },
+    {
+      "name": "Russian Canada Forum",
+      "username": "forum_canada",
+      "country": "Canada",
+      "description": "Russian-speaking community in Canada."
+    },
+    {
+      "name": "Ukrainian Ottawa CUAET Group",
+      "username": "ua_ottawa_cuaet",
+      "country": "Canada",
+      "description": "Ukrainian community in Ottawa."
+    },
+    {
+      "name": "Badbadak Canada Jobs Network",
+      "username": "badbadak_canada",
+      "country": "Canada",
+      "description": "Job posting and recruitment network in Canada."
+    }
+  ],
+  "USA_Job": [
+    {
+      "name": "Work in New York City",
+      "username": "jobs_nyc_ny",
+      "country": "USA",
+      "description": "Jobs in New York City."
+    }
+  ],
+  "UAE_Job": [
+    {
+      "name": "Work in Dubai UAE",
+      "username": "work_dubai_uae",
+      "country": "UAE",
+      "description": "Jobs in Dubai."
+    }
+  ]
+}

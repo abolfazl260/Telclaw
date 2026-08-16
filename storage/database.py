@@ -1,6 +1,7 @@
 """SQLite persistence for the Telclaw pipeline.
 
-This module owns persistence. It does not know about Telegram, UI, CSV, or AI.
+This module owns persistence. It does not know about Telegram, UI, CSV, AI,
+or external delivery services.
 """
 
 import sqlite3
@@ -10,6 +11,11 @@ import config
 
 
 MESSAGE_COLUMNS = {
+    "raw_text": "TEXT",
+    "cleaned_text": "TEXT",
+    "processing_status": "TEXT NOT NULL DEFAULT 'collected'",
+    "pipeline_version": "TEXT",
+    "cleaned_at": "TEXT",
     "channel_id": "INTEGER",
     "channel_name": "TEXT",
     "sender_id": "INTEGER",
@@ -49,8 +55,13 @@ def initialize_db():
                 channel_username TEXT NOT NULL,
                 message_id INTEGER NOT NULL,
                 text TEXT,
+                raw_text TEXT,
+                cleaned_text TEXT,
                 date TEXT NOT NULL,
                 media_path TEXT,
+                processing_status TEXT NOT NULL DEFAULT 'collected',
+                pipeline_version TEXT,
+                cleaned_at TEXT,
                 channel_id INTEGER,
                 channel_name TEXT,
                 sender_id INTEGER,
@@ -64,12 +75,14 @@ def initialize_db():
             """
         )
         _migrate_messages_table(cursor)
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_channel_date "
             "ON messages(channel_username, date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_processing_status "
+            "ON messages(processing_status)"
         )
         cursor.execute(
             """
@@ -86,24 +99,31 @@ def initialize_db():
 
 
 def insert_message(channel_username, message_id, text, date_str, *,
-                   channel_id=None, channel_name=None, sender_id=None,
-                   sender_username=None, sender_type=None, has_media=False,
-                   media_type=None, file_unique_id=None, media_path=None):
+                   raw_text=None, cleaned_text=None, processing_status="collected",
+                   pipeline_version=None, cleaned_at=None, channel_id=None,
+                   channel_name=None, sender_id=None, sender_username=None,
+                   sender_type=None, has_media=False, media_type=None,
+                   file_unique_id=None, media_path=None):
+    """Insert a new collected record; return False for an existing message."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
         cursor.execute(
             """
             INSERT OR IGNORE INTO messages (
-                channel_username, message_id, text, date, media_path,
-                channel_id, channel_name, sender_id, sender_username,
-                sender_type, has_media, media_type, file_unique_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                channel_username, message_id, text, raw_text, cleaned_text, date,
+                media_path, processing_status, pipeline_version, cleaned_at,
+                channel_id, channel_name, sender_id, sender_username, sender_type,
+                has_media, media_type, file_unique_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (channel_username, message_id, text, date_str, media_path,
-             channel_id, channel_name, sender_id, sender_username,
-             sender_type, int(bool(has_media)), media_type,
-             str(file_unique_id) if file_unique_id is not None else None),
+            (
+                channel_username, message_id, text, raw_text, cleaned_text, date_str,
+                media_path, processing_status, pipeline_version, cleaned_at,
+                channel_id, channel_name, sender_id, sender_username, sender_type,
+                int(bool(has_media)), media_type,
+                str(file_unique_id) if file_unique_id is not None else None,
+            ),
         )
         conn.commit()
         return cursor.rowcount > 0

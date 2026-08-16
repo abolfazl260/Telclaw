@@ -1,12 +1,12 @@
 """Telegram collection orchestration.
 
-This layer only knows how to read Telegram messages and pass cleaned records
-into the persistence boundary. AI, delivery, and console UI are intentionally
-outside the collector.
+The collector owns Telegram I/O and hands records to processing/storage.
+AI and external delivery are intentionally outside this module.
 """
 
 import asyncio
 import random
+from datetime import datetime, timezone
 
 from colorama import Fore, init
 from telethon import errors
@@ -16,6 +16,9 @@ from processing.normalizer import normalize_channel_username, normalize_date
 from storage import database
 
 init(autoreset=True)
+
+
+PIPELINE_VERSION = "collection-cleaning-v1"
 
 
 def _extract_sender(message):
@@ -66,15 +69,16 @@ async def crawl_channel(client, channel_username, target_date):
                 skipped_count += 1
                 continue
 
-            message_text = clean_text(message.text)
-            if not is_collectable_text(message_text):
+            raw_text = message.text or ""
+            cleaned_text = clean_text(raw_text)
+            if not is_collectable_text(cleaned_text):
                 skipped_count += 1
                 continue
 
             msg_date = message.date.date()
             print(
                 f"🔗 ID: {message.id} | Date: {msg_date} | "
-                f"Text: {message_text[:40]}"
+                f"Text: {cleaned_text[:40]}"
             )
             if msg_date < target_date:
                 print(f"\n🏁 Reached target date {target_date}. Stopping channel.")
@@ -82,13 +86,19 @@ async def crawl_channel(client, channel_username, target_date):
 
             has_media, media_type, file_unique_id = _extract_media(message)
             sender_id, sender_username, sender_type = _extract_sender(message)
+            cleaned_at = datetime.now(timezone.utc).isoformat()
 
             try:
                 saved = database.insert_message(
                     channel_username=channel_username,
                     message_id=message.id,
-                    text=message_text,
+                    text=cleaned_text,
+                    raw_text=raw_text,
+                    cleaned_text=cleaned_text,
                     date_str=normalize_date(msg_date),
+                    processing_status="collected_cleaned",
+                    pipeline_version=PIPELINE_VERSION,
+                    cleaned_at=cleaned_at,
                     channel_id=getattr(entity, "channel_id", None),
                     channel_name=getattr(entity, "title", None),
                     sender_id=sender_id,

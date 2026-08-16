@@ -1,6 +1,6 @@
 import asyncio
 
-import database
+from storage import database
 from ui import ConsoleUI
 
 

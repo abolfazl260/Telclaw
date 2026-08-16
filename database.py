@@ -96,7 +96,6 @@ def insert_message(
     media_path=None,
 ):
     """Persist a crawled message and return True only when it is new."""
-    initialize_db()
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -131,7 +130,6 @@ def insert_message(
 
 
 def set_channel_target_date(channel_username, target_date_str):
-    initialize_db()
     conn = get_connection()
     try:
         conn.execute(
@@ -149,7 +147,6 @@ def set_channel_target_date(channel_username, target_date_str):
 
 
 def get_channel_target_date(channel_username):
-    initialize_db()
     conn = get_connection()
     try:
         row = conn.execute(

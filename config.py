@@ -1,12 +1,23 @@
 import os
 
+# Load local .env when python-dotenv is installed. Environment variables always
+# take precedence, so production deployments can continue to inject secrets
+# directly through the process environment.
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv()
+
 
 def _required_env(name: str) -> str:
     value = os.getenv(name)
     if not value:
         raise RuntimeError(
             f"Missing required environment variable: {name}. "
-            "Set it before starting Telclaw."
+            "Set it in .env or in the process environment before starting Telclaw."
         )
     return value
 

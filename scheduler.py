@@ -4,6 +4,7 @@ import random
 from colorama import Fore, Style, init
 from telethon import errors
 
+import csv_storage
 import database
 
 init(autoreset=True)
@@ -80,6 +81,7 @@ async def crawl_channel(client, channel_username, target_date):
 
             has_media, media_type, file_unique_id = _extract_media(message)
             sender_id, sender_username, sender_type = _extract_sender(message)
+            unique_key = f"{channel_username}_{message.id}"
 
             try:
                 saved = database.insert_message(
@@ -97,7 +99,24 @@ async def crawl_channel(client, channel_username, target_date):
                     file_unique_id=file_unique_id,
                 )
 
+                # Keep the existing CSV output as a compatibility/export sink.
+                # SQLite remains the source of truth for crawler persistence.
                 if saved:
+                    csv_storage.save_message(
+                        message_id=message.id,
+                        channel_id=getattr(entity, "channel_id", None),
+                        channel_username=channel_username,
+                        channel_name=getattr(entity, "title", None),
+                        sender_id=sender_id,
+                        sender_username=sender_username,
+                        sender_type=sender_type,
+                        text=message_text,
+                        has_media=has_media,
+                        file_unique_id=file_unique_id,
+                        media_type=media_type,
+                        date=str(msg_date),
+                        unique_key=unique_key,
+                    )
                     saved_count += 1
                 else:
                     skipped_count += 1
@@ -105,7 +124,7 @@ async def crawl_channel(client, channel_username, target_date):
 
             except Exception as exc:
                 skipped_count += 1
-                print(f"⚠️ Database save error: {exc}")
+                print(f"⚠️ Storage error: {exc}")
 
             await asyncio.sleep(random.uniform(0.3, 1.0))
 

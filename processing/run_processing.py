@@ -8,8 +8,9 @@ def main():
     database.initialize_db()
     result = ProcessingService().process_pending()
     print(
-        f"[PROCESSING] found={result['found']} "
-        f"processed={result['processed']} failed={result['failed']}"
+        "[PROCESSING] found={} processed={} failed={}".format(
+            result["found"], result["processed"], result["failed"]
+        )
     )
 
 

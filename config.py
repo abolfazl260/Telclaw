@@ -36,3 +36,8 @@ ERROR_LOG_FILE = os.getenv("TELCLAW_ERROR_LOG", "crawler_errors.log")
 MAX_MEDIA_SIZE = int(os.getenv("TELCLAW_MAX_MEDIA_SIZE", str(2 * 1024 * 1024)))
 BASE_DELAY = int(os.getenv("TELCLAW_BASE_DELAY", "8"))
 RANDOM_DELAY_MAX = int(os.getenv("TELCLAW_RANDOM_DELAY_MAX", "400"))
+
+# Scheduled crawler settings
+# Default: every 5 hours. It can be overridden through the environment without
+# changing source code, e.g. TELCLAW_CRAWL_INTERVAL_HOURS=2.
+CRAWL_INTERVAL_HOURS = float(os.getenv("TELCLAW_CRAWL_INTERVAL_HOURS", "5"))

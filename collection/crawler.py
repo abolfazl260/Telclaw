@@ -49,6 +49,17 @@ def _extract_media(message):
     return has_media, media_type, file_unique_id
 
 
+def _log_extracted_message(channel_username, message, raw_text, media_type):
+    """Show every collected message in the log before persistence/processing."""
+    preview = raw_text.replace("\n", " ")
+    print(
+        f"\n📥 [EXTRACTED] channel={channel_username} "
+        f"message_id={message.id} date={message.date.isoformat()} "
+        f"media={media_type or 'none'}"
+    )
+    print(f"   text={preview}")
+
+
 async def crawl_channel(client, channel_username, target_date):
     channel_username = normalize_channel_username(channel_username)
     print(f"\n{Fore.CYAN}{'=' * 50}")
@@ -75,6 +86,7 @@ async def crawl_channel(client, channel_username, target_date):
             raw_text = message.text or ""
             has_media, media_type, file_unique_id = _extract_media(message)
             sender_id, sender_username, sender_type = _extract_sender(message)
+            _log_extracted_message(channel_username, message, raw_text, media_type)
 
             try:
                 saved = repository.save_collected_message(
@@ -98,11 +110,13 @@ async def crawl_channel(client, channel_username, target_date):
                 )
                 if saved:
                     saved_count += 1
+                    print("   💾 [RAW-SAVED] SQLite")
                 else:
                     skipped_count += 1
+                    print("   ⏭ [DUPLICATE] already stored")
             except Exception as exc:
                 skipped_count += 1
-                print(f"⚠️ Storage error: {exc}")
+                print(f"   ⚠️ [RAW-ERROR] Storage error: {exc}")
 
             await asyncio.sleep(random.uniform(0.3, 1.0))
 

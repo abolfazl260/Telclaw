@@ -1,23 +1,21 @@
-"""Telegram collection orchestration.
+"""Telegram collection only.
 
-The collector owns Telegram I/O and hands records to application services.
-AI and external delivery are intentionally outside this module.
+This module is intentionally limited to Telegram I/O and collection metadata.
+Cleaning, classification and property extraction belong to processing.
 """
 
 import asyncio
 import random
-from datetime import datetime, timezone
 
 from colorama import Fore, init
 from telethon import errors
 
-from processing.cleaner import clean_text, is_collectable_text
 from processing.normalizer import normalize_channel_username, normalize_date
 from services.message_service import MessageService
 
 init(autoreset=True)
 
-PIPELINE_VERSION = "collection-cleaning-v1"
+COLLECTION_VERSION = "collection-v2"
 
 
 def _extract_sender(message):
@@ -69,36 +67,26 @@ async def crawl_channel(client, channel_username, target_date):
                 skipped_count += 1
                 continue
 
-            raw_text = message.text or ""
-            cleaned_text = clean_text(raw_text)
-            if not is_collectable_text(cleaned_text):
-                skipped_count += 1
-                continue
-
             msg_date = message.date.date()
-            print(
-                f"🔗 ID: {message.id} | Date: {msg_date} | "
-                f"Text: {cleaned_text[:40]}"
-            )
             if msg_date < target_date:
                 print(f"\n🏁 Reached target date {target_date}. Stopping channel.")
                 break
 
+            raw_text = message.text or ""
             has_media, media_type, file_unique_id = _extract_media(message)
             sender_id, sender_username, sender_type = _extract_sender(message)
-            cleaned_at = datetime.now(timezone.utc).isoformat()
 
             try:
                 saved = repository.save_collected_message(
                     channel_username=channel_username,
                     message_id=message.id,
-                    text=cleaned_text,
+                    text=raw_text,
                     raw_text=raw_text,
-                    cleaned_text=cleaned_text,
+                    cleaned_text=None,
                     date_str=normalize_date(msg_date),
-                    processing_status="collected_cleaned",
-                    pipeline_version=PIPELINE_VERSION,
-                    cleaned_at=cleaned_at,
+                    processing_status="collected",
+                    pipeline_version=COLLECTION_VERSION,
+                    cleaned_at=None,
                     channel_id=getattr(entity, "channel_id", None),
                     channel_name=getattr(entity, "title", None),
                     sender_id=sender_id,
@@ -112,7 +100,6 @@ async def crawl_channel(client, channel_username, target_date):
                     saved_count += 1
                 else:
                     skipped_count += 1
-                    print(f"SKIPPED: {message.id}")
             except Exception as exc:
                 skipped_count += 1
                 print(f"⚠️ Storage error: {exc}")

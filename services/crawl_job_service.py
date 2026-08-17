@@ -19,4 +19,4 @@ class CrawlJobService:
             channel_username,
             datetime.now(timezone.utc).date(),
         )
-        return self.processing.process_pending()
+        return self.processing.process_pending(channel_username=channel_username)

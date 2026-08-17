@@ -1,20 +1,22 @@
-import os
+import asyncio
 import json
-from telethon import TelegramClient
+import os
+
+from telethon import TelegramClient, errors
+
 import config
 from error_handler import log_exception
 
-# اطمینان از وجود پوشه سشن‌ها
-if not os.path.exists(config.SESSION_DIR):
-    os.makedirs(config.SESSION_DIR)
+# Ensure the session directory exists.
+os.makedirs(config.SESSION_DIR, exist_ok=True)
 
-
-# =========================================================
-# 1) SESSION MANAGEMENT + METADATA
-# =========================================================
 
 def _meta_path(session_name):
     return os.path.join(config.SESSION_DIR, f"{session_name}.meta.json")
+
+
+def _session_path(session_name):
+    return os.path.join(config.SESSION_DIR, session_name)
 
 
 def _load_meta(session_name):
@@ -24,129 +26,156 @@ def _load_meta(session_name):
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return {}
-    except Exception as e:
-        log_exception(e, "Error loading session metadata")
+    except Exception as exc:
+        log_exception(exc, "Error loading session metadata")
         return {}
 
 
 def _save_meta(session_name, meta: dict):
     try:
-        path = _meta_path(session_name)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(_meta_path(session_name), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log_exception(e, "Error saving session metadata")
+    except Exception as exc:
+        log_exception(exc, "Error saving session metadata")
 
 
 def get_active_accounts():
-    """جستجو در پوشه سشن‌ها و بازگرداندن لیست نام اکانت‌های فعال + metadata"""
+    """Return existing Telegram sessions and their metadata."""
     try:
-        files = os.listdir(config.SESSION_DIR)
-
         accounts = []
-
-        for f in files:
-            if f.endswith(".session"):
-                name = os.path.splitext(f)[0]
-
-                meta = _load_meta(name)
-
-                accounts.append({
-                    "session": name,
-                    "meta": meta
-                })
-
+        for filename in os.listdir(config.SESSION_DIR):
+            if filename.endswith(".session"):
+                name = os.path.splitext(filename)[0]
+                accounts.append({"session": name, "meta": _load_meta(name)})
         return accounts
-
-    except Exception as e:
-        log_exception(e, "Error while listing active sessions")
+    except Exception as exc:
+        log_exception(exc, "Error while listing active sessions")
         return []
 
 
 def get_available_accounts():
-    """نام مستعار برای هماهنگی با خطای فایل ui.py"""
+    """Backward-compatible alias for the account list."""
     return get_active_accounts()
 
-
-# =========================================================
-# 2) CLIENT MANAGER (REPLACED create_client)
-# =========================================================
 
 _client_cache = {}
 
 
 def create_client(account_name):
-    """
-    Client Manager with caching (supports both dict and string input)
-    """
+    """Create or reuse a Telethon client for an existing session."""
     try:
-        # normalize input
-        if isinstance(account_name, dict):
-            session_name = account_name.get("session")
-        else:
-            session_name = account_name
-
+        session_name = account_name.get("session") if isinstance(account_name, dict) else account_name
         if not session_name:
             raise ValueError("session_name is empty or invalid")
 
-        # cache check
         if session_name in _client_cache:
             return _client_cache[session_name]
 
-        session_path = os.path.join(config.SESSION_DIR, session_name)
-
         client = TelegramClient(
-            session_path,
+            _session_path(session_name),
             config.API_ID,
-            config.API_HASH
+            config.API_HASH,
         )
-
         _client_cache[session_name] = client
         return client
-
-    except Exception as e:
-        log_exception(e, "Error creating Telegram client")
+    except Exception as exc:
+        log_exception(exc, "Error creating Telegram client")
         raise
 
 
-# =========================================================
-# REGISTER ACCOUNT (UNCHANGED LOGIC)
-# =========================================================
+async def _prompt(prompt):
+    """Read console input without blocking the asyncio event loop."""
+    return (await asyncio.to_thread(input, prompt)).strip()
+
 
 async def register_new_account(session_name):
-    """ثبت‌نام و ورود یک اکانت جدید در پوشه سشن‌ها"""
+    """Create a genuinely new Telegram session and complete interactive login."""
+    session_name = (session_name or "").strip()
+    if not session_name:
+        print("❌ Session name cannot be empty.")
+        return False
+
+    # A 'new account' must never silently reuse an existing session.
+    if os.path.exists(f"{_session_path(session_name)}.session"):
+        print(
+            f"❌ Session '{session_name}' already exists. "
+            "Choose a different session name or select the existing account."
+        )
+        return False
+
     client = create_client(session_name)
 
     try:
-        print(f"\n[🔄] Connecting to Telegram for session: {session_name}...")
+        print(f"\n[🔄] Connecting to Telegram for new session: {session_name}...")
         await client.connect()
 
+        if await client.is_user_authorized():
+            print(
+                f"⚠️ Session '{session_name}' is already authorized. "
+                "This should not happen for a new session."
+            )
+            return False
+
+        print("\n📱 Telegram login required.")
+        print("   Step 1/3: enter the phone number of the Telegram account.")
+        phone = await _prompt("Enter Phone Number (e.g., +989123456789): ")
+        if not phone:
+            print("❌ Phone number cannot be empty.")
+            return False
+
+        await client.send_code_request(phone)
+
+        print("\n📨 A Telegram verification code has been sent.")
+        code = await _prompt("Step 2/3 - Enter the verification code: ")
+        if not code:
+            print("❌ Verification code cannot be empty.")
+            return False
+
+        try:
+            await client.sign_in(phone=phone, code=code)
+        except errors.SessionPasswordNeededError:
+            print("\n🔐 This account has Two-Step Verification enabled.")
+            password = await _prompt("Step 3/3 - Enter your Telegram 2FA password: ")
+            if not password:
+                print("❌ Two-Step Verification password cannot be empty.")
+                return False
+            await client.sign_in(password=password)
+
         if not await client.is_user_authorized():
+            print("❌ Telegram login did not complete successfully.")
+            return False
 
-            phone = input("Enter Phone Number (e.g., +989123456789): ")
-            await client.send_code_request(phone)
-
-            code = input("Enter the verification code you received: ")
-
-            try:
-                await client.sign_in(phone, code)
-            except Exception:
-                two_step_pass = input("Two-step verification enabled. Enter password: ")
-                await client.sign_in(password=two_step_pass)
+        me = await client.get_me()
+        _save_meta(
+            session_name,
+            {
+                "status": "active",
+                "telegram_user_id": getattr(me, "id", None),
+                "username": getattr(me, "username", None),
+                "phone": getattr(me, "phone", None),
+            },
+        )
 
         print(f"✅ Account '{session_name}' successfully authorized!")
-
-        # save metadata
-        _save_meta(session_name, {
-            "status": "active"
-        })
-
         return True
 
-    except Exception as e:
-        log_exception(e, f"Failed to register new account: {session_name}")
+    except errors.PhoneNumberInvalidError:
+        print("❌ The phone number is invalid. Include the country code, e.g. +1... or +98...")
+        return False
+    except errors.PhoneCodeInvalidError:
+        print("❌ The Telegram verification code is invalid.")
+        return False
+    except errors.PhoneCodeExpiredError:
+        print("❌ The Telegram verification code has expired. Start login again.")
+        return False
+    except errors.FloodWaitError as exc:
+        print(f"❌ Telegram rate limit: wait {exc.seconds} seconds before trying again.")
+        return False
+    except Exception as exc:
+        log_exception(exc, f"Failed to register new account: {session_name}")
         print(f"❌ Error during registration. Check {config.ERROR_LOG_FILE}")
         return False
-
     finally:
-        await client.disconnect()
+        if client.is_connected():
+            await client.disconnect()
+        _client_cache.pop(session_name, None)

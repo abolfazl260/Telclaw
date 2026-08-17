@@ -1,15 +1,23 @@
 """Application service that orchestrates message processing."""
 
+from processing.classifier import ClassifierStage
 from processing.contracts import ProcessingRecord
+from processing.property_extractor import PropertyExtractorStage
 from processing.stages import CleanTextStage, NormalizeStage, Pipeline
 
 
 class ProcessingService:
-    """Run the processing pipeline without knowing its infrastructure."""
+    """Run processing stages without knowing their infrastructure."""
 
     def __init__(self, stages=None):
         self.pipeline = Pipeline(
-            stages or [NormalizeStage(), CleanTextStage()]
+            stages
+            or [
+                NormalizeStage(),
+                CleanTextStage(),
+                ClassifierStage(),
+                PropertyExtractorStage(),
+            ]
         )
 
     def process_record(self, data):

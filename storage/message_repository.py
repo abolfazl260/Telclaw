@@ -12,8 +12,10 @@ class MessageRepository:
     def insert(self, **message):
         return database.insert_message(**message)
 
-    def get_pending(self, limit=500):
-        return database.get_messages_by_status("collected", limit=limit)
+    def get_pending(self, limit=500, channel_username=None):
+        return database.get_messages_by_status(
+            "collected", limit=limit, channel_username=channel_username
+        )
 
     def mark_processed(self, message_id, channel_username, **fields):
         return database.update_processed_message(

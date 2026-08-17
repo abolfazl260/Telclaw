@@ -1,9 +1,11 @@
 """Console presentation layer for Telclaw.
 
 The UI is intentionally thin: it collects user input and delegates business
-operations to application services.
+operations to application services. Console input runs in a worker thread so
+background crawler tasks keep running while the menu waits for input.
 """
 
+import asyncio
 import os
 
 from colorama import Fore, Style, init
@@ -43,20 +45,20 @@ class ConsoleUI:
     def show_message(self, message, color=Fore.CYAN):
         print(f"{color}▸ {message}{Style.RESET_ALL}")
 
-    def pause(self, message="Press Enter to continue..."):
-        input(f"\n{message}")
+    async def pause(self, message="Press Enter to continue..."):
+        await asyncio.to_thread(input, f"\n{message}")
 
-    def prompt_choice(self, prompt, valid_options):
+    async def prompt_choice(self, prompt, valid_options):
         while True:
-            value = input(prompt).strip().lower()
+            value = (await asyncio.to_thread(input, prompt)).strip().lower()
             if value in valid_options:
                 return value
             self.show_message("Invalid choice. Please try again.", Fore.RED)
 
-    def prompt_text(self, prompt, default=None, allow_empty=True):
+    async def prompt_text(self, prompt, default=None, allow_empty=True):
         while True:
             suffix = f" [{default}]" if default is not None else ""
-            value = input(f"{prompt}{suffix}: ").strip()
+            value = (await asyncio.to_thread(input, f"{prompt}{suffix}: ")).strip()
             value = value or (default if default is not None else "")
             if allow_empty or value:
                 return value
@@ -80,7 +82,7 @@ class ConsoleUI:
         if account_name is None:
             labels = [account["session"] for account in accounts]
             self._print_options("Select Account", labels)
-            choice = self.prompt_text("Select account number", default="1")
+            choice = await self.prompt_text("Select account number", default="1")
             try:
                 account_name = accounts[int(choice) - 1]["session"]
             except (ValueError, IndexError):
@@ -106,21 +108,21 @@ class ConsoleUI:
             print(f"{Fore.GREEN}│  3. Go back")
             self.show_section_footer()
 
-            choice = self.prompt_choice("\nChoose an option [1-3]: ", {"1", "2", "3"})
+            choice = await self.prompt_choice("\nChoose an option [1-3]: ", {"1", "2", "3"})
             if choice == "3":
                 return
 
             if choice == "1":
                 await self.connect_client()
-                self.pause()
+                await self.pause()
                 return
 
-            name = self.prompt_text("Enter a unique session name", allow_empty=False)
+            name = await self.prompt_text("Enter a unique session name", allow_empty=False)
             if await self.accounts.register(name):
                 self.show_message(f"Account '{name}' created successfully.", Fore.GREEN)
             else:
                 self.show_message("Account creation failed.", Fore.RED)
-            self.pause()
+            await self.pause()
 
     async def start_crawler_flow(self):
         self.clear_screen()
@@ -131,24 +133,24 @@ class ConsoleUI:
             categories = self.crawler.categories()
         except Exception as exc:
             self.show_message(f"Unable to load channels: {exc}", Fore.RED)
-            self.pause()
+            await self.pause()
             return
 
         if not categories:
             self.show_message("No categories found.", Fore.YELLOW)
-            self.pause()
+            await self.pause()
             return
 
         self._print_options("Available Categories", categories)
-        choice = self.prompt_text("Select category number", default="1")
+        choice = await self.prompt_text("Select category number", default="1")
         try:
             category = categories[int(choice) - 1]
         except (ValueError, IndexError):
             self.show_message("Invalid category selection.", Fore.RED)
-            self.pause()
+            await self.pause()
             return
 
-        interval = self.prompt_text(
+        interval = await self.prompt_text(
             "Crawl interval in hours",
             default=str(getattr(config, "CRAWL_INTERVAL_HOURS", 5)),
             allow_empty=False,
@@ -159,19 +161,19 @@ class ConsoleUI:
                 raise ValueError
         except ValueError:
             self.show_message("Interval must be a positive number.", Fore.RED)
-            self.pause()
+            await self.pause()
             return
 
         client = await self.connect_client()
         if client is None:
-            self.pause()
+            await self.pause()
             return
 
         try:
             jobs = self.crawler.schedule_category(client, category, interval_hours)
         except Exception as exc:
             self.show_message(f"Unable to schedule crawler: {exc}", Fore.RED)
-            self.pause()
+            await self.pause()
             return
 
         self.show_message(
@@ -179,7 +181,7 @@ class ConsoleUI:
             f"every {interval_hours:g} hour(s). First crawl starts immediately.",
             Fore.GREEN,
         )
-        self.pause("Press Enter to return to the menu. Jobs continue in background...")
+        await self.pause("Press Enter to return to the menu. Jobs continue in background...")
 
     async def change_settings(self):
         self.clear_screen()
@@ -191,12 +193,12 @@ class ConsoleUI:
         self.show_section_footer()
 
         try:
-            config.BASE_DELAY = int(self.prompt_text("New base delay", str(config.BASE_DELAY)))
+            config.BASE_DELAY = int(await self.prompt_text("New base delay", str(config.BASE_DELAY)))
             config.RANDOM_DELAY_MAX = int(
-                self.prompt_text("New random delay max", str(config.RANDOM_DELAY_MAX))
+                await self.prompt_text("New random delay max", str(config.RANDOM_DELAY_MAX))
             )
             config.CRAWL_INTERVAL_HOURS = float(
-                self.prompt_text(
+                await self.prompt_text(
                     "New crawl interval in hours",
                     str(getattr(config, "CRAWL_INTERVAL_HOURS", 5)),
                 )
@@ -206,7 +208,7 @@ class ConsoleUI:
             self.show_message("Settings updated successfully.", Fore.GREEN)
         except ValueError:
             self.show_message("Settings contain invalid values.", Fore.RED)
-        self.pause()
+        await self.pause()
 
     async def manage_channels(self):
         self.clear_screen()
@@ -215,7 +217,7 @@ class ConsoleUI:
             data = self.channels.load()
         except Exception as exc:
             self.show_message(f"Unable to read channels: {exc}", Fore.RED)
-            self.pause()
+            await self.pause()
             return
 
         self.show_section_header("Channel Management")
@@ -225,7 +227,7 @@ class ConsoleUI:
                 print(f"{Fore.GREEN}│    ├─ @{channel.get('username', 'unknown')}")
                 print(f"{Fore.GREEN}│    └─ {Fore.WHITE}{channel.get('description', 'No description')}")
         self.show_section_footer()
-        self.pause()
+        await self.pause()
 
     async def run(self):
         while True:
@@ -239,7 +241,7 @@ class ConsoleUI:
             print(f"{Fore.GREEN}│  5. 🚪 Exit")
             self.show_section_footer()
 
-            choice = self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
+            choice = await self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
             if choice == "1":
                 await self.start_crawler_flow()
             elif choice == "2":

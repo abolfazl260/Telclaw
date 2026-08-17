@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from urllib.parse import urlparse
 
 from telethon import TelegramClient, errors
 
@@ -34,6 +35,35 @@ def _normalize_session_name(account):
         raise ValueError("session_name is empty")
 
     return session_name
+
+
+def _telegram_proxy():
+    """Build a Telethon SOCKS5 proxy tuple from configuration, if configured."""
+    value = getattr(config, "TELEGRAM_PROXY", "").strip()
+    if not value:
+        return None
+
+    parsed = urlparse(value)
+    if parsed.scheme.lower() != "socks5":
+        raise ValueError(
+            "TELECLAW_TELEGRAM_PROXY must use socks5://host:port"
+        )
+    if not parsed.hostname or not parsed.port:
+        raise ValueError(
+            "TELECLAW_TELEGRAM_PROXY must include proxy host and port"
+        )
+
+    # Telethon uses the PySocks tuple format: (type, host, port, rdns, user, password).
+    import socks
+
+    return (
+        socks.SOCKS5,
+        parsed.hostname,
+        parsed.port,
+        True,
+        parsed.username,
+        parsed.password,
+    )
 
 
 def _load_meta(session_name):
@@ -86,10 +116,16 @@ def create_client(account_name):
         if session_name in _client_cache:
             return _client_cache[session_name]
 
+        client_kwargs = {}
+        proxy = _telegram_proxy()
+        if proxy is not None:
+            client_kwargs["proxy"] = proxy
+
         client = TelegramClient(
             _session_path(session_name),
             config.API_ID,
             config.API_HASH,
+            **client_kwargs,
         )
         _client_cache[session_name] = client
         return client
@@ -118,7 +154,11 @@ async def register_new_account(session_name):
     client = create_client(session_name)
 
     try:
-        print(f"\n[🔄] Connecting to Telegram for new session: {session_name}...")
+        proxy_status = " via configured SOCKS5 proxy" if config.TELEGRAM_PROXY else " directly"
+        print(
+            f"\n[🔄] Connecting to Telegram for new session: {session_name}"
+            f"{proxy_status}..."
+        )
         await client.connect()
 
         if await client.is_user_authorized():
@@ -182,6 +222,17 @@ async def register_new_account(session_name):
         return False
     except errors.FloodWaitError as exc:
         print(f"❌ Telegram rate limit: wait {exc.seconds} seconds before trying again.")
+        return False
+    except ConnectionError:
+        proxy_hint = (
+            "Check the configured SOCKS5 proxy and its host/port."
+            if config.TELEGRAM_PROXY
+            else "Check internet access to Telegram. If Telegram is blocked on this network, configure a SOCKS5 proxy with TELECLAW_TELEGRAM_PROXY."
+        )
+        print(
+            "❌ Could not connect to Telegram after multiple attempts. "
+            f"{proxy_hint}"
+        )
         return False
     except (EOFError, KeyboardInterrupt):
         print("\n⚠️ Interactive input was interrupted. Telegram login was cancelled.")

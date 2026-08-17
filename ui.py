@@ -117,11 +117,25 @@ class ConsoleUI:
                 await self.pause()
                 return
 
-            name = await self.prompt_text("Enter a unique session name", allow_empty=False)
+            existing_names = {account["session"] for account in self.accounts.list_accounts()}
+            while True:
+                name = await self.prompt_text("Enter a unique session name", allow_empty=False)
+                if name not in existing_names:
+                    break
+                self.show_message(
+                    f"Session '{name}' already exists. Choose another name or select it from option 1.",
+                    Fore.YELLOW,
+                )
+
+            self.show_message(
+                "A new Telegram login will now be started. You will be asked for your phone number, "
+                "verification code, and 2FA password if enabled.",
+                Fore.CYAN,
+            )
             if await self.accounts.register(name):
                 self.show_message(f"Account '{name}' created successfully.", Fore.GREEN)
             else:
-                self.show_message("Account creation failed.", Fore.RED)
+                self.show_message("Account creation failed. No account was added.", Fore.RED)
             await self.pause()
 
     async def start_crawler_flow(self):

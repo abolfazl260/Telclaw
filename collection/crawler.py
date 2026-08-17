@@ -1,6 +1,6 @@
 """Telegram collection orchestration.
 
-The collector owns Telegram I/O and hands records to processing/storage.
+The collector owns Telegram I/O and hands records to application services.
 AI and external delivery are intentionally outside this module.
 """
 
@@ -13,10 +13,9 @@ from telethon import errors
 
 from processing.cleaner import clean_text, is_collectable_text
 from processing.normalizer import normalize_channel_username, normalize_date
-from storage import database
+from services.message_service import MessageService
 
 init(autoreset=True)
-
 
 PIPELINE_VERSION = "collection-cleaning-v1"
 
@@ -58,6 +57,7 @@ async def crawl_channel(client, channel_username, target_date):
     print(f"📡 STARTING CRAWL: {Fore.YELLOW}{channel_username}")
     print(f"{Fore.CYAN}{'=' * 50}")
 
+    repository = MessageService()
     saved_count = 0
     skipped_count = 0
     try:
@@ -89,7 +89,7 @@ async def crawl_channel(client, channel_username, target_date):
             cleaned_at = datetime.now(timezone.utc).isoformat()
 
             try:
-                saved = database.insert_message(
+                saved = repository.save_collected_message(
                     channel_username=channel_username,
                     message_id=message.id,
                     text=cleaned_text,

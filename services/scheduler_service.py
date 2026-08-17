@@ -1,17 +1,17 @@
-"""Application-level scheduling service.
-
-Scheduling policy lives here; Telegram collection remains in collection/.
-"""
+"""Application-level scheduling service."""
 
 import asyncio
 from datetime import datetime, timezone
 
 import config
-from collection.crawler import crawl_channel
+from collection.collector_service import CollectionService
 
 
 class SchedulerService:
-    def __init__(self):
+    """Schedule collection jobs; collection implementation stays replaceable."""
+
+    def __init__(self, collection_service=None):
+        self.collection = collection_service or CollectionService()
         self._tasks = {}
 
     @staticmethod
@@ -23,7 +23,7 @@ class SchedulerService:
     async def _run_forever(self, client, channel_username, interval_hours):
         while True:
             try:
-                await crawl_channel(
+                await self.collection.crawl_channel(
                     client,
                     channel_username,
                     datetime.now(timezone.utc).date(),

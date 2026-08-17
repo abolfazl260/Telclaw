@@ -19,6 +19,23 @@ def _session_path(session_name):
     return os.path.join(config.SESSION_DIR, session_name)
 
 
+def _normalize_session_name(account):
+    """Return a valid session name from a string or account record."""
+    if isinstance(account, dict):
+        account = account.get("session")
+
+    if not isinstance(account, str):
+        raise TypeError(
+            f"session_name must be a string, got {type(account).__name__}"
+        )
+
+    session_name = account.strip()
+    if not session_name:
+        raise ValueError("session_name is empty")
+
+    return session_name
+
+
 def _load_meta(session_name):
     try:
         path = _meta_path(session_name)
@@ -62,11 +79,9 @@ _client_cache = {}
 
 
 def create_client(account_name):
-    """Create or reuse a Telethon client for an existing session."""
+    """Create or reuse a Telethon client using a scalar session-name key."""
     try:
-        session_name = account_name.get("session") if isinstance(account_name, dict) else account_name
-        if not session_name:
-            raise ValueError("session_name is empty or invalid")
+        session_name = _normalize_session_name(account_name)
 
         if session_name in _client_cache:
             return _client_cache[session_name]
@@ -90,10 +105,7 @@ async def _prompt(prompt):
 
 async def register_new_account(session_name):
     """Create a genuinely new Telegram session and complete interactive login."""
-    session_name = (session_name or "").strip()
-    if not session_name:
-        print("❌ Session name cannot be empty.")
-        return False
+    session_name = _normalize_session_name(session_name)
 
     # A 'new account' must never silently reuse an existing session.
     if os.path.exists(f"{_session_path(session_name)}.session"):
@@ -170,6 +182,9 @@ async def register_new_account(session_name):
         return False
     except errors.FloodWaitError as exc:
         print(f"❌ Telegram rate limit: wait {exc.seconds} seconds before trying again.")
+        return False
+    except (EOFError, KeyboardInterrupt):
+        print("\n⚠️ Interactive input was interrupted. Telegram login was cancelled.")
         return False
     except Exception as exc:
         log_exception(exc, f"Failed to register new account: {session_name}")

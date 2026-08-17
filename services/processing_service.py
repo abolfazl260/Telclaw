@@ -1,15 +1,19 @@
 """Application service that orchestrates message processing."""
 
+from datetime import datetime, timezone
+
 from processing.classifier import ClassifierStage
 from processing.contracts import ProcessingRecord
 from processing.property_extractor import PropertyExtractorStage
 from processing.stages import CleanTextStage, NormalizeStage, Pipeline
+from storage.message_repository import MessageRepository
 
 
 class ProcessingService:
     """Run processing stages without knowing their infrastructure."""
 
-    def __init__(self, stages=None):
+    def __init__(self, stages=None, repository=None):
+        self.repository = repository or MessageRepository()
         self.pipeline = Pipeline(
             stages
             or [
@@ -26,3 +30,28 @@ class ProcessingService:
 
     def process_records(self, records):
         return [self.process_record(record) for record in records]
+
+    def process_pending(self, limit=500):
+        records = self.repository.get_pending(limit=limit)
+        processed = []
+        for record in records:
+            try:
+                result = self.process_record(record)
+                self.repository.mark_processed(
+                    record["message_id"],
+                    record["channel_username"],
+                    text=result.get("text"),
+                    cleaned_text=result.get("cleaned_text"),
+                    processing_status="processed",
+                    pipeline_version="processing-v1",
+                    cleaned_at=datetime.now(timezone.utc).isoformat(),
+                )
+                processed.append(result)
+            except Exception as exc:
+                self.repository.mark_processed(
+                    record["message_id"],
+                    record["channel_username"],
+                    processing_status="processing_failed",
+                )
+                print(f"[PROCESSING] Failed message {record['message_id']}: {exc}")
+        return processed

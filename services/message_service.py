@@ -1,13 +1,16 @@
-"""Application service for message persistence boundaries."""
+"""Application service for message persistence use-cases."""
 
-from storage import database
+from storage.message_repository import MessageRepository
 
 
 class MessageService:
-    """Owns the application-facing message persistence contract."""
+    """Own the application-facing message persistence contract."""
+
+    def __init__(self, repository=None):
+        self.repository = repository or MessageRepository()
 
     def save_collected_message(self, **message):
-        return database.insert_message(**message)
+        return self.repository.insert(**message)
 
     def initialize(self):
-        database.initialize_db()
+        self.repository.initialize()

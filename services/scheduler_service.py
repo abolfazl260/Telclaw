@@ -1,17 +1,16 @@
 """Application-level scheduling service."""
 
 import asyncio
-from datetime import datetime, timezone
 
 import config
-from collection.collector_service import CollectionService
+from services.crawl_job_service import CrawlJobService
 
 
 class SchedulerService:
-    """Schedule collection jobs; collection implementation stays replaceable."""
+    """Schedule crawl jobs; collection and processing stay replaceable."""
 
-    def __init__(self, collection_service=None):
-        self.collection = collection_service or CollectionService()
+    def __init__(self, crawl_job_service=None):
+        self.crawl_job = crawl_job_service or CrawlJobService()
         self._tasks = {}
 
     @staticmethod
@@ -23,18 +22,14 @@ class SchedulerService:
     async def _run_forever(self, client, channel_username, interval_hours):
         while True:
             try:
-                await self.collection.crawl_channel(
-                    client,
-                    channel_username,
-                    datetime.now(timezone.utc).date(),
-                )
+                await self.crawl_job.run_channel(client, channel_username)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"[SCHEDULER] Crawl failed for {channel_username}: {exc}")
+                print(f"[SCHEDULER] Job failed for {channel_username}: {exc}")
 
             print(
-                f"[SCHEDULER] Next crawl for {channel_username} "
+                f"[SCHEDULER] Next run for {channel_username} "
                 f"in {interval_hours:g} hour(s)."
             )
             await asyncio.sleep(interval_hours * 3600)

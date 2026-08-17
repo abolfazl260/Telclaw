@@ -79,13 +79,7 @@ def initialize_db():
             "CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)"
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS crawler_settings (
-                channel_username TEXT PRIMARY KEY,
-                target_date TEXT NOT NULL,
-                last_crawled_date TEXT
-            )
-            """
+            "CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY, target_date TEXT NOT NULL, last_crawled_date TEXT)"
         )
         conn.commit()
     finally:
@@ -100,8 +94,7 @@ def insert_message(channel_username, message_id, text, date_str, *,
                    file_unique_id=None, media_path=None):
     conn = get_connection()
     try:
-        cursor = conn.cursor()
-        cursor.execute(
+        cursor = conn.execute(
             """
             INSERT OR IGNORE INTO messages (
                 channel_username, message_id, text, raw_text, cleaned_text, date,
@@ -109,14 +102,12 @@ def insert_message(channel_username, message_id, text, date_str, *,
                 channel_id, channel_name, sender_id, sender_username, sender_type,
                 has_media, media_type, file_unique_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """ ,
-            (
-                channel_username, message_id, text, raw_text, cleaned_text, date_str,
-                media_path, processing_status, pipeline_version, cleaned_at,
-                channel_id, channel_name, sender_id, sender_username, sender_type,
-                int(bool(has_media)), media_type,
-                str(file_unique_id) if file_unique_id is not None else None,
-            ),
+            """,
+            (channel_username, message_id, text, raw_text, cleaned_text, date_str,
+             media_path, processing_status, pipeline_version, cleaned_at,
+             channel_id, channel_name, sender_id, sender_username, sender_type,
+             int(bool(has_media)), media_type,
+             str(file_unique_id) if file_unique_id is not None else None),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -124,13 +115,19 @@ def insert_message(channel_username, message_id, text, date_str, *,
         conn.close()
 
 
-def get_messages_by_status(status, limit=500):
+def get_messages_by_status(status, limit=500, channel_username=None):
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT * FROM messages WHERE processing_status = ? ORDER BY id LIMIT ?",
-            (status, int(limit)),
-        ).fetchall()
+        if channel_username:
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE processing_status = ? AND channel_username = ? ORDER BY id LIMIT ?",
+                (status, channel_username, int(limit)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM messages WHERE processing_status = ? ORDER BY id LIMIT ?",
+                (status, int(limit)),
+            ).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -159,11 +156,7 @@ def set_channel_target_date(channel_username, target_date_str):
     conn = get_connection()
     try:
         conn.execute(
-            """
-            INSERT INTO crawler_settings (channel_username, target_date)
-            VALUES (?, ?)
-            ON CONFLICT(channel_username) DO UPDATE SET target_date = excluded.target_date
-            """,
+            "INSERT INTO crawler_settings (channel_username, target_date) VALUES (?, ?) ON CONFLICT(channel_username) DO UPDATE SET target_date = excluded.target_date",
             (channel_username, target_date_str),
         )
         conn.commit()

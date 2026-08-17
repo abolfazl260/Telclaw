@@ -1,8 +1,4 @@
-"""SQLite persistence for the Telclaw pipeline.
-
-This module owns persistence. It does not know about Telegram, UI, CSV, AI,
-or external delivery services.
-"""
+"""SQLite persistence for the Telclaw pipeline."""
 
 import sqlite3
 from pathlib import Path
@@ -77,12 +73,10 @@ def initialize_db():
         _migrate_messages_table(cursor)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)")
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_channel_date "
-            "ON messages(channel_username, date)"
+            "CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username, date)"
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_processing_status "
-            "ON messages(processing_status)"
+            "CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)"
         )
         cursor.execute(
             """
@@ -104,7 +98,6 @@ def insert_message(channel_username, message_id, text, date_str, *,
                    channel_name=None, sender_id=None, sender_username=None,
                    sender_type=None, has_media=False, media_type=None,
                    file_unique_id=None, media_path=None):
-    """Insert a new collected record; return False for an existing message."""
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -116,7 +109,7 @@ def insert_message(channel_username, message_id, text, date_str, *,
                 channel_id, channel_name, sender_id, sender_username, sender_type,
                 has_media, media_type, file_unique_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """ ,
             (
                 channel_username, message_id, text, raw_text, cleaned_text, date_str,
                 media_path, processing_status, pipeline_version, cleaned_at,
@@ -131,6 +124,37 @@ def insert_message(channel_username, message_id, text, date_str, *,
         conn.close()
 
 
+def get_messages_by_status(status, limit=500):
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE processing_status = ? ORDER BY id LIMIT ?",
+            (status, int(limit)),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def update_processed_message(message_id, channel_username, **fields):
+    allowed = {"cleaned_text", "text", "processing_status", "pipeline_version", "cleaned_at"}
+    updates = {key: value for key, value in fields.items() if key in allowed}
+    if not updates:
+        return False
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    values = list(updates.values()) + [channel_username, message_id]
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            f"UPDATE messages SET {assignments} WHERE channel_username = ? AND message_id = ?",
+            values,
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def set_channel_target_date(channel_username, target_date_str):
     conn = get_connection()
     try:
@@ -138,8 +162,7 @@ def set_channel_target_date(channel_username, target_date_str):
             """
             INSERT INTO crawler_settings (channel_username, target_date)
             VALUES (?, ?)
-            ON CONFLICT(channel_username)
-            DO UPDATE SET target_date = excluded.target_date
+            ON CONFLICT(channel_username) DO UPDATE SET target_date = excluded.target_date
             """,
             (channel_username, target_date_str),
         )

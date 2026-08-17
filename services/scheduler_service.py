@@ -1,0 +1,69 @@
+"""Application-level scheduling service.
+
+Scheduling policy lives here; Telegram collection remains in collection/.
+"""
+
+import asyncio
+from datetime import datetime, timezone
+
+import config
+from collection.crawler import crawl_channel
+
+
+class SchedulerService:
+    def __init__(self):
+        self._tasks = {}
+
+    @staticmethod
+    def _task_key(client, channel_username):
+        session = getattr(client, "session", None)
+        session_name = getattr(session, "filename", None) or str(session)
+        return f"{session_name}:{channel_username.lower().lstrip('@')}"
+
+    async def _run_forever(self, client, channel_username, interval_hours):
+        while True:
+            try:
+                await crawl_channel(
+                    client,
+                    channel_username,
+                    datetime.now(timezone.utc).date(),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[SCHEDULER] Crawl failed for {channel_username}: {exc}")
+
+            print(
+                f"[SCHEDULER] Next crawl for {channel_username} "
+                f"in {interval_hours:g} hour(s)."
+            )
+            await asyncio.sleep(interval_hours * 3600)
+
+    def schedule_channel(self, client, channel_username, interval_hours=None):
+        interval = float(
+            interval_hours
+            if interval_hours is not None
+            else getattr(config, "CRAWL_INTERVAL_HOURS", 5)
+        )
+        if interval <= 0:
+            raise ValueError("Crawler interval must be greater than zero")
+
+        key = self._task_key(client, channel_username)
+        existing = self._tasks.get(key)
+        if existing and not existing.done():
+            return existing
+
+        task = asyncio.create_task(
+            self._run_forever(client, channel_username, interval)
+        )
+        self._tasks[key] = task
+        return task
+
+    def active_jobs(self):
+        return {k: v for k, v in self._tasks.items() if not v.done()}
+
+    def stop_all(self):
+        for task in self._tasks.values():
+            if not task.done():
+                task.cancel()
+        self._tasks.clear()

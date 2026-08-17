@@ -41,6 +41,10 @@ def process():
     duplicate_messages = 0
 
     try:
+        # The input directory is runtime data and may not exist on a fresh checkout.
+        # Create it automatically instead of failing with FileNotFoundError.
+        os.makedirs(INPUT_FOLDER, exist_ok=True)
+
         # پیدا کردن تمام فایل‌های CSV که در نام آنها Message وجود دارد
         input_files = sorted([
             os.path.join(INPUT_FOLDER, file)
@@ -50,7 +54,8 @@ def process():
         ])
 
         if not input_files:
-            print("No input CSV files containing 'Message' were found.")
+            print(f"No input CSV files containing 'Message' were found in: {INPUT_FOLDER}")
+            print("Place the Telegram export CSV files in this folder and run the processor again.")
             return
 
         print(f"Found {len(input_files)} input file(s).")
@@ -175,4 +180,4 @@ def process():
 
 
 if __name__ == "__main__":
-        process()
+    process()

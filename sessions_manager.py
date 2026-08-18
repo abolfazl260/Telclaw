@@ -45,15 +45,10 @@ def _telegram_proxy():
 
     parsed = urlparse(value)
     if parsed.scheme.lower() != "socks5":
-        raise ValueError(
-            "TELECLAW_TELEGRAM_PROXY must use socks5://host:port"
-        )
+        raise ValueError("TELECLAW_TELEGRAM_PROXY must use socks5://host:port")
     if not parsed.hostname or not parsed.port:
-        raise ValueError(
-            "TELECLAW_TELEGRAM_PROXY must include proxy host and port"
-        )
+        raise ValueError("TELECLAW_TELEGRAM_PROXY must include proxy host and port")
 
-    # Telethon uses the PySocks tuple format: (type, host, port, rdns, user, password).
     import socks
 
     return (
@@ -86,18 +81,90 @@ def _save_meta(session_name, meta: dict):
         log_exception(exc, "Error saving session metadata")
 
 
+def _remove_session_files(session_name):
+    """Remove an invalid/unauthorized local session and its metadata."""
+    for path in (_session_path(session_name) + ".session", _meta_path(session_name)):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError as exc:
+            log_exception(exc, f"Error removing invalid session: {session_name}")
+
+
 def get_active_accounts():
-    """Return existing Telegram sessions and their metadata."""
+    """Return only sessions that are actually authorized in Telegram.
+
+    A local .session file alone is not enough: Telethon must successfully
+    connect and report is_user_authorized(). Invalid/expired local sessions
+    are removed so the account selector never shows fake test names.
+    """
+    accounts = []
     try:
-        accounts = []
-        for filename in os.listdir(config.SESSION_DIR):
-            if filename.endswith(".session"):
-                name = os.path.splitext(filename)[0]
-                accounts.append({"session": name, "meta": _load_meta(name)})
-        return accounts
+        filenames = sorted(os.listdir(config.SESSION_DIR))
     except Exception as exc:
         log_exception(exc, "Error while listing active sessions")
         return []
+
+    for filename in filenames:
+        if not filename.endswith(".session"):
+            continue
+
+        session_name = os.path.splitext(filename)[0]
+        client = None
+        try:
+            client = create_client(session_name)
+            connected = False
+
+            async def _check_authorized():
+                nonlocal connected
+                await client.connect()
+                connected = True
+                return await client.is_user_authorized()
+
+            # This function is synchronous because the UI calls it before
+            # entering the account-selection flow. Use the running event loop
+            # when available; otherwise run a short-lived loop.
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                # get_active_accounts is not expected to be called from an
+                # already-running loop; fail closed rather than reporting a
+                # local session as active without Telegram authorization.
+                authorized = False
+            else:
+                authorized = asyncio.run(_check_authorized())
+
+            if not authorized:
+                _remove_session_files(session_name)
+                continue
+
+            meta = _load_meta(session_name)
+            meta["status"] = "active"
+            accounts.append({"session": session_name, "meta": meta})
+        except Exception as exc:
+            # Any failure to prove authorization means the session must not be
+            # offered to the user as an active crawler account.
+            log_exception(exc, f"Inactive Telegram session: {session_name}")
+            _remove_session_files(session_name)
+        finally:
+            if client is not None:
+                try:
+                    if client.is_connected():
+                        # Safe cleanup for the synchronous discovery path.
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            loop = None
+                        if not loop or not loop.is_running():
+                            asyncio.run(client.disconnect())
+                except Exception:
+                    pass
+                _client_cache.pop(session_name, None)
+
+    return accounts
 
 
 def get_available_accounts():
@@ -143,7 +210,6 @@ async def register_new_account(session_name):
     """Create a genuinely new Telegram session and complete interactive login."""
     session_name = _normalize_session_name(session_name)
 
-    # A 'new account' must never silently reuse an existing session.
     if os.path.exists(f"{_session_path(session_name)}.session"):
         print(
             f"❌ Session '{session_name}' already exists. "
@@ -180,7 +246,7 @@ async def register_new_account(session_name):
         print("\n📨 A Telegram verification code has been sent.")
         code = await _prompt("Step 2/3 - Enter the verification code: ")
         if not code:
-            print("❌ Verification code cannot be empty.")
+            print("❌ Telegram verification code cannot be empty.")
             return False
 
         try:

@@ -4,8 +4,8 @@ import sessions_manager
 
 
 class AccountService:
-    def list_accounts(self):
-        return sessions_manager.get_active_accounts()
+    async def list_accounts(self):
+        return await sessions_manager.get_active_accounts()
 
     def create_client(self, account_name):
         return sessions_manager.create_client(account_name)

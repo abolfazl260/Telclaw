@@ -15,7 +15,10 @@ from services.message_service import MessageService
 
 init(autoreset=True)
 
-COLLECTION_VERSION = "collection-v2"
+COLLECTION_VERSION = "collection-v3"
+CRAWL_MODE_ALL = "all"
+CRAWL_MODE_PHOTOS_ONLY = "photos_only"
+VALID_CRAWL_MODES = {CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY}
 
 
 def _extract_sender(message):
@@ -34,22 +37,44 @@ def _extract_sender(message):
     return sender_id, sender_username, sender_type
 
 
-def _extract_media(message):
+def _build_message_link(channel_username, message_id):
+    """Build a human-readable Telegram message link when a public username exists."""
+    username = (channel_username or "").strip().lstrip("@")
+    if not username:
+        return None
+    return f"https://t.me/{username}/{message_id}"
+
+
+def _extract_media(message, channel_username):
     has_media = message.media is not None
     file_unique_id = None
     media_type = None
     if not message.media:
-        return has_media, media_type, file_unique_id
+        return has_media, media_type, file_unique_id, None, None
+
     if getattr(message.media, "document", None):
         file_unique_id = getattr(message.media.document, "id", None)
         media_type = "document"
     elif getattr(message.media, "photo", None):
         file_unique_id = getattr(message.media.photo, "id", None)
         media_type = "photo"
-    return has_media, media_type, file_unique_id
+
+    message_link = _build_message_link(channel_username, message.id)
+    media_reference = (
+        f"telegram://{channel_username}/{message.id}"
+        if channel_username
+        else None
+    )
+    return has_media, media_type, file_unique_id, message_link, media_reference
 
 
-def _log_extracted_message(channel_username, message, raw_text, media_type):
+def _should_collect(media_type, crawl_mode):
+    if crawl_mode == CRAWL_MODE_ALL:
+        return True
+    return media_type == "photo"
+
+
+def _log_extracted_message(channel_username, message, raw_text, media_type, message_link):
     """Show every collected message in the log before persistence/processing."""
     preview = raw_text.replace("\n", " ")
     print(
@@ -58,17 +83,28 @@ def _log_extracted_message(channel_username, message, raw_text, media_type):
         f"media={media_type or 'none'}"
     )
     print(f"   text={preview}")
+    if message_link:
+        print(f"   link={message_link}")
 
 
-async def crawl_channel(client, channel_username, target_date):
+async def crawl_channel(client, channel_username, target_date, crawl_mode=CRAWL_MODE_ALL):
     channel_username = normalize_channel_username(channel_username)
+    crawl_mode = (crawl_mode or CRAWL_MODE_ALL).strip().lower()
+    if crawl_mode not in VALID_CRAWL_MODES:
+        raise ValueError(
+            f"Unsupported crawl mode: {crawl_mode}. "
+            f"Use one of: {', '.join(sorted(VALID_CRAWL_MODES))}"
+        )
+
     print(f"\n{Fore.CYAN}{'=' * 50}")
     print(f"📡 STARTING CRAWL: {Fore.YELLOW}{channel_username}")
+    print(f"🔎 MODE: {Fore.YELLOW}{crawl_mode}")
     print(f"{Fore.CYAN}{'=' * 50}")
 
     repository = MessageService()
     saved_count = 0
     skipped_count = 0
+    filtered_count = 0
     try:
         entity = await client.get_input_entity(channel_username)
         await asyncio.sleep(random.randint(30, 60))
@@ -84,9 +120,22 @@ async def crawl_channel(client, channel_username, target_date):
                 break
 
             raw_text = message.text or ""
-            has_media, media_type, file_unique_id = _extract_media(message)
+            (
+                has_media,
+                media_type,
+                file_unique_id,
+                message_link,
+                media_reference,
+            ) = _extract_media(message, channel_username)
+
+            if not _should_collect(media_type, crawl_mode):
+                filtered_count += 1
+                continue
+
             sender_id, sender_username, sender_type = _extract_sender(message)
-            _log_extracted_message(channel_username, message, raw_text, media_type)
+            _log_extracted_message(
+                channel_username, message, raw_text, media_type, message_link
+            )
 
             try:
                 saved = repository.save_collected_message(
@@ -107,6 +156,8 @@ async def crawl_channel(client, channel_username, target_date):
                     has_media=has_media,
                     media_type=media_type,
                     file_unique_id=file_unique_id,
+                    message_link=message_link,
+                    media_reference=media_reference,
                 )
                 if saved:
                     saved_count += 1
@@ -122,6 +173,7 @@ async def crawl_channel(client, channel_username, target_date):
 
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
         print(f"✅ Saved: {saved_count}")
+        print(f"🔍 Filtered by crawl mode: {filtered_count}")
         print(f"⏭ Skipped: {skipped_count}")
     except errors.ChannelInvalidError:
         print(f"\n❌ Invalid channel: {channel_username}")
@@ -131,5 +183,5 @@ async def crawl_channel(client, channel_username, target_date):
         print(f"\n❌ Crawl error ({channel_username}): {exc}")
 
 
-async def start_crawler(client, channel_username, target_date):
-    return await crawl_channel(client, channel_username, target_date)
+async def start_crawler(client, channel_username, target_date, crawl_mode=CRAWL_MODE_ALL):
+    return await crawl_channel(client, channel_username, target_date, crawl_mode=crawl_mode)

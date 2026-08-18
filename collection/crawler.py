@@ -87,7 +87,14 @@ def _log_extracted_message(channel_username, message, raw_text, media_type, mess
         print(f"   link={message_link}")
 
 
-async def crawl_channel(client, channel_username, target_date, crawl_mode=CRAWL_MODE_ALL):
+async def crawl_channel(
+    client,
+    channel_username,
+    from_date,
+    to_date,
+    crawl_mode=CRAWL_MODE_ALL,
+):
+    """Collect messages whose dates fall inclusively inside ``from_date..to_date``."""
     channel_username = normalize_channel_username(channel_username)
     crawl_mode = (crawl_mode or CRAWL_MODE_ALL).strip().lower()
     if crawl_mode not in VALID_CRAWL_MODES:
@@ -95,9 +102,12 @@ async def crawl_channel(client, channel_username, target_date, crawl_mode=CRAWL_
             f"Unsupported crawl mode: {crawl_mode}. "
             f"Use one of: {', '.join(sorted(VALID_CRAWL_MODES))}"
         )
+    if from_date > to_date:
+        raise ValueError("from_date cannot be later than to_date")
 
     print(f"\n{Fore.CYAN}{'=' * 50}")
     print(f"📡 STARTING CRAWL: {Fore.YELLOW}{channel_username}")
+    print(f"📅 DATE RANGE: {Fore.YELLOW}{from_date} → {to_date}")
     print(f"🔎 MODE: {Fore.YELLOW}{crawl_mode}")
     print(f"{Fore.CYAN}{'=' * 50}")
 
@@ -115,8 +125,13 @@ async def crawl_channel(client, channel_username, target_date, crawl_mode=CRAWL_
                 continue
 
             msg_date = message.date.date()
-            if msg_date < target_date:
-                print(f"\n🏁 Reached target date {target_date}. Stopping channel.")
+
+            # iter_messages is newest -> oldest. Ignore messages newer than the
+            # requested range, and stop as soon as we pass its lower boundary.
+            if msg_date > to_date:
+                continue
+            if msg_date < from_date:
+                print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
                 break
 
             raw_text = message.text or ""
@@ -172,6 +187,7 @@ async def crawl_channel(client, channel_username, target_date, crawl_mode=CRAWL_
             await asyncio.sleep(random.uniform(0.3, 1.0))
 
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
+        print(f"📅 Range: {from_date} → {to_date}")
         print(f"✅ Saved: {saved_count}")
         print(f"🔍 Filtered by crawl mode: {filtered_count}")
         print(f"⏭ Skipped: {skipped_count}")
@@ -183,5 +199,17 @@ async def crawl_channel(client, channel_username, target_date, crawl_mode=CRAWL_
         print(f"\n❌ Crawl error ({channel_username}): {exc}")
 
 
-async def start_crawler(client, channel_username, target_date, crawl_mode=CRAWL_MODE_ALL):
-    return await crawl_channel(client, channel_username, target_date, crawl_mode=crawl_mode)
+async def start_crawler(
+    client,
+    channel_username,
+    from_date,
+    to_date,
+    crawl_mode=CRAWL_MODE_ALL,
+):
+    return await crawl_channel(
+        client,
+        channel_username,
+        from_date,
+        to_date,
+        crawl_mode=crawl_mode,
+    )

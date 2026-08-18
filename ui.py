@@ -11,6 +11,7 @@ import os
 from colorama import Fore, Style, init
 
 import config
+from collection.crawler import CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY
 from services.account_service import AccountService
 from services.channel_service import ChannelService
 from services.crawler_service import CrawlerService
@@ -164,6 +165,23 @@ class ConsoleUI:
             await self.pause()
             return
 
+        self._print_options(
+            "Crawl Mode",
+            [
+                "All messages",
+                "Only messages containing photos",
+            ],
+        )
+        mode_choice = await self.prompt_choice(
+            "Select crawl mode [1-2]: ",
+            {"1", "2"},
+        )
+        crawl_mode = (
+            CRAWL_MODE_ALL
+            if mode_choice == "1"
+            else CRAWL_MODE_PHOTOS_ONLY
+        )
+
         interval = await self.prompt_text(
             "Crawl interval in hours",
             default=str(getattr(config, "CRAWL_INTERVAL_HOURS", 5)),
@@ -184,15 +202,22 @@ class ConsoleUI:
             return
 
         try:
-            jobs = self.crawler.schedule_category(client, category, interval_hours)
+            jobs = self.crawler.schedule_category(
+                client,
+                category,
+                interval_hours,
+                crawl_mode=crawl_mode,
+            )
         except Exception as exc:
             self.show_message(f"Unable to schedule crawler: {exc}", Fore.RED)
             await self.pause()
             return
 
+        mode_label = "all messages" if crawl_mode == CRAWL_MODE_ALL else "photos only"
         self.show_message(
             f"Category '{category}' scheduled: {len(jobs)} channel(s), "
-            f"every {interval_hours:g} hour(s). First crawl starts immediately.",
+            f"mode={mode_label}, every {interval_hours:g} hour(s). "
+            "First crawl starts immediately.",
             Fore.GREEN,
         )
         await self.pause("Press Enter to return to the menu. Jobs continue in background...")

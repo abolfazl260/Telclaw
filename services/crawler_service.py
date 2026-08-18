@@ -24,9 +24,14 @@ class CrawlerService:
         self,
         client,
         category,
+        from_date,
+        to_date,
         interval_hours=None,
         crawl_mode=CRAWL_MODE_ALL,
     ):
+        if from_date > to_date:
+            raise ValueError("Start date cannot be later than end date")
+
         channels = self.channels_for_category(category)
         jobs = []
         for channel in channels:
@@ -37,6 +42,8 @@ class CrawlerService:
                 self.scheduler.schedule_channel(
                     client,
                     username,
+                    from_date,
+                    to_date,
                     interval_hours=interval_hours,
                     crawl_mode=crawl_mode,
                 )

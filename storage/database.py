@@ -20,6 +20,8 @@ MESSAGE_COLUMNS = {
     "has_media": "INTEGER NOT NULL DEFAULT 0",
     "media_type": "TEXT",
     "file_unique_id": "TEXT",
+    "message_link": "TEXT",
+    "media_reference": "TEXT",
 }
 
 
@@ -55,6 +57,8 @@ def initialize_db():
                 cleaned_text TEXT,
                 date TEXT NOT NULL,
                 media_path TEXT,
+                message_link TEXT,
+                media_reference TEXT,
                 processing_status TEXT NOT NULL DEFAULT 'collected',
                 pipeline_version TEXT,
                 cleaned_at TEXT,
@@ -79,6 +83,9 @@ def initialize_db():
             "CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)"
         )
         cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)"
+        )
+        cursor.execute(
             "CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY, target_date TEXT NOT NULL, last_crawled_date TEXT)"
         )
         conn.commit()
@@ -91,22 +98,23 @@ def insert_message(channel_username, message_id, text, date_str, *,
                    pipeline_version=None, cleaned_at=None, channel_id=None,
                    channel_name=None, sender_id=None, sender_username=None,
                    sender_type=None, has_media=False, media_type=None,
-                   file_unique_id=None, media_path=None):
+                   file_unique_id=None, media_path=None, message_link=None,
+                   media_reference=None):
     conn = get_connection()
     try:
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO messages (
                 channel_username, message_id, text, raw_text, cleaned_text, date,
-                media_path, processing_status, pipeline_version, cleaned_at,
-                channel_id, channel_name, sender_id, sender_username, sender_type,
-                has_media, media_type, file_unique_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                media_path, message_link, media_reference, processing_status,
+                pipeline_version, cleaned_at, channel_id, channel_name, sender_id,
+                sender_username, sender_type, has_media, media_type, file_unique_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (channel_username, message_id, text, raw_text, cleaned_text, date_str,
-             media_path, processing_status, pipeline_version, cleaned_at,
-             channel_id, channel_name, sender_id, sender_username, sender_type,
-             int(bool(has_media)), media_type,
+             media_path, message_link, media_reference, processing_status,
+             pipeline_version, cleaned_at, channel_id, channel_name, sender_id,
+             sender_username, sender_type, int(bool(has_media)), media_type,
              str(file_unique_id) if file_unique_id is not None else None),
         )
         conn.commit()

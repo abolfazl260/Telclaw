@@ -1,6 +1,4 @@
-"""Orchestrates one scheduled crawl cycle."""
-
-from datetime import datetime, timezone
+"""Orchestrates one crawl cycle."""
 
 from collection.crawler import CRAWL_MODE_ALL
 from collection.collector_service import CollectionService
@@ -18,12 +16,15 @@ class CrawlJobService:
         self,
         client,
         channel_username,
+        from_date,
+        to_date,
         crawl_mode=CRAWL_MODE_ALL,
     ):
         await self.collection.crawl_channel(
             client,
             channel_username,
-            datetime.now(timezone.utc).date(),
+            from_date,
+            to_date,
             crawl_mode=crawl_mode,
         )
         return self.processing.process_pending(channel_username=channel_username)

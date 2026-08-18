@@ -10,12 +10,14 @@ class CollectionService:
         self,
         client,
         channel_username,
-        target_date,
+        from_date,
+        to_date,
         crawl_mode=CRAWL_MODE_ALL,
     ):
         return await crawl_channel(
             client,
             channel_username,
-            target_date,
+            from_date,
+            to_date,
             crawl_mode=crawl_mode,
         )

@@ -3,6 +3,7 @@
 import asyncio
 
 import config
+from collection.crawler import CRAWL_MODE_ALL
 from services.crawl_job_service import CrawlJobService
 
 
@@ -19,10 +20,14 @@ class SchedulerService:
         session_name = getattr(session, "filename", None) or str(session)
         return f"{session_name}:{channel_username.lower().lstrip('@')}"
 
-    async def _run_forever(self, client, channel_username, interval_hours):
+    async def _run_forever(self, client, channel_username, interval_hours, crawl_mode):
         while True:
             try:
-                await self.crawl_job.run_channel(client, channel_username)
+                await self.crawl_job.run_channel(
+                    client,
+                    channel_username,
+                    crawl_mode=crawl_mode,
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -34,7 +39,13 @@ class SchedulerService:
             )
             await asyncio.sleep(interval_hours * 3600)
 
-    def schedule_channel(self, client, channel_username, interval_hours=None):
+    def schedule_channel(
+        self,
+        client,
+        channel_username,
+        interval_hours=None,
+        crawl_mode=CRAWL_MODE_ALL,
+    ):
         interval = float(
             interval_hours
             if interval_hours is not None
@@ -49,7 +60,7 @@ class SchedulerService:
             return existing
 
         task = asyncio.create_task(
-            self._run_forever(client, channel_username, interval)
+            self._run_forever(client, channel_username, interval, crawl_mode)
         )
         self._tasks[key] = task
         return task

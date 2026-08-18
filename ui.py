@@ -77,7 +77,7 @@ class ConsoleUI:
         if self.client is not None:
             return self.client
 
-        # IMPORTANT: only Telegram-authorized sessions are returned here.
+        # Only Telegram-authorized sessions are returned by list_accounts().
         accounts = await self.accounts.list_accounts()
         if not accounts:
             self.show_message("No active Telegram sessions were found.", Fore.YELLOW)
@@ -163,9 +163,9 @@ class ConsoleUI:
         crawl_mode = CRAWL_MODE_ALL if mode_choice == "1" else CRAWL_MODE_PHOTOS_ONLY
 
         today = date.today().isoformat()
-        start_date = await self.prompt_date("From date (YYYY-MM-DD)", default=today)
-        end_date = await self.prompt_date("To date (YYYY-MM-DD)", default=today)
-        if start_date > end_date:
+        from_date = await self.prompt_date("From date (YYYY-MM-DD)", default=today)
+        to_date = await self.prompt_date("To date (YYYY-MM-DD)", default=today)
+        if from_date > to_date:
             self.show_message("From date cannot be after To date.", Fore.RED)
             await self.pause()
             return
@@ -193,10 +193,10 @@ class ConsoleUI:
             jobs = self.crawler.schedule_category(
                 client,
                 category,
-                interval_hours,
+                from_date,
+                to_date,
+                interval_hours=interval_hours,
                 crawl_mode=crawl_mode,
-                start_date=start_date,
-                end_date=end_date,
             )
         except Exception as exc:
             self.show_message(f"Unable to schedule crawler: {exc}", Fore.RED)
@@ -206,7 +206,7 @@ class ConsoleUI:
         mode_label = "all messages" if crawl_mode == CRAWL_MODE_ALL else "photos only"
         self.show_message(
             f"Category '{category}' scheduled: {len(jobs)} channel(s), mode={mode_label}, "
-            f"range={start_date}..{end_date}, every {interval_hours:g} hour(s).",
+            f"range={from_date}..{to_date}, every {interval_hours:g} hour(s).",
             Fore.GREEN,
         )
         await self.pause("Press Enter to return to the menu. Jobs continue in background...")

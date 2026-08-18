@@ -15,17 +15,30 @@ class SchedulerService:
         self._tasks = {}
 
     @staticmethod
-    def _task_key(client, channel_username):
+    def _task_key(client, channel_username, from_date, to_date, crawl_mode):
         session = getattr(client, "session", None)
         session_name = getattr(session, "filename", None) or str(session)
-        return f"{session_name}:{channel_username.lower().lstrip('@')}"
+        return (
+            f"{session_name}:{channel_username.lower().lstrip('@')}:"
+            f"{from_date}:{to_date}:{crawl_mode}"
+        )
 
-    async def _run_forever(self, client, channel_username, interval_hours, crawl_mode):
+    async def _run_forever(
+        self,
+        client,
+        channel_username,
+        interval_hours,
+        from_date,
+        to_date,
+        crawl_mode,
+    ):
         while True:
             try:
                 await self.crawl_job.run_channel(
                     client,
                     channel_username,
+                    from_date,
+                    to_date,
                     crawl_mode=crawl_mode,
                 )
             except asyncio.CancelledError:
@@ -43,9 +56,14 @@ class SchedulerService:
         self,
         client,
         channel_username,
+        from_date,
+        to_date,
         interval_hours=None,
         crawl_mode=CRAWL_MODE_ALL,
     ):
+        if from_date > to_date:
+            raise ValueError("Start date cannot be later than end date")
+
         interval = float(
             interval_hours
             if interval_hours is not None
@@ -54,13 +72,26 @@ class SchedulerService:
         if interval <= 0:
             raise ValueError("Crawler interval must be greater than zero")
 
-        key = self._task_key(client, channel_username)
+        key = self._task_key(
+            client,
+            channel_username,
+            from_date,
+            to_date,
+            crawl_mode,
+        )
         existing = self._tasks.get(key)
         if existing and not existing.done():
             return existing
 
         task = asyncio.create_task(
-            self._run_forever(client, channel_username, interval, crawl_mode)
+            self._run_forever(
+                client,
+                channel_username,
+                interval,
+                from_date,
+                to_date,
+                crawl_mode,
+            )
         )
         self._tasks[key] = task
         return task

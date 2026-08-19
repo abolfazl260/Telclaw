@@ -1,4 +1,4 @@
-"""AI extraction service using the OpenAI Responses API."""
+"""AI extraction service using the Groq OpenAI-compatible API."""
 
 import json
 from urllib import request
@@ -20,36 +20,30 @@ class AIExtractionError(RuntimeError):
     pass
 
 
-class OpenAIExtractor:
-    """Small dependency-free OpenAI client; keeps provider logic isolated from storage."""
+class GroqExtractor:
+    """Small dependency-free Groq client using Groq's OpenAI-compatible API."""
 
     def __init__(self, api_key=None, model=None, timeout=60):
-        self.api_key = api_key or config.OPENAI_API_KEY
-        self.model = model or config.OPENAI_MODEL
+        self.api_key = api_key or config.GROQ_API_KEY
+        self.model = model or config.GROQ_MODEL
         self.timeout = timeout
 
     def extract(self, processed_text):
         if not self.api_key:
-            raise AIExtractionError("OPENAI_API_KEY is not configured")
+            raise AIExtractionError("GROQ_API_KEY is not configured")
 
         payload = {
             "model": self.model,
-            "input": [
-                {"role": "system", "content": [{"type": "input_text", "text": SYSTEM_PROMPT}]},
-                {"role": "user", "content": [{"type": "input_text", "text": processed_text}]},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": processed_text},
             ],
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "telclaw_category_extraction",
-                    "strict": False,
-                    "schema": build_json_schema(),
-                }
-            },
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
         }
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
-            "https://api.openai.com/v1/responses",
+            "https://api.groq.com/openai/v1/chat/completions",
             data=body,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -61,22 +55,17 @@ class OpenAIExtractor:
             with request.urlopen(req, timeout=self.timeout) as response:
                 raw = response.read().decode("utf-8")
         except (HTTPError, URLError, TimeoutError) as exc:
-            raise AIExtractionError(f"OpenAI request failed: {exc}") from exc
+            raise AIExtractionError(f"Groq request failed: {exc}") from exc
 
         try:
             response_data = json.loads(raw)
-            output_text = response_data.get("output_text")
-            if not output_text:
-                for item in response_data.get("output", []):
-                    for content in item.get("content", []):
-                        if content.get("type") in {"output_text", "text"} and content.get("text"):
-                            output_text = content["text"]
-                            break
-                    if output_text:
-                        break
+            choices = response_data.get("choices", [])
+            if not choices:
+                raise ValueError("No choices returned")
+            output_text = choices[0].get("message", {}).get("content")
             if not output_text:
                 raise ValueError("No structured output returned")
             result = json.loads(output_text)
             return validate_result(result)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise AIExtractionError(f"Invalid AI output: {exc}") from exc
+            raise AIExtractionError(f"Invalid Groq output: {exc}") from exc

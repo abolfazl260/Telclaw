@@ -23,20 +23,46 @@ CATEGORY_FIELDS = {
 }
 
 
+def _field_schema(field):
+    """Use a nullable JSON value so the model can explicitly mark unknown data."""
+    if field in {"features", "skills"}:
+        return {"type": ["array", "null"], "items": {"type": "string"}}
+    if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage"}:
+        return {"type": ["number", "string", "null"]}
+    if field == "remote":
+        return {"type": ["boolean", "string", "null"]}
+    return {"type": ["string", "number", "boolean", "null"]}
+
+
 def build_json_schema():
-    """Build a strict top-level schema while allowing category-specific values."""
-    category_enum = list(CATEGORIES)
+    """Build a strict schema compatible with Groq JSON Schema structured outputs."""
+    category_data = {}
+    for category, fields in CATEGORY_FIELDS.items():
+        category_data[category] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {field: _field_schema(field) for field in fields},
+            "required": list(fields),
+        }
+
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["category", "data"],
         "properties": {
-            "category": {"type": "string", "enum": category_enum},
+            "category": {"type": "string", "enum": list(CATEGORIES)},
             "data": {
                 "type": "object",
-                "additionalProperties": True,
+                "additionalProperties": False,
+                "properties": {
+                    category: {
+                        **category_data[category],
+                    }
+                    for category in CATEGORIES
+                },
+                "required": list(CATEGORIES),
             },
         },
+        "required": ["category", "data"],
     }
 
 
@@ -46,8 +72,13 @@ def validate_result(result):
     category = result.get("category")
     if category not in CATEGORIES:
         raise ValueError(f"Unsupported category: {category!r}")
-    data = result.get("data")
-    if not isinstance(data, dict):
+    data_container = result.get("data")
+    if not isinstance(data_container, dict):
         raise ValueError("AI result data must be an object")
+
+    data = data_container.get(category)
+    if not isinstance(data, dict):
+        raise ValueError(f"AI result data.{category} must be an object")
+
     allowed = set(CATEGORY_FIELDS[category])
     return category, {key: value for key, value in data.items() if key in allowed}

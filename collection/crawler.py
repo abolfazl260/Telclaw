@@ -115,6 +115,7 @@ async def crawl_channel(
     saved_count = 0
     skipped_count = 0
     filtered_count = 0
+    bot_filtered_count = 0
     try:
         entity = await client.get_input_entity(channel_username)
         await asyncio.sleep(random.randint(30, 60))
@@ -134,6 +135,15 @@ async def crawl_channel(
                 print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
                 break
 
+            sender_id, sender_username, sender_type = _extract_sender(message)
+            if sender_type == "bot":
+                bot_filtered_count += 1
+                print(
+                    f"⏭ [BOT-SKIPPED] channel={channel_username} "
+                    f"message_id={message.id}"
+                )
+                continue
+
             raw_text = message.text or ""
             (
                 has_media,
@@ -147,7 +157,6 @@ async def crawl_channel(
                 filtered_count += 1
                 continue
 
-            sender_id, sender_username, sender_type = _extract_sender(message)
             _log_extracted_message(
                 channel_username, message, raw_text, media_type, message_link
             )
@@ -190,6 +199,7 @@ async def crawl_channel(
         print(f"📅 Range: {from_date} → {to_date}")
         print(f"✅ Saved: {saved_count}")
         print(f"🔍 Filtered by crawl mode: {filtered_count}")
+        print(f"🤖 Bot messages skipped: {bot_filtered_count}")
         print(f"⏭ Skipped: {skipped_count}")
     except errors.ChannelInvalidError:
         print(f"\n❌ Invalid channel: {channel_username}")

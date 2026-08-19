@@ -26,7 +26,7 @@ class CrawlerService:
         category,
         from_date,
         to_date,
-        interval_hours=None,
+        interval_minutes=None,
         crawl_mode=CRAWL_MODE_ALL,
     ):
         if from_date > to_date:
@@ -44,7 +44,7 @@ class CrawlerService:
                     username,
                     from_date,
                     to_date,
-                    interval_hours=interval_hours,
+                    interval_minutes=interval_minutes,
                     crawl_mode=crawl_mode,
                 )
             )

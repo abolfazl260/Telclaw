@@ -6,6 +6,7 @@ from urllib.error import HTTPError, URLError
 
 import config
 from ai.category_schemas import build_json_schema, validate_result
+from ai.rate_limiter import RateLimiter
 
 
 SYSTEM_PROMPT = """You extract structured marketplace information from processed Telegram messages.
@@ -24,15 +25,19 @@ class AIExtractionError(RuntimeError):
 class GroqExtractor:
     """Dependency-free Groq client using Groq's OpenAI-compatible API."""
 
-    def __init__(self, api_key=None, model=None, timeout=60):
+    def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None):
         self.api_key = api_key or config.GROQ_API_KEY
         self.model = model or config.GROQ_MODEL
         self.timeout = timeout
+        self.rate_limiter = rate_limiter or RateLimiter(
+            requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE
+        )
 
     def extract(self, processed_text):
         if not self.api_key:
             raise AIExtractionError("GROQ_API_KEY is not configured")
 
+        self.rate_limiter.wait()
         payload = {
             "model": self.model,
             "messages": [

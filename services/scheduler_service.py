@@ -27,7 +27,7 @@ class SchedulerService:
         self,
         client,
         channel_username,
-        interval_hours,
+        interval_minutes,
         from_date,
         to_date,
         crawl_mode,
@@ -48,9 +48,9 @@ class SchedulerService:
 
             print(
                 f"[SCHEDULER] Next run for {channel_username} "
-                f"in {interval_hours:g} hour(s)."
+                f"in {interval_minutes:g} minute(s)."
             )
-            await asyncio.sleep(interval_hours * 3600)
+            await asyncio.sleep(interval_minutes * 60)
 
     def schedule_channel(
         self,
@@ -58,16 +58,16 @@ class SchedulerService:
         channel_username,
         from_date,
         to_date,
-        interval_hours=None,
+        interval_minutes=None,
         crawl_mode=CRAWL_MODE_ALL,
     ):
         if from_date > to_date:
             raise ValueError("Start date cannot be later than end date")
 
         interval = float(
-            interval_hours
-            if interval_hours is not None
-            else getattr(config, "CRAWL_INTERVAL_HOURS", 5)
+            interval_minutes
+            if interval_minutes is not None
+            else getattr(config, "CRAWL_INTERVAL_MINUTES", 5)
         )
         if interval <= 0:
             raise ValueError("Crawler interval must be greater than zero")

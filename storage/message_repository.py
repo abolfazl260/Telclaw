@@ -1,4 +1,4 @@
-"""Persistence abstraction for collected and processed messages."""
+"""Persistence abstraction for collected, processed, and AI-enriched messages."""
 
 from storage import database
 
@@ -17,10 +17,18 @@ class MessageRepository:
             "collected", limit=limit, channel_username=channel_username
         )
 
+    def get_ai_pending(self, limit=100, channel_username=None):
+        return database.get_ai_pending_messages(
+            limit=limit, channel_username=channel_username
+        )
+
     def mark_processed(self, message_id, channel_username, **fields):
         return database.update_processed_message(
             message_id, channel_username, **fields
         )
+
+    def save_category_record(self, processed_message_id, category, data):
+        return database.save_category_record(processed_message_id, category, data)
 
     def set_target_date(self, channel_username, target_date):
         return database.set_channel_target_date(channel_username, target_date)

@@ -77,7 +77,6 @@ class ConsoleUI:
         if self.client is not None:
             return self.client
 
-        # Only Telegram-authorized sessions are returned by list_accounts().
         accounts = await self.accounts.list_accounts()
         if not accounts:
             self.show_message("No active Telegram sessions were found.", Fore.YELLOW)
@@ -171,13 +170,13 @@ class ConsoleUI:
             return
 
         interval = await self.prompt_text(
-            "Crawl interval in hours",
-            default=str(getattr(config, "CRAWL_INTERVAL_HOURS", 5)),
+            "Crawl interval in minutes",
+            default=str(getattr(config, "CRAWL_INTERVAL_MINUTES", 5)),
             allow_empty=False,
         )
         try:
-            interval_hours = float(interval)
-            if interval_hours <= 0:
+            interval_minutes = float(interval)
+            if interval_minutes <= 0:
                 raise ValueError
         except ValueError:
             self.show_message("Interval must be a positive number.", Fore.RED)
@@ -195,7 +194,7 @@ class ConsoleUI:
                 category,
                 from_date,
                 to_date,
-                interval_hours=interval_hours,
+                interval_minutes=interval_minutes,
                 crawl_mode=crawl_mode,
             )
         except Exception as exc:
@@ -206,7 +205,7 @@ class ConsoleUI:
         mode_label = "all messages" if crawl_mode == CRAWL_MODE_ALL else "photos only"
         self.show_message(
             f"Category '{category}' scheduled: {len(jobs)} channel(s), mode={mode_label}, "
-            f"range={from_date}..{to_date}, every {interval_hours:g} hour(s).",
+            f"range={from_date}..{to_date}, every {interval_minutes:g} minute(s).",
             Fore.GREEN,
         )
         await self.pause("Press Enter to return to the menu. Jobs continue in background...")
@@ -217,7 +216,7 @@ class ConsoleUI:
         self.show_section_header("Settings")
         print(f"{Fore.GREEN}│  Base Delay: {config.BASE_DELAY} seconds")
         print(f"{Fore.GREEN}│  Random Delay Max: {config.RANDOM_DELAY_MAX} seconds")
-        print(f"{Fore.GREEN}│  Crawl Interval: {getattr(config, 'CRAWL_INTERVAL_HOURS', 5)} hours")
+        print(f"{Fore.GREEN}│  Crawl Interval: {getattr(config, 'CRAWL_INTERVAL_MINUTES', 5)} minutes")
         self.show_section_footer()
         await self.pause()
 

@@ -42,3 +42,10 @@ CRAWL_INTERVAL_MINUTES = float(
 
 # Optional Telegram SOCKS5 proxy. Leave empty for a direct connection.
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
+
+# AI extraction settings. The AI layer is optional until explicitly enabled.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("TELCLAW_OPENAI_MODEL", "gpt-5.6-luna").strip()
+AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on"
+}

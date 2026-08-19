@@ -1,5 +1,6 @@
 """SQLite persistence for the Telclaw pipeline."""
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -12,6 +13,9 @@ MESSAGE_COLUMNS = {
     "processing_status": "TEXT NOT NULL DEFAULT 'collected'",
     "pipeline_version": "TEXT",
     "cleaned_at": "TEXT",
+    "ai_category": "TEXT",
+    "ai_processed_at": "TEXT",
+    "ai_error": "TEXT",
     "channel_id": "INTEGER",
     "channel_name": "TEXT",
     "sender_id": "INTEGER",
@@ -24,6 +28,31 @@ MESSAGE_COLUMNS = {
     "media_reference": "TEXT",
 }
 
+CATEGORY_TABLES = {
+    "housinglist": {
+        "property_type": "TEXT", "listing_type": "TEXT", "title": "TEXT",
+        "description": "TEXT", "location": "TEXT", "price": "REAL",
+        "currency": "TEXT", "rent_period": "TEXT", "bedrooms": "INTEGER",
+        "bathrooms": "REAL", "area": "REAL", "area_unit": "TEXT",
+        "furnished": "INTEGER", "availability": "TEXT",
+        "property_condition": "TEXT", "contact": "TEXT", "features": "TEXT",
+    },
+    "transferlist": {
+        "vehicle_type": "TEXT", "brand": "TEXT", "model": "TEXT", "trim": "TEXT",
+        "year": "INTEGER", "mileage": "REAL", "mileage_unit": "TEXT",
+        "price": "REAL", "currency": "TEXT", "location": "TEXT",
+        "transmission": "TEXT", "fuel_type": "TEXT", "condition": "TEXT",
+        "engine": "TEXT", "color": "TEXT", "contact": "TEXT", "features": "TEXT",
+    },
+    "joblist": {
+        "job_title": "TEXT", "company": "TEXT", "location": "TEXT",
+        "employment_type": "TEXT", "salary": "REAL", "salary_currency": "TEXT",
+        "salary_period": "TEXT", "experience": "TEXT", "education": "TEXT",
+        "skills": "TEXT", "remote": "INTEGER", "job_type": "TEXT",
+        "description": "TEXT", "application_method": "TEXT", "contact": "TEXT",
+    },
+}
+
 
 def get_connection():
     db_path = Path(config.DB_NAME)
@@ -31,6 +60,7 @@ def get_connection():
         db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -40,6 +70,23 @@ def _migrate_messages_table(cursor):
     for column, definition in MESSAGE_COLUMNS.items():
         if column not in existing:
             cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
+
+
+def _create_category_tables(cursor):
+    for table, fields in CATEGORY_TABLES.items():
+        columns = [
+            "id INTEGER PRIMARY KEY AUTOINCREMENT",
+            "processed_message_id INTEGER NOT NULL UNIQUE",
+            *[f"{name} {definition}" for name, definition in fields.items()],
+            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            "FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE",
+        ]
+        cursor.execute(
+            f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(columns)})"
+        )
+        cursor.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{table}_processed_message ON {table}(processed_message_id)"
+        )
 
 
 def initialize_db():
@@ -62,6 +109,9 @@ def initialize_db():
                 processing_status TEXT NOT NULL DEFAULT 'collected',
                 pipeline_version TEXT,
                 cleaned_at TEXT,
+                ai_category TEXT,
+                ai_processed_at TEXT,
+                ai_error TEXT,
                 channel_id INTEGER,
                 channel_name TEXT,
                 sender_id INTEGER,
@@ -76,30 +126,24 @@ def initialize_db():
         )
         _migrate_messages_table(cursor)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)")
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username, date)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username, date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)")
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY, target_date TEXT NOT NULL, last_crawled_date TEXT)"
         )
+        _create_category_tables(cursor)
         conn.commit()
     finally:
         conn.close()
 
 
-def insert_message(channel_username, message_id, text, date_str, *,
-                   raw_text=None, cleaned_text=None, processing_status="collected",
-                   pipeline_version=None, cleaned_at=None, channel_id=None,
-                   channel_name=None, sender_id=None, sender_username=None,
-                   sender_type=None, has_media=False, media_type=None,
-                   file_unique_id=None, media_path=None, message_link=None,
-                   media_reference=None):
+def insert_message(channel_username, message_id, text, date_str, *, raw_text=None, cleaned_text=None,
+                   processing_status="collected", pipeline_version=None, cleaned_at=None,
+                   channel_id=None, channel_name=None, sender_id=None, sender_username=None,
+                   sender_type=None, has_media=False, media_type=None, file_unique_id=None,
+                   media_path=None, message_link=None, media_reference=None):
     conn = get_connection()
     try:
         cursor = conn.execute(
@@ -141,8 +185,12 @@ def get_messages_by_status(status, limit=500, channel_username=None):
         conn.close()
 
 
+def get_ai_pending_messages(limit=100, channel_username=None):
+    return get_messages_by_status("processed", limit=limit, channel_username=channel_username)
+
+
 def update_processed_message(message_id, channel_username, **fields):
-    allowed = {"cleaned_text", "text", "processing_status", "pipeline_version", "cleaned_at"}
+    allowed = {"cleaned_text", "text", "processing_status", "pipeline_version", "cleaned_at", "ai_category", "ai_processed_at", "ai_error"}
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
         return False
@@ -156,6 +204,32 @@ def update_processed_message(message_id, channel_username, **fields):
         )
         conn.commit()
         return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def save_category_record(processed_message_id, category, data):
+    if category not in CATEGORY_TABLES:
+        raise ValueError(f"Unsupported category: {category}")
+    fields = CATEGORY_TABLES[category]
+    columns = ["processed_message_id"] + list(fields)
+    values = [processed_message_id]
+    for field in fields:
+        value = data.get(field)
+        if field in {"features", "skills"} and value is not None and not isinstance(value, str):
+            value = json.dumps(value, ensure_ascii=False)
+        if field in {"furnished", "remote"} and value is not None:
+            value = int(bool(value))
+        values.append(value)
+    placeholders = ", ".join("?" for _ in columns)
+    assignments = ", ".join(f"{field}=excluded.{field}" for field in fields)
+    conn = get_connection()
+    try:
+        conn.execute(
+            f"INSERT INTO {category} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT(processed_message_id) DO UPDATE SET {assignments}",
+            values,
+        )
+        conn.commit()
     finally:
         conn.close()
 

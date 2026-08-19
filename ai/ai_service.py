@@ -1,16 +1,16 @@
-"""Orchestrates AI extraction, validation, and category persistence."""
+"""Orchestrates Groq extraction, validation, and category persistence."""
 
 from datetime import datetime, timezone
 
 import config
-from ai.extractor import AIExtractionError, OpenAIExtractor
+from ai.extractor import AIExtractionError, GroqExtractor
 from storage.message_repository import MessageRepository
 
 
 class AIProcessingService:
     def __init__(self, repository=None, extractor=None):
         self.repository = repository or MessageRepository()
-        self.extractor = extractor or OpenAIExtractor()
+        self.extractor = extractor or GroqExtractor()
 
     def process_pending(self, limit=100, channel_username=None):
         if not config.AI_EXTRACTION_ENABLED:

@@ -1,4 +1,4 @@
-"""AI extraction service using the Groq OpenAI-compatible API."""
+"""AI extraction service using Groq structured outputs."""
 
 import json
 from urllib import request
@@ -13,6 +13,7 @@ Classify each message into exactly one of: housinglist, transferlist, joblist.
 Extract only facts explicitly supported by the message. Never invent values.
 Return null for an unknown scalar field and [] for an unknown list field.
 Use normalized English field names. Keep original meaning and do not copy Telegram metadata.
+Return ONLY the JSON object required by the supplied schema.
 """
 
 
@@ -21,7 +22,7 @@ class AIExtractionError(RuntimeError):
 
 
 class GroqExtractor:
-    """Small dependency-free Groq client using Groq's OpenAI-compatible API."""
+    """Dependency-free Groq client using Groq's OpenAI-compatible API."""
 
     def __init__(self, api_key=None, model=None, timeout=60):
         self.api_key = api_key or config.GROQ_API_KEY
@@ -39,8 +40,16 @@ class GroqExtractor:
                 {"role": "user", "content": processed_text},
             ],
             "temperature": 0,
-            "response_format": {"type": "json_object"},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "telclaw_category_extraction",
+                    "strict": True,
+                    "schema": build_json_schema(),
+                },
+            },
         }
+
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -54,7 +63,10 @@ class GroqExtractor:
         try:
             with request.urlopen(req, timeout=self.timeout) as response:
                 raw = response.read().decode("utf-8")
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise AIExtractionError(f"Groq request failed ({exc.code}): {detail[:1000]}") from exc
+        except (URLError, TimeoutError) as exc:
             raise AIExtractionError(f"Groq request failed: {exc}") from exc
 
         try:
@@ -62,7 +74,10 @@ class GroqExtractor:
             choices = response_data.get("choices", [])
             if not choices:
                 raise ValueError("No choices returned")
-            output_text = choices[0].get("message", {}).get("content")
+            message = choices[0].get("message", {})
+            if message.get("refusal"):
+                raise ValueError(f"Model refused extraction: {message['refusal']}")
+            output_text = message.get("content")
             if not output_text:
                 raise ValueError("No structured output returned")
             result = json.loads(output_text)

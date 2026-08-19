@@ -1,666 +1,273 @@
+"""Console presentation layer for Telclaw."""
 
-import json
-
+import asyncio
 import os
-
-from datetime import datetime
-
-
+from datetime import date
 
 from colorama import Fore, Style, init
 
-
-
 import config
-
-import scheduler
-
-import sessions_manager
-
-
+from collection.crawler import CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY
+from services.account_service import AccountService
+from services.channel_service import ChannelService
+from services.crawler_service import CrawlerService
 
 init(autoreset=True)
 
 
-
-
-
 class ConsoleUI:
-
-    def __init__(self):
-
+    def __init__(self, account_service=None, channel_service=None, crawler_service=None):
+        self.accounts = account_service or AccountService()
+        self.channels = channel_service or ChannelService()
+        self.crawler = crawler_service or CrawlerService(self.channels)
         self.client = None
 
-
-
     def clear_screen(self):
-
         os.system("cls" if os.name == "nt" else "clear")
 
-
-
     def show_banner(self):
-
-        banner = f"""
-
-{Fore.CYAN}╔════════════════════════════════════════════════════════════╗
-
-║{Fore.MAGENTA}       🤖 TELEGRAM ADVANCED CRAWLER TUI 🤖{Fore.CYAN}              ║
-
-║{Fore.BLUE}        Advanced Telegram Message Crawler Tool{Fore.CYAN}            ║
-
-╚════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
-
-        """
-
-        print(banner)
-
-
+        print(f"{Fore.CYAN}╔════════════════════════════════════════════════════════════╗")
+        print(f"║{Fore.MAGENTA}       🤖 TELEGRAM ADVANCED CRAWLER TUI 🤖{Fore.CYAN}              ║")
+        print(f"║{Fore.BLUE}        Advanced Telegram Message Crawler Tool{Fore.CYAN}            ║")
+        print(f"╚════════════════════════════════════════════════════════════╝{Style.RESET_ALL}")
 
     def show_section_header(self, title):
-
-        """Display a section header with visual styling"""
-
         print(f"\n{Fore.CYAN}┌─ {Fore.WHITE}{title}{Fore.CYAN} ─┐{Style.RESET_ALL}")
 
-
-
     def show_section_footer(self):
-
-        """Display a section footer"""
-
         print(f"{Fore.CYAN}└{'─' * 56}┘{Style.RESET_ALL}")
 
-
-
     def show_message(self, message, color=Fore.CYAN):
-
         print(f"{color}▸ {message}{Style.RESET_ALL}")
 
+    async def pause(self, message="Press Enter to continue..."):
+        await asyncio.to_thread(input, f"\n{message}")
 
-
-    def pause(self, message="Press Enter to continue..."):
-
-        input(f"\n{message}")
-
-
-
-    def prompt_choice(self, prompt, valid_options, allow_back=False):
-
+    async def prompt_choice(self, prompt, valid_options):
         while True:
-
-            value = input(prompt).strip().lower()
-
-            if allow_back and value == "b":
-
-                return "b"
-
+            value = (await asyncio.to_thread(input, prompt)).strip().lower()
             if value in valid_options:
-
                 return value
-
             self.show_message("Invalid choice. Please try again.", Fore.RED)
 
-
-
-    def prompt_text(self, prompt, default=None, allow_empty=True):
-
+    async def prompt_text(self, prompt, default=None, allow_empty=True):
         while True:
-
-            if default is None:
-
-                value = input(f"{prompt}: ").strip()
-
-            else:
-
-                value = input(f"{prompt} [{default}]: ").strip() or default
-
+            suffix = f" [{default}]" if default is not None else ""
+            value = (await asyncio.to_thread(input, f"{prompt}{suffix}: ")).strip()
+            value = value or (default if default is not None else "")
             if allow_empty or value:
-
                 return value
-
             self.show_message("This field cannot be empty.", Fore.RED)
 
+    async def prompt_date(self, prompt, default=None):
+        while True:
+            value = await self.prompt_text(prompt, default=default, allow_empty=False)
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                self.show_message("Invalid date. Use YYYY-MM-DD, for example 2026-08-18.", Fore.RED)
 
+    def _print_options(self, title, items):
+        self.show_section_header(title)
+        for index, item in enumerate(items, start=1):
+            print(f"{Fore.GREEN}│  {Fore.YELLOW}[{index}]{Fore.WHITE} {item}")
+        self.show_section_footer()
 
     async def connect_client(self, account_name=None):
-
         if self.client is not None:
-
             return self.client
 
-
-
-        accounts = sessions_manager.get_active_accounts()
-
+        accounts = await self.accounts.list_accounts()
         if not accounts:
-
-            self.show_message("No active Telegram sessions were found. Create one first.", Fore.YELLOW)
-
+            self.show_message("No active Telegram sessions were found.", Fore.YELLOW)
             return None
-
-
 
         if account_name is None:
-
-            self.show_section_header("Select Account")
-
-            print(f"\n{Fore.WHITE}│")
-
-            for index, account in enumerate(accounts, start=1):
-
-                print(f"{Fore.GREEN}│  {Fore.YELLOW}[{index}]{Fore.WHITE} {account}")
-
-            print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
-            self.show_section_footer()
-
-
-
-            choice = self.prompt_text("Select account number", default="1")
-
+            self._print_options("Select Account", [account["session"] for account in accounts])
+            choice = await self.prompt_text("Select account number", default="1")
             try:
-
-                account_name = accounts[int(choice) - 1]
-
+                account_name = accounts[int(choice) - 1]["session"]
             except (ValueError, IndexError):
-
                 self.show_message("Invalid account selection.", Fore.RED)
-
                 return None
 
-
-
-        self.show_message(f"Connecting to Telegram for '{account_name}'...", Fore.CYAN)
-
-        client = sessions_manager.create_client(account_name)
-
-        await client.connect()
-
-
-
-        if not await client.is_user_authorized():
-
-            await client.disconnect()
-
-            self.show_message("The selected session is not authorized. Please log in again.", Fore.RED)
-
+        try:
+            self.show_message(f"Connecting to Telegram for '{account_name}'...")
+            self.client = await self.accounts.connect(account_name)
+            self.show_message(f"Connected to '{account_name}'.", Fore.GREEN)
+            return self.client
+        except Exception as exc:
+            self.show_message(f"Unable to connect: {exc}", Fore.RED)
             return None
 
-
-
-        self.client = client
-
-        return client
-
-
-
     async def account_menu(self):
-
         while True:
-
             self.clear_screen()
-
             self.show_banner()
-
             self.show_section_header("Account Management")
-
-            print(f"{Fore.WHITE}│")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}1{Fore.WHITE}. Select an existing account")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}2{Fore.WHITE}. Add a new account")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}3{Fore.WHITE}. Go back")
-
-            print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
+            print(f"{Fore.GREEN}│  1. Select an existing account")
+            print(f"{Fore.GREEN}│  2. Add a new account")
+            print(f"{Fore.GREEN}│  3. Go back")
             self.show_section_footer()
 
-
-
-            choice = self.prompt_choice(f"\n{Fore.YELLOW}Choose an option [1-3]: {Style.RESET_ALL}", {"1", "2", "3"})
-
-
-
+            choice = await self.prompt_choice("\nChoose an option [1-3]: ", {"1", "2", "3"})
             if choice == "3":
-
-                return None
-
-
-
+                return
             if choice == "1":
+                await self.connect_client()
+                await self.pause()
+                return
 
-                accounts = sessions_manager.get_active_accounts()
+            existing = await self.accounts.list_accounts()
+            existing_names = {account["session"] for account in existing}
+            while True:
+                name = await self.prompt_text("Enter a unique session name", allow_empty=False)
+                if name not in existing_names:
+                    break
+                self.show_message(f"Session '{name}' already exists. Choose another name.", Fore.YELLOW)
 
-                if not accounts:
-
-                    self.show_message("No accounts found. You can create one now.", Fore.YELLOW)
-
-                    self.pause()
-
-                    continue
-
-
-
-                self.show_section_header("Available Accounts")
-
-                print(f"{Fore.WHITE}│")
-
-                for index, account in enumerate(accounts, start=1):
-
-                    print(f"{Fore.CYAN}│  {Fore.YELLOW}[{index}]{Fore.WHITE} {account}")
-
-                print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
-                self.show_section_footer()
-
-
-
-                selected = self.prompt_text("Select account number", default="1")
-
-                try:
-
-                    account_name = accounts[int(selected) - 1]["session"]
-
-                except (ValueError, IndexError):
-
-                    self.show_message("Invalid account selection.", Fore.RED)
-
-                    self.pause()
-
-                    continue
-
-
-
-                client = await self.connect_client(account_name)
-
-                if client is None:
-
-                    self.pause()
-
-                    continue
-
-
-
-                self.show_message(f"Connected to account '{account_name}'.", Fore.GREEN)
-
-                self.pause()
-
-                return account_name
-
-
-
-            if choice == "2":
-
-                name = self.prompt_text("Enter a unique session name", allow_empty=False)
-
-                if await sessions_manager.register_new_account(name):
-
-                    self.show_message(f"Account '{name}' created successfully.", Fore.GREEN)
-
-                    self.pause()
-
-                    return name
-
-
-
-                self.show_message("Account creation failed.", Fore.RED)
-
-                self.pause()
-
-
+            if await self.accounts.register(name):
+                self.show_message(f"Account '{name}' created successfully.", Fore.GREEN)
+            else:
+                self.show_message("Account creation failed. No account was added.", Fore.RED)
+            await self.pause()
 
     async def start_crawler_flow(self):
-
         self.clear_screen()
-
         self.show_banner()
-
-        self.show_section_header("Start Crawler")
-
-
-
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        channels_file = os.path.join(base_dir, "channels.json")
-
-
-
-        if not os.path.exists(channels_file):
-
-            self.show_message(f"Channel file not found: {channels_file}", Fore.RED)
-
-            self.pause()
-
-            return
-
-
+        self.show_section_header("Scheduled Crawler")
 
         try:
-
-            with open(channels_file, "r", encoding="utf-8") as handle:
-
-                channels_data = json.load(handle)
-
+            categories = self.crawler.categories()
         except Exception as exc:
-
-            self.show_message(f"Unable to read channels.json: {exc}", Fore.RED)
-
-            self.pause()
-
+            self.show_message(f"Unable to load channels: {exc}", Fore.RED)
+            await self.pause()
             return
-
-
-
-        categories = list(channels_data.keys())
-
         if not categories:
-
-            self.show_message("No categories found in channels.json.", Fore.YELLOW)
-
-            self.pause()
-
+            self.show_message("No categories found.", Fore.YELLOW)
+            await self.pause()
             return
 
-
-
-        print(f"\n{Fore.WHITE}│")
-
-        print(f"{Fore.CYAN}│  {Fore.WHITE}Available Categories:")
-
-        print(f"{Fore.WHITE}│")
-
-        for index, category in enumerate(categories, start=1):
-
-            print(f"{Fore.GREEN}│  {Fore.YELLOW}[{index}]{Fore.WHITE} {category}")
-
-        print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
-        self.show_section_footer()
-
-
-
-        category_choice = self.prompt_text("Select category number", default="1")
-
+        self._print_options("Available Categories", categories)
+        choice = await self.prompt_text("Select category number", default="1")
         try:
-
-            selected_category = categories[int(category_choice) - 1]
-
+            category = categories[int(choice) - 1]
         except (ValueError, IndexError):
-
             self.show_message("Invalid category selection.", Fore.RED)
-
-            self.pause()
-
+            await self.pause()
             return
 
+        self._print_options("Crawl Mode", ["All messages", "Only messages containing photos"])
+        mode_choice = await self.prompt_choice("Select crawl mode [1-2]: ", {"1", "2"})
+        crawl_mode = CRAWL_MODE_ALL if mode_choice == "1" else CRAWL_MODE_PHOTOS_ONLY
 
+        today = date.today().isoformat()
+        from_date = await self.prompt_date("From date (YYYY-MM-DD)", default=today)
+        to_date = await self.prompt_date("To date (YYYY-MM-DD)", default=today)
+        if from_date > to_date:
+            self.show_message("From date cannot be after To date.", Fore.RED)
+            await self.pause()
+            return
 
-        channels_to_crawl = channels_data[selected_category]
-
-        today_str = datetime.now().strftime("%Y-%m-%d")
-
-
-
-        from_date = self.prompt_text("From date", default=today_str)
-
-        to_date = self.prompt_text("To date", default=today_str)
-
-
-
+        interval = await self.prompt_text(
+            "Crawl interval in minutes",
+            default=str(getattr(config, "CRAWL_INTERVAL_MINUTES", 5)),
+            allow_empty=False,
+        )
         try:
-
-            target_date = datetime.strptime(to_date, "%Y-%m-%d").date()
-
+            interval_minutes = float(interval)
+            if interval_minutes <= 0:
+                raise ValueError
         except ValueError:
-
-            self.show_message("Invalid date format. Use YYYY-MM-DD.", Fore.RED)
-
-            self.pause()
-
+            self.show_message("Interval must be a positive number.", Fore.RED)
+            await self.pause()
             return
-
-
 
         client = await self.connect_client()
-
         if client is None:
-
-            self.pause()
-
+            await self.pause()
             return
 
+        try:
+            jobs = self.crawler.schedule_category(
+                client,
+                category,
+                from_date,
+                to_date,
+                interval_minutes=interval_minutes,
+                crawl_mode=crawl_mode,
+            )
+        except Exception as exc:
+            self.show_message(f"Unable to schedule crawler: {exc}", Fore.RED)
+            await self.pause()
+            return
 
-
-        self.show_message(f"Starting crawler for category '{selected_category}'...", Fore.GREEN)
-
-        for channel in channels_to_crawl:
-
-            await scheduler.start_crawler(client, channel["username"], target_date)
-
-
-
-        self.show_message("Crawler finished successfully.", Fore.GREEN)
-
-        self.pause()
-
-
+        mode_label = "all messages" if crawl_mode == CRAWL_MODE_ALL else "photos only"
+        self.show_message(
+            f"Category '{category}' scheduled: {len(jobs)} channel(s), mode={mode_label}, "
+            f"range={from_date}..{to_date}, every {interval_minutes:g} minute(s).",
+            Fore.GREEN,
+        )
+        await self.pause("Press Enter to return to the menu. Jobs continue in background...")
 
     async def change_settings(self):
-
         self.clear_screen()
-
         self.show_banner()
-
         self.show_section_header("Settings")
-
-        
-
-        print(f"\n{Fore.WHITE}│")
-
-        print(f"{Fore.CYAN}│  {Fore.YELLOW}Current Configuration:")
-
-        print(f"{Fore.WHITE}│")
-
-        print(f"{Fore.GREEN}│  ✓ Base Delay: {Fore.YELLOW}{config.BASE_DELAY}{Fore.WHITE} seconds")
-
-        print(f"{Fore.GREEN}│  ✓ Random Delay Max: {Fore.YELLOW}{config.RANDOM_DELAY_MAX}{Fore.WHITE} seconds")
-
-        print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
+        print(f"{Fore.GREEN}│  Base Delay: {config.BASE_DELAY} seconds")
+        print(f"{Fore.GREEN}│  Random Delay Max: {config.RANDOM_DELAY_MAX} seconds")
+        print(f"{Fore.GREEN}│  Crawl Interval: {getattr(config, 'CRAWL_INTERVAL_MINUTES', 5)} minutes")
         self.show_section_footer()
-
-
-
-        new_base_delay = self.prompt_text("\nNew base delay", default=str(config.BASE_DELAY))
-
-        new_random_delay = self.prompt_text("New random delay max", default=str(config.RANDOM_DELAY_MAX))
-
-
-
-        try:
-
-            config.BASE_DELAY = int(new_base_delay)
-
-            config.RANDOM_DELAY_MAX = int(new_random_delay)
-
-        except ValueError:
-
-            self.show_message("Delay values must be integers.", Fore.RED)
-
-            self.pause()
-
-            return
-
-
-
-        self.show_message("Settings updated successfully.", Fore.GREEN)
-
-        self.pause()
-
-
+        await self.pause()
 
     async def manage_channels(self):
-
         self.clear_screen()
-
         self.show_banner()
-
-        self.show_section_header("Channel Management")
-
-
-
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-
-        channels_file = os.path.join(base_dir, "channels.json")
-
-
-
-        if not os.path.exists(channels_file):
-
-            self.show_message(f"Channel file not found: {channels_file}", Fore.RED)
-
-            self.pause()
-
-            return
-
-
-
         try:
-
-            with open(channels_file, "r", encoding="utf-8") as handle:
-
-                data = json.load(handle)
-
+            data = self.channels.load()
         except Exception as exc:
-
-            self.show_message(f"Unable to read channels.json: {exc}", Fore.RED)
-
-            self.pause()
-
+            self.show_message(f"Unable to read channels: {exc}", Fore.RED)
+            await self.pause()
             return
-
-
-
-        print(f"{Fore.WHITE}│")
-
+        self.show_section_header("Channel Management")
         for category, channels in data.items():
-
-            print(f"{Fore.CYAN}│  {Fore.MAGENTA}[{category}]{Style.RESET_ALL}")
-
+            print(f"{Fore.CYAN}│  [{category}]")
             for channel in channels:
-
-                username = channel.get('username', 'unknown')
-
-                description = channel.get('description', 'No description')
-
-                print(f"{Fore.GREEN}│    ├─ {Fore.YELLOW}@{username}")
-
-                print(f"{Fore.GREEN}│    └─ {Fore.WHITE}{description}{Style.RESET_ALL}")
-
-            print(f"{Fore.WHITE}│")
-
-        print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
+                print(f"{Fore.GREEN}│    ├─ @{channel.get('username', 'unknown')}")
+                print(f"{Fore.GREEN}│    └─ {Fore.WHITE}{channel.get('description', 'No description')}")
         self.show_section_footer()
-
-
-
-        self.pause()
-
-
+        await self.pause()
 
     async def run(self):
-
         while True:
-
             self.clear_screen()
-
             self.show_banner()
-
             self.show_section_header("Main Menu")
-
-            
-
-            print(f"{Fore.WHITE}│")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}1{Fore.WHITE}. ▶️ Start scheduled crawler")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}2{Fore.WHITE}. ⚙️ Change base delay and settings")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}3{Fore.WHITE}. 📋 Manage channels")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}4{Fore.WHITE}. 👤 Switch / add account")
-
-            print(f"{Fore.GREEN}│  {Fore.CYAN}5{Fore.WHITE}. 🚪 Exit")
-
-            print(f"{Fore.WHITE}│{Style.RESET_ALL}")
-
+            print(f"{Fore.GREEN}│  1. ▶️ Start scheduled crawler")
+            print(f"{Fore.GREEN}│  2. ⚙️ Change settings")
+            print(f"{Fore.GREEN}│  3. 📋 Manage channels")
+            print(f"{Fore.GREEN}│  4. 👤 Switch / add account")
+            print(f"{Fore.GREEN}│  5. 🚪 Exit")
             self.show_section_footer()
-
-
-
-            choice = self.prompt_choice(f"\n{Fore.YELLOW}Choose an option [1-5]: {Style.RESET_ALL}", {"1", "2", "3", "4", "5"})
-
-
-
+            choice = await self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
             if choice == "1":
-
                 await self.start_crawler_flow()
-
             elif choice == "2":
-
                 await self.change_settings()
-
             elif choice == "3":
-
                 await self.manage_channels()
-
             elif choice == "4":
-
                 await self.account_menu()
-
             else:
-
-                if self.client is not None:
-
-                    try:
-
-                        await self.client.disconnect()
-
-                    except Exception:
-
-                        pass
-
-                self.clear_screen()
-
-                print(f"{Fore.CYAN}╔════════════════════════════════════════════════════════════╗{Style.RESET_ALL}")
-
-                print(f"{Fore.CYAN}║{Fore.YELLOW}          Thank you for using Telegram Crawler!{Fore.CYAN}           ║{Style.RESET_ALL}")
-
-                print(f"{Fore.CYAN}║{Fore.YELLOW}                    Goodbye! 👋{Fore.CYAN}                          ║{Style.RESET_ALL}")
-
-                print(f"{Fore.CYAN}╚════════════════════════════════════════════════════════════╝{Style.RESET_ALL}\n")
-
+                self.crawler.stop_all()
+                await self.accounts.disconnect(self.client)
+                self.client = None
                 break
 
 
-
-
-
 async def account_menu():
-
-    ui = ConsoleUI()
-
-    return await ui.account_menu()
-
-
-
+    return await ConsoleUI().account_menu()
 
 
 async def run_ui():
-
-    ui = ConsoleUI()
-
-    await ui.run()
+    await ConsoleUI().run()

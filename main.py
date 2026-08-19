@@ -1,12 +1,13 @@
 import asyncio
 
+from storage import database
 from ui import ConsoleUI
 
 
-async def main_async():
-    ui = ConsoleUI()
-    await ui.run()
+def main():
+    database.initialize_db()
+    asyncio.run(ConsoleUI().run())
 
 
 if __name__ == "__main__":
-    asyncio.run(main_async())
+    main()

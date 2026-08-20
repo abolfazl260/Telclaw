@@ -19,7 +19,14 @@ Return ONLY the JSON object required by the supplied schema.
 
 
 class AIExtractionError(RuntimeError):
-    pass
+    """An AI failure whose details are diagnostic-only and must not reach message storage."""
+
+    def __init__(self, message, *, status=None, reason=None, provider="groq", stop_queue=False):
+        super().__init__(message)
+        self.status = status
+        self.reason = reason
+        self.provider = provider
+        self.stop_queue = stop_queue
 
 
 class GroqExtractor:
@@ -33,18 +40,36 @@ class GroqExtractor:
             requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE
         )
 
+    @staticmethod
+    def _provider_reason(status, detail):
+        """Normalize provider responses to a small, non-persisted diagnostic reason."""
+        text = (detail or "").lower()
+        if status in (401,):
+            return "invalid_api_key"
+        if status == 403:
+            if "model" in text and ("block" in text or "permission" in text or "access" in text):
+                return "model_blocked"
+            return "permissions_error"
+        if status == 429:
+            return "rate_limit"
+        if status >= 500:
+            return "server_error"
+        return "provider_error"
+
     def extract(self, processed_text):
         if not self.api_key:
-            raise AIExtractionError("GROQ_API_KEY is not configured")
+            raise AIExtractionError(
+                "GROQ_API_KEY is not configured",
+                reason="missing_api_key",
+            )
         if not isinstance(processed_text, str) or not processed_text.strip():
-            raise AIExtractionError("Cannot call Groq with empty text")
+            raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
         self.rate_limiter.wait()
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                # Only the Telegram message text is provided as user content.
                 {"role": "user", "content": processed_text},
             ],
             "temperature": 0,
@@ -74,19 +99,26 @@ class GroqExtractor:
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace").strip()
             request_id = exc.headers.get("x-request-id") or exc.headers.get("request-id")
+            reason = self._provider_reason(exc.code, detail)
             diagnostic = [
+                f"provider=groq",
                 f"status={exc.code}",
                 f"model={self.model}",
-                f"response={detail[:2000] or '<empty>'}",
+                f"reason={reason}",
+                f"response={detail[:4000] or '<empty>'}",
             ]
             if request_id:
                 diagnostic.append(f"request_id={request_id}")
             raise AIExtractionError(
-                "Groq request failed: " + "; ".join(diagnostic)
+                "Groq request failed: " + "; ".join(diagnostic),
+                status=exc.code,
+                reason=reason,
+                stop_queue=exc.code == 403,
             ) from exc
         except (URLError, TimeoutError) as exc:
             raise AIExtractionError(
-                f"Groq request failed: model={self.model}; transport={exc}"
+                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
+                reason="network_error" if isinstance(exc, URLError) else "timeout",
             ) from exc
 
         try:
@@ -103,4 +135,7 @@ class GroqExtractor:
             result = json.loads(output_text)
             return validate_result(result)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise AIExtractionError(f"Invalid Groq output: {exc}") from exc
+            raise AIExtractionError(
+                f"Invalid Groq output: {exc}",
+                reason="invalid_provider_output",
+            ) from exc

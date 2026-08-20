@@ -39,6 +39,23 @@ def _extract_sender(message):
     return sender_id, sender_username, sender_type
 
 
+def _extract_message_text(message):
+    """Extract Telegram text/caption reliably, including media captions.
+
+    Telethon normally exposes a photo caption through ``message.text``. Some
+    Telegram/media message variants can expose the same caption through
+    ``raw_text`` or ``message`` instead. Collection must preserve the source
+    caption verbatim enough for later cleaning and AI title generation, so use
+    a deterministic fallback chain instead of allowing a media caption to be
+    persisted as an empty raw_text value.
+    """
+    for attribute in ("text", "raw_text", "message"):
+        value = getattr(message, attribute, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
 def _build_message_link(channel_username, message_id):
     """Build a human-readable Telegram message link when a public username exists."""
     username = (channel_username or "").strip().lstrip("@")
@@ -222,7 +239,7 @@ async def crawl_channel(
                 )
                 continue
 
-            raw_text = message.text or ""
+            raw_text = _extract_message_text(message)
             (
                 has_media,
                 media_type,

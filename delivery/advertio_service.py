@@ -62,8 +62,9 @@ class AdvertioDeliveryService:
             return None
         return int(number) if number.is_integer() else number
 
-    @staticmethod
-    def _canonical_property_type(value):
+    @classmethod
+    def _canonical_property_type(cls, value):
+        """Normalize AI property_type; Advertio defaults unknown/empty values to house."""
         value = str(value or "").strip().lower()
         aliases = {
             "flat": "apartment", "apt": "apartment", "apartment": "apartment",
@@ -71,7 +72,7 @@ class AdvertioDeliveryService:
             "studio": "studio", "room": "room", "room in apartment": "room",
             "house": "house", "home": "house",
         }
-        return aliases.get(value)
+        return aliases.get(value, "house")
 
     @staticmethod
     def _canonical_listing_type(value):

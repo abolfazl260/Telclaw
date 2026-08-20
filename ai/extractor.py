@@ -11,7 +11,6 @@ import config
 from ai.category_schemas import CATEGORY_FIELDS, CATEGORIES, validate_result
 from ai.rate_limiter import RateLimiter
 
-
 logger = logging.getLogger("telclaw.ai")
 
 
@@ -26,40 +25,49 @@ class AIExtractionError(RuntimeError):
         self.stop_queue = stop_queue
 
 
-def _build_extraction_prompt():
+def _build_extraction_prompt(compact=False):
+    if compact:
+        return """Extract structured marketplace data from this Telegram message.
+Return ONLY one valid JSON object, no Markdown, no explanation, no <think> tags.
+Top level: {\"category\":\"housinglist|transferlist|joblist\",\"data\":{\"selected_category\":{...}}}.
+Include ONLY fields you can determine plus the required fields below. Do not output empty optional fields.
+
+Universal rules:
+- title must be concise natural English. Translate it when necessary; never transliterate it.
+- Never invent price, bedrooms, property type, or other facts.
+- Canonical currency is CAD.
+- For housing, if country is not stated, country_code=CA. Infer province from the stated city/neighborhood when it is unambiguous.
+- For housing, output these required fields: listing_type, property_type, bedrooms, price, currency, country_code, province, city, title.
+- Housing currency must be CAD and country_code must be CA. If price/bedrooms/property type/city/province cannot be reliably determined, use null and the local validator will reject the record.
+- Housing bedrooms must be one of: 0, 1, 2, 3, 4+ (string).
+- Housing property_type: apartment, condo, basement, studio, room, house.
+- Housing listing_type: rent or roommate.
+- Housing price is a monthly CAD number from 100 to 10000.
+
+Message follows:
+"""
+
     category_fields = "\n".join(
         f"- {category}: {', '.join(fields)}" for category, fields in CATEGORY_FIELDS.items()
     )
     return f"""You extract structured marketplace information from processed Telegram messages.
 Classify each message into exactly one category: {', '.join(CATEGORIES)}.
-Extract only facts explicitly supported by the message. Never invent values.
-Unknown scalar values must be null. Unknown list values must be [].
-Use normalized English field names. Keep the original meaning and do not copy Telegram metadata.
+Return ONLY valid JSON. No Markdown fences, explanations, comments, or <think> tags.
+Never invent facts. Omit optional fields when unknown. Use normalized English field names.
 
-TITLE REQUIREMENT:
-- The title MUST always be written in English.
-- If the source message is not English, translate the title meaning into natural English.
-- Do not transliterate the original-language title.
-- Do not return the original-language title.
-- Keep the English title concise and suitable for a marketplace listing.
-- Do not put URLs, hashtags, emojis, or explanations in the title.
+Required output shape:
+{{"category":"housinglist|transferlist|joblist","data":{{"selected_category":{{...}}}}}}
+Only include the selected category and only fields with useful values.
 
-CURRENCY REQUIREMENT:
-- The platform's canonical currency is ALWAYS Canadian dollars (CAD).
-- For every listing/request, the canonical monetary currency must be CAD.
-- Use "CAD" for the housing/transfer currency field and for job salary_currency.
-- If the source amount is explicitly in another currency, do NOT invent an exchange rate. Preserve the amount only if it is already reliably CAD; otherwise set the monetary amount and currency field to null.
-- Do not output USD, EUR, GBP, TRY, IRR, or any other currency as the canonical currency.
+TITLE: every returned title MUST be natural English. Translate non-English text into English; do not transliterate. Keep it concise and marketplace-ready. No URLs, hashtags, emojis, or explanations.
 
-Return ONLY valid JSON. Do not use Markdown fences. Do not include explanations, comments, or <think> tags.
-Return exactly this top-level structure:
-{{"category":"housinglist|transferlist|joblist","data":{{"<selected_category>":{{...fields...}}}}}}
-Only include the selected category inside data. Do not include the other categories.
+CURRENCY: the platform canonical currency is CAD. For housing, transfer and job salary fields, use CAD. If a source explicitly gives a non-CAD currency, do not invent an exchange rate; leave the monetary value/currency unavailable so validation can reject it.
 
-Allowed fields by category:
+HOUSING: when country is not stated, country_code defaults to CA. Infer province from the city/neighborhood when the location is unambiguous. Required for housing: listing_type, property_type, bedrooms, price, currency, country_code, province, city, title. Do not guess price, bedrooms, property type, city, or province.
+Housing listing_type = rent|roommate; property_type = apartment|condo|basement|studio|room|house; bedrooms = 0|1|2|3|4+ as a string; price = monthly CAD number 100-10000.
+
+Allowed fields:
 {category_fields}
-
-For the selected category, use the exact field names above. You may omit fields whose values are unknown; use null or [] when you include them.
 """
 
 
@@ -79,7 +87,6 @@ def _title_is_english(title):
 
 
 def _validate_english_title(result):
-    """Validate every returned marketplace title without changing its content."""
     data = result.get("data") if isinstance(result, dict) else None
     if not isinstance(data, dict):
         return result
@@ -91,8 +98,33 @@ def _validate_english_title(result):
     return result
 
 
+def _normalize_defaults(result):
+    """Apply safe platform defaults before strict local validation."""
+    if not isinstance(result, dict):
+        return result
+    category = result.get("category")
+    data = result.get("data")
+    if not isinstance(data, dict) or category not in data or not isinstance(data[category], dict):
+        return result
+
+    category_data = data[category]
+    if category == "housinglist":
+        # Advertio is Canada-only. A missing country is therefore safely CA.
+        if not str(category_data.get("country_code") or "").strip():
+            category_data["country_code"] = "CA"
+        if not str(category_data.get("currency") or "").strip():
+            category_data["currency"] = "CAD"
+    elif category == "transferlist":
+        if not str(category_data.get("currency") or "").strip():
+            category_data["currency"] = "CAD"
+    elif category == "joblist":
+        if not str(category_data.get("salary_currency") or "").strip() and category_data.get("salary") is not None:
+            category_data["salary_currency"] = "CAD"
+    return result
+
+
 def _normalize_currencies(result):
-    """Enforce CAD as the canonical currency without inventing exchange rates."""
+    """Reject explicit non-CAD currencies instead of silently converting them."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
@@ -142,6 +174,8 @@ class GroqExtractor:
             return "rate_limit"
         if status >= 500:
             return "server_error"
+        if "json_validate_failed" in text or "failed to generate json" in text:
+            return "invalid_json_generation"
         return "provider_error"
 
     def _log_request_config(self):
@@ -168,20 +202,14 @@ class GroqExtractor:
         print(diagnostic)
         logger.error(
             "Groq provider error: status=%s model=%s reason=%s request_id=%s response=%s",
-            status,
-            model,
-            reason,
-            request_id or "<none>",
-            response_detail[:4000],
+            status, model, reason, request_id or "<none>", response_detail[:4000],
         )
 
     @staticmethod
     def _retry_after_seconds(response, attempt):
-        """Calculate a conservative 429 cooldown from server hints and exponential backoff."""
         retry_after = response.headers.get("Retry-After") or response.headers.get("retry-after")
         reset_tokens = response.headers.get("x-ratelimit-reset-tokens")
         detail = response.text or ""
-
         hinted = None
         for value in (retry_after, reset_tokens):
             if not value:
@@ -189,15 +217,41 @@ class GroqExtractor:
             match = re.search(r"(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)?", str(value), re.I)
             if match:
                 hinted = max(hinted or 0.0, float(match.group(1)))
-
         if hinted is None:
             match = re.search(r"try again in\s+(\d+(?:\.\d+)?)\s*s", detail, re.I)
             if match:
                 hinted = float(match.group(1))
-
         exponential = config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS * (2 ** max(0, attempt - 1))
         wait_seconds = max(hinted or 0.0, exponential, config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS)
         return min(wait_seconds, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
+
+    @staticmethod
+    def _is_invalid_json_generation(status, detail):
+        if status != 400:
+            return False
+        text = (detail or "").lower()
+        return "json_validate_failed" in text or "failed to generate json" in text or "max completion tokens reached" in text
+
+    def _request(self, processed_text, *, compact=False):
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _build_extraction_prompt(compact=compact)},
+                {"role": "user", "content": processed_text},
+            ],
+            "temperature": 0,
+            "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
+            "response_format": {"type": "json_object"},
+        }
+        return requests.post(
+            self.ENDPOINT,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=self.timeout,
+        )
 
     def extract(self, processed_text):
         if not self.api_key:
@@ -205,33 +259,17 @@ class GroqExtractor:
         if not isinstance(processed_text, str) or not processed_text.strip():
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": _build_extraction_prompt()},
-                {"role": "user", "content": processed_text},
-            ],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
-
-        max_retries = config.GROQ_RATE_LIMIT_MAX_RETRIES
-        attempt = 0
+        max_rate_retries = config.GROQ_RATE_LIMIT_MAX_RETRIES
+        invalid_json_retries = config.GROQ_INVALID_JSON_MAX_RETRIES
+        rate_attempt = 0
+        json_attempt = 0
+        compact = False
 
         while True:
             self.rate_limiter.wait()
             self._log_request_config()
-
             try:
-                response = requests.post(
-                    self.ENDPOINT,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                    timeout=self.timeout,
-                )
+                response = self._request(processed_text, compact=compact)
             except requests.RequestException as exc:
                 raise AIExtractionError(
                     f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
@@ -245,30 +283,28 @@ class GroqExtractor:
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
 
-            if response.status_code == 429 and attempt < max_retries:
-                attempt += 1
-                wait_seconds = self._retry_after_seconds(response, attempt)
-                print(
-                    f"[AI] Groq rate limit reached. Waiting {wait_seconds:.1f}s "
-                    f"before retry {attempt}/{max_retries}..."
-                )
+            if response.status_code == 429 and rate_attempt < max_rate_retries:
+                rate_attempt += 1
+                wait_seconds = self._retry_after_seconds(response, rate_attempt)
+                print(f"[AI] Groq rate limit reached. Waiting {wait_seconds:.1f}s before retry {rate_attempt}/{max_rate_retries}...")
                 logger.warning(
                     "Groq rate limit: waiting %.1fs before retry %s/%s request_id=%s",
-                    wait_seconds,
-                    attempt,
-                    max_retries,
-                    request_id or "<none>",
+                    wait_seconds, rate_attempt, max_rate_retries, request_id or "<none>",
                 )
                 time.sleep(wait_seconds)
                 continue
 
-            self._log_provider_error(
-                response.status_code,
-                self.model,
-                reason,
-                detail,
-                request_id=request_id,
-            )
+            if self._is_invalid_json_generation(response.status_code, detail) and json_attempt < invalid_json_retries:
+                json_attempt += 1
+                compact = True
+                print(f"[AI] Groq JSON generation failed. Retrying with compact schema {json_attempt}/{invalid_json_retries}...")
+                logger.warning(
+                    "Groq JSON generation failed; retrying compact prompt attempt=%s/%s request_id=%s",
+                    json_attempt, invalid_json_retries, request_id or "<none>",
+                )
+                continue
+
+            self._log_provider_error(response.status_code, self.model, reason, detail, request_id=request_id)
             diagnostic = [
                 "provider=groq",
                 f"status={response.status_code}",
@@ -297,6 +333,7 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            result = _normalize_defaults(result)
             result = _normalize_currencies(result)
             result = _validate_english_title(result)
             return validate_result(result)

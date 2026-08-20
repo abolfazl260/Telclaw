@@ -49,10 +49,18 @@ class MessageRepository:
         )
 
     def mark_ai_result(self, message_id, channel_username, *, success, **fields):
-        fields.update(ai_status="processed" if success else "failed")
+        if success:
+            fields.update(ai_status="processed")
+        else:
+            # Provider diagnostics are logger-only. Never persist exception text,
+            # provider response bodies, or transport details on the message row.
+            fields.pop("ai_error", None)
+            fields.update(ai_status="failed", ai_error=None)
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_skipped(self, message_id, channel_username, *, reason, **fields):
+        # Data-quality skips are intentionally distinguishable from provider
+        # failures, but only through a bounded internal reason.
         fields.update(ai_status="skipped", ai_error=f"skipped:{reason}")
         return self.update_message(message_id, channel_username, **fields)
 

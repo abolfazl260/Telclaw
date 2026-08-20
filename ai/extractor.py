@@ -1,6 +1,7 @@
 """AI extraction service using Groq structured outputs."""
 
 import json
+import logging
 from urllib import request
 from urllib.error import HTTPError, URLError
 
@@ -18,6 +19,9 @@ Return ONLY the JSON object required by the supplied schema.
 """
 
 
+logger = logging.getLogger("telclaw.ai")
+
+
 class AIExtractionError(RuntimeError):
     """An AI failure whose details are diagnostic-only and must not reach message storage."""
 
@@ -32,6 +36,8 @@ class AIExtractionError(RuntimeError):
 class GroqExtractor:
     """Dependency-free Groq client using Groq's OpenAI-compatible API."""
 
+    ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+
     def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None):
         self.api_key = api_key or config.GROQ_API_KEY
         self.model = model or config.GROQ_MODEL
@@ -44,7 +50,7 @@ class GroqExtractor:
     def _provider_reason(status, detail):
         """Normalize provider responses to a small, non-persisted diagnostic reason."""
         text = (detail or "").lower()
-        if status in (401,):
+        if status == 401:
             return "invalid_api_key"
         if status == 403:
             if "model" in text and ("block" in text or "permission" in text or "access" in text):
@@ -56,6 +62,22 @@ class GroqExtractor:
             return "server_error"
         return "provider_error"
 
+    def _log_request_config(self):
+        """Log the effective request configuration without exposing the API secret."""
+        key_preview = self.api_key[:8] if self.api_key else "<missing>"
+        logger.warning(
+            "[DEBUG GROQ REQUEST] MODEL=%s KEY=%s ENDPOINT=%s",
+            self.model,
+            key_preview,
+            self.ENDPOINT,
+        )
+        print(
+            "\n[DEBUG GROQ REQUEST]\n"
+            f"MODEL:\n{self.model}\n"
+            f"KEY:\n{key_preview}\n"
+            f"ENDPOINT:\n{self.ENDPOINT}\n"
+        )
+
     def extract(self, processed_text):
         if not self.api_key:
             raise AIExtractionError(
@@ -66,6 +88,7 @@ class GroqExtractor:
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
         self.rate_limiter.wait()
+        self._log_request_config()
         payload = {
             "model": self.model,
             "messages": [
@@ -85,7 +108,7 @@ class GroqExtractor:
 
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
-            "https://api.groq.com/openai/v1/chat/completions",
+            self.ENDPOINT,
             data=body,
             headers={
                 "Authorization": f"Bearer {self.api_key}",
@@ -101,7 +124,7 @@ class GroqExtractor:
             request_id = exc.headers.get("x-request-id") or exc.headers.get("request-id")
             reason = self._provider_reason(exc.code, detail)
             diagnostic = [
-                f"provider=groq",
+                "provider=groq",
                 f"status={exc.code}",
                 f"model={self.model}",
                 f"reason={reason}",

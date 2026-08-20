@@ -224,6 +224,32 @@ def get_ai_pending_messages(limit=100, channel_username=None):
     return _get_messages("processing_status = 'processed' AND ai_status = 'pending'", [], limit, channel_username)
 
 
+def get_previous_messages_by_sender(sender_id, before_id):
+    """Return earlier crawled messages from the same Telegram user.
+
+    The query intentionally uses the original raw Telegram payload and is not
+    restricted to pending rows, so a newly crawled repost is compared with
+    already-processed historical messages as well.
+    """
+    if sender_id is None:
+        return []
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, message_id, channel_username, sender_id, raw_text, text
+            FROM messages
+            WHERE sender_id = ? AND id < ?
+              AND COALESCE(raw_text, text, '') <> ''
+            ORDER BY id
+            """,
+            (sender_id, before_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def update_message(message_id, channel_username, **fields):
     allowed = {
         "cleaned_text", "text", "collection_status", "processing_status", "ai_status",

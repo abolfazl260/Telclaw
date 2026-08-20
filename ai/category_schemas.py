@@ -9,7 +9,6 @@ CATEGORY_FIELDS = {
         "rent_period", "bedrooms", "bathrooms", "area", "area_unit", "furnished",
         "availability", "property_condition", "contact", "features",
     ),
-    # transferlist is used for air-transport / cargo transfer requests.
     "transferlist": (
         "title", "description", "origin_city", "origin_province", "origin_country",
         "destination_city", "destination_province", "destination_country", "airline",
@@ -25,9 +24,15 @@ CATEGORY_FIELDS = {
     ),
 }
 
+# Advertio housing requirements are deliberately explicit so the extractor can
+# produce a compact, predictable object instead of a large all-fields document.
+REQUIRED_FIELDS = {
+    "housinglist": ("listing_type", "property_type", "bedrooms", "price", "currency", "country_code", "province", "city"),
+}
+
 
 def _field_schema(field):
-    """Use a nullable JSON value so the model can explicitly mark unknown data."""
+    """Use a compact nullable JSON value for fields not required by Advertio."""
     if field in {"features", "skills"}:
         return {"type": ["array", "null"], "items": {"type": "string"}}
     if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity"}:
@@ -38,14 +43,18 @@ def _field_schema(field):
 
 
 def build_json_schema():
-    """Build a strict schema compatible with Groq JSON Schema structured outputs."""
+    """Build a compact schema compatible with Groq JSON Schema structured outputs."""
     category_data = {}
     for category, fields in CATEGORY_FIELDS.items():
+        # Do not force every optional field to be generated. Requiring dozens of
+        # nullable fields wastes completion tokens and can cause Groq to hit its
+        # completion limit before producing valid JSON.
+        required = list(REQUIRED_FIELDS.get(category, ()))
         category_data[category] = {
             "type": "object",
             "additionalProperties": False,
             "properties": {field: _field_schema(field) for field in fields},
-            "required": list(fields),
+            "required": required,
         }
 
     return {
@@ -56,8 +65,8 @@ def build_json_schema():
             "data": {
                 "type": "object",
                 "additionalProperties": False,
-                "properties": {category: {**category_data[category]} for category in CATEGORIES},
-                "required": list(CATEGORIES),
+                "properties": {category: category_data[category] for category in CATEGORIES},
+                "required": [],
             },
         },
         "required": ["category", "data"],
@@ -79,4 +88,12 @@ def validate_result(result):
         raise ValueError(f"AI result data.{category} must be an object")
 
     allowed = set(CATEGORY_FIELDS[category])
-    return category, {key: value for key, value in data.items() if key in allowed}
+    normalized = {key: value for key, value in data.items() if key in allowed}
+
+    # Housing records intended for Advertio must contain the complete minimum
+    # set. Country/currency are normalized by the extractor before this check.
+    missing = [field for field in REQUIRED_FIELDS.get(category, ()) if normalized.get(field) in (None, "")]
+    if missing:
+        raise ValueError(f"Missing required {category} fields: {', '.join(missing)}")
+
+    return category, normalized

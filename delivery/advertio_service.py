@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
+from storage.message_repository import MessageRepository
 
 
 class AdvertioMappingError(ValueError):
@@ -19,7 +20,7 @@ class AdvertioDeliveryService:
     LISTING_TYPES = {"rent", "roommate"}
     BEDROOMS = {"0", "1", "2", "3", "4+"}
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, repository=None):
         if client is None:
             if not config.ADVERTIO_INGEST_KEY:
                 raise AdvertioMappingError("TELCLAW_ADVERTIO_INGEST_KEY is required when Advertio ingestion is enabled")
@@ -29,6 +30,7 @@ class AdvertioDeliveryService:
                 timeout=config.ADVERTIO_TIMEOUT_SECONDS,
             )
         self.client = client
+        self.repository = repository or MessageRepository()
         self.source_name = config.ADVERTIO_SOURCE_NAME
 
     @staticmethod
@@ -207,6 +209,42 @@ class AdvertioDeliveryService:
 
         result = self.client.create_lead(payload)
         return result
+
+    def get_pending_count(self, channel_username=None):
+        return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))
+
+    def deliver_pending(self, limit=100, channel_username=None, progress=True):
+        """Send already processed housing records without crawling or re-running AI."""
+        records = self.repository.get_advertio_pending(limit=limit, channel_username=channel_username)
+        total = len(records)
+        sent = already_existed = failed = 0
+        for index, record in enumerate(records, start=1):
+            try:
+                result = self.deliver(record, record["housing_data"])
+                status = "already_existed" if result.get("already_existed") else "sent"
+                self.repository.mark_advertio_result(
+                    record["message_id"], record["channel_username"],
+                    status=status, lead_id=result.get("lead_id"), error=None,
+                    processed_at=datetime.now(timezone.utc).isoformat(),
+                )
+                if status == "already_existed":
+                    already_existed += 1
+                else:
+                    sent += 1
+                if progress:
+                    print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']}")
+            except Exception as exc:
+                retryable = isinstance(exc, AdvertioError) and exc.retryable
+                status = "retry" if retryable else "rejected"
+                self.repository.mark_advertio_result(
+                    record["message_id"], record["channel_username"],
+                    status=status, lead_id=getattr(exc, "lead_id", None),
+                    error=str(exc)[:4000], processed_at=datetime.now(timezone.utc).isoformat(),
+                )
+                failed += 1
+                if progress:
+                    print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']} reason={str(exc)[:300]}")
+        return {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}
 
     def delete_original_post_listing(self, external_id):
         """Deactivate an Advertio listing after the original Telegram post is gone."""

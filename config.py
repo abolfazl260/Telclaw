@@ -47,11 +47,11 @@ TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
 GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
 if not GROQ_MODEL:
-    raise RuntimeError(
-        "TELCLAW_GROQ_MODEL cannot be empty. Set it to an active Groq model."
-    )
+    raise RuntimeError("TELCLAW_GROQ_MODEL cannot be empty. Set it to an active Groq model.")
 
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
+GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", "5")))
+GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = max(1, float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "60")))
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"
 }

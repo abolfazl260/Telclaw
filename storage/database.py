@@ -10,7 +10,11 @@ import config
 MESSAGE_COLUMNS = {
     "raw_text": "TEXT",
     "cleaned_text": "TEXT",
-    "processing_status": "TEXT NOT NULL DEFAULT 'collected'",
+    # Legacy column retained for backward compatibility. Queue state is now
+    # represented independently by collection_status, processing_status and ai_status.
+    "processing_status": "TEXT NOT NULL DEFAULT 'pending'",
+    "collection_status": "TEXT NOT NULL DEFAULT 'collected'",
+    "ai_status": "TEXT NOT NULL DEFAULT 'waiting'",
     "pipeline_version": "TEXT",
     "cleaned_at": "TEXT",
     "ai_category": "TEXT",
@@ -71,6 +75,40 @@ def _migrate_messages_table(cursor):
         if column not in existing:
             cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
 
+    # Preserve all existing data while translating the old single-state pipeline
+    # into independent processing and AI queues.
+    cursor.execute(
+        """
+        UPDATE messages
+        SET collection_status = COALESCE(collection_status, 'collected')
+        """
+    )
+    cursor.execute(
+        """
+        UPDATE messages
+        SET processing_status = CASE processing_status
+            WHEN 'collected' THEN 'pending'
+            WHEN 'processed' THEN 'processed'
+            WHEN 'processing_failed' THEN 'failed'
+            WHEN 'ai_processed' THEN 'processed'
+            WHEN 'ai_failed' THEN 'processed'
+            ELSE processing_status
+        END
+        """
+    )
+    cursor.execute(
+        """
+        UPDATE messages
+        SET ai_status = CASE
+            WHEN processing_status = 'processed' AND ai_category IS NOT NULL THEN 'processed'
+            WHEN ai_processed_at IS NOT NULL AND ai_error IS NOT NULL THEN 'failed'
+            WHEN ai_processed_at IS NOT NULL THEN 'processed'
+            WHEN processing_status = 'processed' THEN 'pending'
+            ELSE COALESCE(ai_status, 'waiting')
+        END
+        """
+    )
+
 
 def _create_category_tables(cursor):
     for table, fields in CATEGORY_TABLES.items():
@@ -106,7 +144,9 @@ def initialize_db():
                 media_path TEXT,
                 message_link TEXT,
                 media_reference TEXT,
-                processing_status TEXT NOT NULL DEFAULT 'collected',
+                collection_status TEXT NOT NULL DEFAULT 'collected',
+                processing_status TEXT NOT NULL DEFAULT 'pending',
+                ai_status TEXT NOT NULL DEFAULT 'waiting',
                 pipeline_version TEXT,
                 cleaned_at TEXT,
                 ai_category TEXT,
@@ -127,7 +167,9 @@ def initialize_db():
         _migrate_messages_table(cursor)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username, date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)")
         cursor.execute(
@@ -140,26 +182,28 @@ def initialize_db():
 
 
 def insert_message(channel_username, message_id, text, date_str, *, raw_text=None, cleaned_text=None,
-                   processing_status="collected", pipeline_version=None, cleaned_at=None,
-                   channel_id=None, channel_name=None, sender_id=None, sender_username=None,
-                   sender_type=None, has_media=False, media_type=None, file_unique_id=None,
-                   media_path=None, message_link=None, media_reference=None):
+                   collection_status="collected", processing_status="pending", ai_status="waiting",
+                   pipeline_version=None, cleaned_at=None, channel_id=None, channel_name=None,
+                   sender_id=None, sender_username=None, sender_type=None, has_media=False,
+                   media_type=None, file_unique_id=None, media_path=None, message_link=None,
+                   media_reference=None):
     conn = get_connection()
     try:
         cursor = conn.execute(
             """
             INSERT OR IGNORE INTO messages (
                 channel_username, message_id, text, raw_text, cleaned_text, date,
-                media_path, message_link, media_reference, processing_status,
-                pipeline_version, cleaned_at, channel_id, channel_name, sender_id,
-                sender_username, sender_type, has_media, media_type, file_unique_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                media_path, message_link, media_reference, collection_status,
+                processing_status, ai_status, pipeline_version, cleaned_at, channel_id,
+                channel_name, sender_id, sender_username, sender_type, has_media,
+                media_type, file_unique_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (channel_username, message_id, text, raw_text, cleaned_text, date_str,
-             media_path, message_link, media_reference, processing_status,
-             pipeline_version, cleaned_at, channel_id, channel_name, sender_id,
-             sender_username, sender_type, int(bool(has_media)), media_type,
-             str(file_unique_id) if file_unique_id is not None else None),
+             media_path, message_link, media_reference, collection_status,
+             processing_status, ai_status, pipeline_version, cleaned_at, channel_id,
+             channel_name, sender_id, sender_username, sender_type, int(bool(has_media)),
+             media_type, str(file_unique_id) if file_unique_id is not None else None),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -167,30 +211,45 @@ def insert_message(channel_username, message_id, text, date_str, *, raw_text=Non
         conn.close()
 
 
-def get_messages_by_status(status, limit=500, channel_username=None):
+def _get_messages(where_sql, params, limit, channel_username):
     conn = get_connection()
     try:
+        sql = f"SELECT * FROM messages WHERE {where_sql}"
+        values = list(params)
         if channel_username:
-            rows = conn.execute(
-                "SELECT * FROM messages WHERE processing_status = ? AND channel_username = ? ORDER BY id LIMIT ?",
-                (status, channel_username, int(limit)),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM messages WHERE processing_status = ? ORDER BY id LIMIT ?",
-                (status, int(limit)),
-            ).fetchall()
+            sql += " AND channel_username = ?"
+            values.append(channel_username)
+        sql += " ORDER BY id LIMIT ?"
+        values.append(int(limit))
+        rows = conn.execute(sql, values).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
 
 
+def get_messages_by_status(status, limit=500, channel_username=None):
+    return _get_messages("processing_status = ?", [status], limit, channel_username)
+
+
+def get_processing_pending_messages(limit=500, channel_username=None):
+    return _get_messages(
+        "collection_status = 'collected' AND processing_status = 'pending'",
+        [], limit, channel_username,
+    )
+
+
 def get_ai_pending_messages(limit=100, channel_username=None):
-    return get_messages_by_status("processed", limit=limit, channel_username=channel_username)
+    return _get_messages(
+        "processing_status = 'processed' AND ai_status = 'pending'",
+        [], limit, channel_username,
+    )
 
 
-def update_processed_message(message_id, channel_username, **fields):
-    allowed = {"cleaned_text", "text", "processing_status", "pipeline_version", "cleaned_at", "ai_category", "ai_processed_at", "ai_error"}
+def update_message(message_id, channel_username, **fields):
+    allowed = {
+        "cleaned_text", "text", "collection_status", "processing_status", "ai_status",
+        "pipeline_version", "cleaned_at", "ai_category", "ai_processed_at", "ai_error",
+    }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
         return False
@@ -206,6 +265,10 @@ def update_processed_message(message_id, channel_username, **fields):
         return cursor.rowcount > 0
     finally:
         conn.close()
+
+
+def update_processed_message(message_id, channel_username, **fields):
+    return update_message(message_id, channel_username, **fields)
 
 
 def save_category_record(processed_message_id, category, data):

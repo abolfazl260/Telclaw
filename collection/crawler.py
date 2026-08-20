@@ -94,7 +94,12 @@ async def crawl_channel(
     to_date,
     crawl_mode=CRAWL_MODE_ALL,
 ):
-    """Collect messages whose dates fall inclusively inside ``from_date..to_date``."""
+    """Collect messages whose dates fall inclusively inside ``from_date..to_date``.
+
+    Collection restriction: messages whose sender has no Telegram username are
+    rejected before persistence. They are not inserted into the raw-message
+    database and therefore never enter processing or AI extraction.
+    """
     channel_username = normalize_channel_username(channel_username)
     crawl_mode = (crawl_mode or CRAWL_MODE_ALL).strip().lower()
     if crawl_mode not in VALID_CRAWL_MODES:
@@ -109,6 +114,7 @@ async def crawl_channel(
     print(f"📡 STARTING CRAWL: {Fore.YELLOW}{channel_username}")
     print(f"📅 DATE RANGE: {Fore.YELLOW}{from_date} → {to_date}")
     print(f"🔎 MODE: {Fore.YELLOW}{crawl_mode}")
+    print(f"👤 USERNAME REQUIRED: {Fore.YELLOW}yes")
     print(f"{Fore.CYAN}{'=' * 50}")
 
     repository = MessageService()
@@ -116,6 +122,7 @@ async def crawl_channel(
     skipped_count = 0
     filtered_count = 0
     bot_filtered_count = 0
+    no_username_count = 0
     try:
         entity = await client.get_input_entity(channel_username)
         await asyncio.sleep(random.randint(30, 60))
@@ -141,6 +148,19 @@ async def crawl_channel(
                 print(
                     f"⏭ [BOT-SKIPPED] channel={channel_username} "
                     f"message_id={message.id}"
+                )
+                continue
+
+            # New collection restriction: a message without a sender username
+            # must never be persisted. This happens before media/text processing
+            # and before MessageService.save_collected_message().
+            if not sender_username or not str(sender_username).strip():
+                no_username_count += 1
+                skipped_count += 1
+                print(
+                    f"⏭ [NO-USERNAME-SKIPPED] channel={channel_username} "
+                    f"message_id={message.id} sender_id={sender_id} "
+                    "reason=sender has no Telegram username"
                 )
                 continue
 
@@ -200,6 +220,7 @@ async def crawl_channel(
         print(f"✅ Saved: {saved_count}")
         print(f"🔍 Filtered by crawl mode: {filtered_count}")
         print(f"🤖 Bot messages skipped: {bot_filtered_count}")
+        print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")
     except errors.ChannelInvalidError:
         print(f"\n❌ Invalid channel: {channel_username}")

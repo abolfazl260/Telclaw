@@ -2,7 +2,7 @@ import os
 
 # Load local .env when python-dotenv is installed. Environment variables always
 # take precedence, so production deployments can continue to inject secrets
-# directly through the process environment.
+directly through the process environment.
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -51,12 +51,14 @@ if not GROQ_MODEL:
 
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", "5")))
-# Groq TPM limits can require a longer cooldown than a normal HTTP retry. Keep
-# these configurable, but default to a conservative 20s minimum and 120s cap.
-GROQ_RATE_LIMIT_MIN_WAIT_SECONDS = max(1, float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MIN_WAIT_SECONDS", "20")))
+# Groq TPM limits can require a longer cooldown than a normal HTTP retry. The
+# extractor also honors Retry-After/x-ratelimit-reset-tokens when supplied.
+GROQ_RATE_LIMIT_MIN_WAIT_SECONDS = max(
+    1, float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MIN_WAIT_SECONDS", "30"))
+)
 GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = max(
     GROQ_RATE_LIMIT_MIN_WAIT_SECONDS,
-    float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "120")),
+    float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "180")),
 )
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"

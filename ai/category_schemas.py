@@ -9,10 +9,13 @@ CATEGORY_FIELDS = {
         "rent_period", "bedrooms", "bathrooms", "area", "area_unit", "furnished",
         "availability", "property_condition", "contact", "features",
     ),
+    # transferlist is used for air-transport / cargo transfer requests.
     "transferlist": (
-        "vehicle_type", "brand", "model", "trim", "year", "mileage",
-        "mileage_unit", "price", "currency", "location", "transmission",
-        "fuel_type", "condition", "engine", "color", "contact", "features",
+        "title", "description", "origin_city", "origin_province", "origin_country",
+        "destination_city", "destination_province", "destination_country", "airline",
+        "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
+        "transport_type", "cargo_type", "weight", "weight_unit", "quantity",
+        "price", "currency", "contact", "features",
     ),
     "joblist": (
         "job_title", "company", "location", "employment_type", "salary",
@@ -27,7 +30,7 @@ def _field_schema(field):
     """Use a nullable JSON value so the model can explicitly mark unknown data."""
     if field in {"features", "skills"}:
         return {"type": ["array", "null"], "items": {"type": "string"}}
-    if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage"}:
+    if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity"}:
         return {"type": ["number", "string", "null"]}
     if field == "remote":
         return {"type": ["boolean", "string", "null"]}

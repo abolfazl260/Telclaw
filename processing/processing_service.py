@@ -30,12 +30,12 @@ class ProcessingService:
 
     @staticmethod
     def _original_text(data):
-        """Return the original crawled text; never use cleaned text for dedupe."""
+        """Return only the original crawled Telegram payload for dedupe."""
         return (data.get("raw_text") or data.get("text") or "").strip()
 
     @staticmethod
     def _similarity_text(text):
-        """Normalize only for comparison; the stored/crawled text is untouched."""
+        """Normalize only the comparison copy; never modify stored raw text."""
         return re.sub(r"\s+", " ", text).strip().casefold()
 
     @classmethod
@@ -46,24 +46,28 @@ class ProcessingService:
             return 0.0
         return SequenceMatcher(None, left, right).ratio()
 
-    def _is_duplicate(self, record, seen_by_sender):
-        """Check a record against earlier crawled records for the same sender."""
+    def _is_duplicate(self, record):
+        """Compare against every earlier crawled message from the same sender."""
         sender_id = record.get("sender_id")
         if sender_id is None:
-            # Never make a fuzzy duplicate decision without a stable Telegram user ID.
-            return False
+            return False, 0.0
 
         original_text = self._original_text(record)
         if not original_text:
-            return False
+            return False, 0.0
 
-        normalized_sender = str(sender_id)
-        for previous in seen_by_sender.get(normalized_sender, []):
-            previous_text = previous["text"]
+        previous_messages = self.repository.get_previous_messages_by_sender(
+            sender_id=sender_id,
+            before_id=record["id"],
+        )
+        best_similarity = 0.0
+        for previous in previous_messages:
+            previous_text = self._original_text(previous)
             similarity = self._similarity(original_text, previous_text)
+            best_similarity = max(best_similarity, similarity)
             if similarity >= DUPLICATE_SIMILARITY_THRESHOLD:
-                return True
-        return False
+                return True, similarity
+        return False, best_similarity
 
     def process_pending(self, limit=500, channel_username=None):
         records = self.repository.get_pending(
@@ -72,28 +76,29 @@ class ProcessingService:
         processed = 0
         failed = 0
         duplicates_removed = 0
-        seen_by_sender = {}
 
         for data in records:
-            original_text = self._original_text(data)
-            sender_id = data.get("sender_id")
-
             try:
-                # Dedupe is deliberately based on the original crawled payload,
-                # before NormalizeStage/CleanTextStage modifies anything.
-                if self._is_duplicate(data, seen_by_sender):
+                # IMPORTANT: this is the first processing operation. The duplicate
+                # decision uses raw_text/text from the original Crawl payload and
+                # can see already-processed historical messages from the same user.
+                is_duplicate, similarity = self._is_duplicate(data)
+                if is_duplicate:
                     self.repository.delete_message(
                         message_id=data["message_id"],
                         channel_username=data["channel_username"],
                     )
                     duplicates_removed += 1
+                    print(
+                        "[PROCESS] duplicate removed: "
+                        f"message={data['message_id']} "
+                        f"channel={data['channel_username']} "
+                        f"sender={data.get('sender_id')} "
+                        f"similarity={similarity * 100:.2f}%"
+                    )
                     continue
 
-                if sender_id is not None and original_text:
-                    seen_by_sender.setdefault(str(sender_id), []).append(
-                        {"text": original_text, "message_id": data["message_id"]}
-                    )
-
+                # Only non-duplicates reach cleaning/normalization.
                 record = self.pipeline.process(ProcessingRecord(data=dict(data)))
                 result = record.data
                 self.repository.mark_processed(
@@ -106,8 +111,14 @@ class ProcessingService:
                     cleaned_at=datetime.now(timezone.utc).isoformat(),
                 )
                 processed += 1
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                print(
+                    "[PROCESS] failed: "
+                    f"message={data.get('message_id')} "
+                    f"channel={data.get('channel_username')} "
+                    f"error={type(exc).__name__}: {exc}"
+                )
 
         return {
             "found": len(records),

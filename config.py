@@ -43,9 +43,17 @@ AI_INTERVAL_MINUTES = float(os.getenv("TELCLAW_AI_INTERVAL_MINUTES", "1"))
 
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 
-# Groq AI extraction settings.
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
-GROQ_MODEL = os.getenv("TELCLAW_GROQ_MODEL", "openai/gpt-oss-20b").strip()
+# Groq AI extraction settings. The model is intentionally required: keeping a
+# provider model as a hidden source-code default can cause an environment with
+# stale/incorrect configuration to silently call an unintended model.
+GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
+GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
+if not GROQ_MODEL:
+    raise RuntimeError(
+        "TELCLAW_GROQ_MODEL cannot be empty. Set it to an active Groq model, "
+        "for example openai/gpt-oss-20b."
+    )
+
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"

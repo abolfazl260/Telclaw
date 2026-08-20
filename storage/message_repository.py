@@ -16,14 +16,10 @@ class MessageRepository:
         return self.get_processing_pending(limit=limit, channel_username=channel_username)
 
     def get_processing_pending(self, limit=500, channel_username=None):
-        return database.get_processing_pending_messages(
-            limit=limit, channel_username=channel_username
-        )
+        return database.get_processing_pending_messages(limit=limit, channel_username=channel_username)
 
     def get_ai_pending(self, limit=100, channel_username=None):
-        return database.get_ai_pending_messages(
-            limit=limit, channel_username=channel_username
-        )
+        return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 
     def get_previous_messages_by_sender(self, sender_id, before_id):
         return database.get_previous_messages_by_sender(sender_id, before_id)
@@ -35,9 +31,7 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_processing(self, message_id, channel_username):
-        return self.update_message(
-            message_id, channel_username, processing_status="processing"
-        )
+        return self.update_message(message_id, channel_username, processing_status="processing")
 
     def mark_processing_result(self, message_id, channel_username, *, success, **fields):
         if success:
@@ -47,9 +41,7 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_processing(self, message_id, channel_username):
-        return self.update_message(
-            message_id, channel_username, ai_status="processing", ai_error=None
-        )
+        return self.update_message(message_id, channel_username, ai_status="processing", ai_error=None)
 
     def mark_ai_result(self, message_id, channel_username, *, success, **fields):
         if success:
@@ -65,6 +57,19 @@ class MessageRepository:
 
     def save_category_record(self, processed_message_id, category, data):
         return database.save_category_record(processed_message_id, category, data)
+
+    def get_category_record(self, processed_message_id, category):
+        return database.get_category_record(processed_message_id, category)
+
+    def mark_advertio_result(self, message_id, channel_username, *, status, lead_id=None, error=None, processed_at=None):
+        return self.update_message(
+            message_id,
+            channel_username,
+            advertio_status=status,
+            advertio_lead_id=lead_id,
+            advertio_error=error,
+            advertio_processed_at=processed_at,
+        )
 
     def set_target_date(self, channel_username, target_date):
         return database.set_channel_target_date(channel_username, target_date)

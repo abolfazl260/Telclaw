@@ -5,9 +5,9 @@ CATEGORIES = ("housinglist", "transferlist", "joblist")
 CATEGORY_FIELDS = {
     "housinglist": (
         "property_type", "listing_type", "title", "description", "location",
-        "price", "currency", "rent_period", "bedrooms", "bathrooms", "area",
-        "area_unit", "furnished", "availability", "property_condition",
-        "contact", "features",
+        "country_code", "province", "city", "neighborhood", "price", "currency",
+        "rent_period", "bedrooms", "bathrooms", "area", "area_unit", "furnished",
+        "availability", "property_condition", "contact", "features",
     ),
     "transferlist": (
         "vehicle_type", "brand", "model", "trim", "year", "mileage",
@@ -53,12 +53,7 @@ def build_json_schema():
             "data": {
                 "type": "object",
                 "additionalProperties": False,
-                "properties": {
-                    category: {
-                        **category_data[category],
-                    }
-                    for category in CATEGORIES
-                },
+                "properties": {category: {**category_data[category]} for category in CATEGORIES},
                 "required": list(CATEGORIES),
             },
         },

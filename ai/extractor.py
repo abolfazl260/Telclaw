@@ -43,6 +43,13 @@ TITLE REQUIREMENT:
 - Keep the English title concise and suitable for a marketplace listing.
 - Do not put URLs, hashtags, emojis, or explanations in the title.
 
+CURRENCY REQUIREMENT:
+- The platform's canonical currency is ALWAYS Canadian dollars (CAD).
+- For every listing/request, the canonical monetary currency must be CAD.
+- Use "CAD" for the housing/transfer currency field and for job salary_currency.
+- If the source amount is explicitly in another currency, do NOT invent an exchange rate. Preserve the amount only if it is already reliably CAD; otherwise set the monetary amount and currency field to null.
+- Do not output USD, EUR, GBP, TRY, IRR, or any other currency as the canonical currency.
+
 Return ONLY valid JSON. Do not use Markdown fences. Do not include explanations, comments, or <think> tags.
 Return exactly this top-level structure:
 {{"category":"housinglist|transferlist|joblist","data":{{"<selected_category>":{{...fields...}}}}}}
@@ -59,11 +66,11 @@ def _title_is_english(title):
     """Reject titles containing characters from common non-Latin scripts."""
     if not isinstance(title, str) or not title.strip():
         return False
-    if re.search(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]", title):  # Arabic/Persian
+    if re.search(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]", title):
         return False
-    if re.search(r"[\u0400-\u04ff]", title):  # Cyrillic
+    if re.search(r"[\u0400-\u04ff]", title):
         return False
-    if re.search(r"[\u0370-\u03ff]", title):  # Greek
+    if re.search(r"[\u0370-\u03ff]", title):
         return False
     if re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]", title):
         return False
@@ -80,6 +87,29 @@ def _validate_english_title(result):
             title = category_data["title"]
             if title is not None and not _title_is_english(title):
                 raise ValueError("AI title is not English")
+    return result
+
+
+def _normalize_currencies(result):
+    """Enforce CAD as the canonical currency without inventing exchange rates."""
+    if not isinstance(result, dict):
+        return result
+    category = result.get("category")
+    data = result.get("data")
+    if not isinstance(data, dict) or category not in data or not isinstance(data[category], dict):
+        return result
+
+    category_data = data[category]
+    if category in {"housinglist", "transferlist"}:
+        currency = category_data.get("currency")
+        if currency is not None and str(currency).strip().upper() != "CAD":
+            category_data["price"] = None
+            category_data["currency"] = None
+    elif category == "joblist":
+        currency = category_data.get("salary_currency")
+        if currency is not None and str(currency).strip().upper() != "CAD":
+            category_data["salary"] = None
+            category_data["salary_currency"] = None
     return result
 
 
@@ -218,6 +248,7 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            result = _normalize_currencies(result)
             result = _validate_english_title(result)
             return validate_result(result)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:

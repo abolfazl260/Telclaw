@@ -1,4 +1,4 @@
-"""AI extraction service using Groq structured outputs."""
+"""AI extraction service using Groq JSON mode with local validation."""
 
 import json
 import logging
@@ -6,17 +6,8 @@ import logging
 import requests
 
 import config
-from ai.category_schemas import build_json_schema, validate_result
+from ai.category_schemas import CATEGORY_FIELDS, CATEGORIES, validate_result
 from ai.rate_limiter import RateLimiter
-
-
-SYSTEM_PROMPT = """You extract structured marketplace information from processed Telegram messages.
-Classify each message into exactly one of: housinglist, transferlist, joblist.
-Extract only facts explicitly supported by the message. Never invent values.
-Return null for an unknown scalar field and [] for an unknown list field.
-Use normalized English field names. Keep original meaning and do not copy Telegram metadata.
-Return ONLY the JSON object required by the supplied schema.
-"""
 
 
 logger = logging.getLogger("telclaw.ai")
@@ -31,6 +22,28 @@ class AIExtractionError(RuntimeError):
         self.reason = reason
         self.provider = provider
         self.stop_queue = stop_queue
+
+
+def _build_extraction_prompt():
+    category_fields = "\n".join(
+        f"- {category}: {', '.join(fields)}" for category, fields in CATEGORY_FIELDS.items()
+    )
+    return f"""You extract structured marketplace information from processed Telegram messages.
+Classify each message into exactly one category: {', '.join(CATEGORIES)}.
+Extract only facts explicitly supported by the message. Never invent values.
+Unknown scalar values must be null. Unknown list values must be [].
+Use normalized English field names. Keep the original meaning and do not copy Telegram metadata.
+
+Return ONLY valid JSON. Do not use Markdown fences. Do not include explanations, comments, or <think> tags.
+Return exactly this top-level structure:
+{{"category":"housinglist|transferlist|joblist","data":{{"<selected_category>":{{...fields...}}}}}}
+Only include the selected category inside data. Do not include the other categories.
+
+Allowed fields by category:
+{category_fields}
+
+For the selected category, use the exact field names above. You may omit fields whose values are unknown; use null or [] when you include them.
+"""
 
 
 class GroqExtractor:
@@ -103,25 +116,18 @@ class GroqExtractor:
         self.rate_limiter.wait()
         self._log_request_config()
 
-        # Production extraction uses Structured Outputs again. The connectivity
-        # investigation proved that the previous urllib transport, not JSON Schema,
-        # caused the 403/1010 response. requests is used here to match the working
-        # system curl transport more closely.
+        # JSON mode keeps the provider responsible for syntactic JSON validity,
+        # while Telclaw performs the semantic/category validation locally. This is
+        # intentionally less restrictive than provider-side Structured Outputs,
+        # which was returning json_validate_failed for qwen/qwen3.6-27b.
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": _build_extraction_prompt()},
                 {"role": "user", "content": processed_text},
             ],
             "temperature": 0,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "telclaw_category_extraction",
-                    "strict": True,
-                    "schema": build_json_schema(),
-                },
-            },
+            "response_format": {"type": "json_object"},
         }
 
         try:
@@ -177,11 +183,11 @@ class GroqExtractor:
                 raise ValueError(f"Model refused extraction: {message['refusal']}")
             output_text = message.get("content")
             if not output_text:
-                raise ValueError("No structured output returned")
+                raise ValueError("No JSON output returned")
             result = json.loads(output_text)
             return validate_result(result)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise AIExtractionError(
-                f"Invalid Groq output: {exc}",
+                f"Invalid Groq JSON output: {exc}",
                 reason="invalid_provider_output",
             ) from exc

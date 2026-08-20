@@ -232,6 +232,36 @@ def get_ai_pending_messages(limit=100, channel_username=None):
     return _get_messages("processing_status = 'processed' AND ai_status = 'pending'", [], limit, channel_username)
 
 
+def get_advertio_pending_messages(limit=100, channel_username=None):
+    """Return processed housing records eligible for manual Advertio delivery."""
+    conn = get_connection()
+    try:
+        sql = """
+            SELECT m.*, h.*
+            FROM messages AS m
+            INNER JOIN housinglist AS h ON h.processed_message_id = m.id
+            WHERE m.processing_status = 'processed'
+              AND m.ai_status = 'processed'
+              AND m.ai_category = 'housinglist'
+              AND COALESCE(m.advertio_status, 'waiting') IN ('waiting', 'retry')
+        """
+        values = []
+        if channel_username:
+            sql += " AND m.channel_username = ?"
+            values.append(channel_username)
+        sql += " ORDER BY m.id LIMIT ?"
+        values.append(int(limit))
+        rows = conn.execute(sql, values).fetchall()
+        results = []
+        for row in rows:
+            item = dict(row)
+            item["housing_data"] = {field: item.get(field) for field in CATEGORY_TABLES["housinglist"]}
+            results.append(item)
+        return results
+    finally:
+        conn.close()
+
+
 def get_previous_messages_by_sender(sender_id, before_id):
     if sender_id is None:
         return []

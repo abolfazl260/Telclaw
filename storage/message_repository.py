@@ -52,6 +52,10 @@ class MessageRepository:
         fields.update(ai_status="processed" if success else "failed")
         return self.update_message(message_id, channel_username, **fields)
 
+    def mark_ai_skipped(self, message_id, channel_username, *, reason, **fields):
+        fields.update(ai_status="skipped", ai_error=f"skipped:{reason}")
+        return self.update_message(message_id, channel_username, **fields)
+
     def save_category_record(self, processed_message_id, category, data):
         return database.save_category_record(processed_message_id, category, data)
 

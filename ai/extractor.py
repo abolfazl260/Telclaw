@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 
 import requests
 
@@ -34,6 +35,14 @@ Extract only facts explicitly supported by the message. Never invent values.
 Unknown scalar values must be null. Unknown list values must be [].
 Use normalized English field names. Keep the original meaning and do not copy Telegram metadata.
 
+TITLE REQUIREMENT:
+- The title MUST always be written in English.
+- If the source message is not English, translate the title meaning into natural English.
+- Do not transliterate the original-language title.
+- Do not return the original-language title.
+- Keep the English title concise and suitable for a marketplace listing.
+- Do not put URLs, hashtags, emojis, or explanations in the title.
+
 Return ONLY valid JSON. Do not use Markdown fences. Do not include explanations, comments, or <think> tags.
 Return exactly this top-level structure:
 {{"category":"housinglist|transferlist|joblist","data":{{"<selected_category>":{{...fields...}}}}}}
@@ -44,6 +53,34 @@ Allowed fields by category:
 
 For the selected category, use the exact field names above. You may omit fields whose values are unknown; use null or [] when you include them.
 """
+
+
+def _title_is_english(title):
+    """Reject titles containing characters from common non-Latin scripts."""
+    if not isinstance(title, str) or not title.strip():
+        return False
+    if re.search(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]", title):  # Arabic/Persian
+        return False
+    if re.search(r"[\u0400-\u04ff]", title):  # Cyrillic
+        return False
+    if re.search(r"[\u0370-\u03ff]", title):  # Greek
+        return False
+    if re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]", title):
+        return False
+    return bool(re.search(r"[A-Za-z]", title))
+
+
+def _validate_english_title(result):
+    """Validate every returned marketplace title without changing its content."""
+    data = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(data, dict):
+        return result
+    for category_data in data.values():
+        if isinstance(category_data, dict) and "title" in category_data:
+            title = category_data["title"]
+            if title is not None and not _title_is_english(title):
+                raise ValueError("AI title is not English")
+    return result
 
 
 class GroqExtractor:
@@ -116,10 +153,6 @@ class GroqExtractor:
         self.rate_limiter.wait()
         self._log_request_config()
 
-        # JSON mode keeps the provider responsible for syntactic JSON validity,
-        # while Telclaw performs the semantic/category validation locally. This is
-        # intentionally less restrictive than provider-side Structured Outputs,
-        # which was returning json_validate_failed for qwen/qwen3.6-27b.
         payload = {
             "model": self.model,
             "messages": [
@@ -185,6 +218,7 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            result = _validate_english_title(result)
             return validate_result(result)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise AIExtractionError(

@@ -34,9 +34,12 @@ MAX_MEDIA_SIZE = int(os.getenv("TELCLAW_MAX_MEDIA_SIZE", str(2 * 1024 * 1024)))
 BASE_DELAY = int(os.getenv("TELCLAW_BASE_DELAY", "8"))
 RANDOM_DELAY_MAX = int(os.getenv("TELCLAW_RANDOM_DELAY_MAX", "400"))
 
-CRAWL_INTERVAL_MINUTES = float(
-    os.getenv("TELCLAW_CRAWL_INTERVAL_MINUTES", "5")
+# Collection, processing, and AI workers have independent schedules.
+CRAWL_INTERVAL_MINUTES = float(os.getenv("TELCLAW_CRAWL_INTERVAL_MINUTES", "5"))
+PROCESSING_INTERVAL_MINUTES = float(
+    os.getenv("TELCLAW_PROCESSING_INTERVAL_MINUTES", "1")
 )
+AI_INTERVAL_MINUTES = float(os.getenv("TELCLAW_AI_INTERVAL_MINUTES", "1"))
 
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 

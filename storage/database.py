@@ -10,8 +10,6 @@ import config
 MESSAGE_COLUMNS = {
     "raw_text": "TEXT",
     "cleaned_text": "TEXT",
-    # Legacy column retained for backward compatibility. Queue state is now
-    # represented independently by collection_status, processing_status and ai_status.
     "processing_status": "TEXT NOT NULL DEFAULT 'pending'",
     "collection_status": "TEXT NOT NULL DEFAULT 'collected'",
     "ai_status": "TEXT NOT NULL DEFAULT 'waiting'",
@@ -74,15 +72,7 @@ def _migrate_messages_table(cursor):
     for column, definition in MESSAGE_COLUMNS.items():
         if column not in existing:
             cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
-
-    # Preserve all existing data while translating the old single-state pipeline
-    # into independent processing and AI queues.
-    cursor.execute(
-        """
-        UPDATE messages
-        SET collection_status = COALESCE(collection_status, 'collected')
-        """
-    )
+    cursor.execute("UPDATE messages SET collection_status = COALESCE(collection_status, 'collected')")
     cursor.execute(
         """
         UPDATE messages
@@ -119,12 +109,8 @@ def _create_category_tables(cursor):
             "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
             "FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE",
         ]
-        cursor.execute(
-            f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(columns)})"
-        )
-        cursor.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_{table}_processed_message ON {table}(processed_message_id)"
-        )
+        cursor.execute(f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(columns)})")
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_processed_message ON {table}(processed_message_id)")
 
 
 def initialize_db():
@@ -172,9 +158,8 @@ def initialize_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)")
-        cursor.execute(
-            "CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY, target_date TEXT NOT NULL, last_crawled_date TEXT)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY, target_date TEXT NOT NULL, last_crawled_date TEXT)")
         _create_category_tables(cursor)
         conn.commit()
     finally:
@@ -232,17 +217,11 @@ def get_messages_by_status(status, limit=500, channel_username=None):
 
 
 def get_processing_pending_messages(limit=500, channel_username=None):
-    return _get_messages(
-        "collection_status = 'collected' AND processing_status = 'pending'",
-        [], limit, channel_username,
-    )
+    return _get_messages("collection_status = 'collected' AND processing_status = 'pending'", [], limit, channel_username)
 
 
 def get_ai_pending_messages(limit=100, channel_username=None):
-    return _get_messages(
-        "processing_status = 'processed' AND ai_status = 'pending'",
-        [], limit, channel_username,
-    )
+    return _get_messages("processing_status = 'processed' AND ai_status = 'pending'", [], limit, channel_username)
 
 
 def update_message(message_id, channel_username, **fields):
@@ -257,9 +236,20 @@ def update_message(message_id, channel_username, **fields):
     values = list(updates.values()) + [channel_username, message_id]
     conn = get_connection()
     try:
+        cursor = conn.execute(f"UPDATE messages SET {assignments} WHERE channel_username = ? AND message_id = ?", values)
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_message(message_id, channel_username):
+    """Delete one crawled message and its dependent AI/category data."""
+    conn = get_connection()
+    try:
         cursor = conn.execute(
-            f"UPDATE messages SET {assignments} WHERE channel_username = ? AND message_id = ?",
-            values,
+            "DELETE FROM messages WHERE channel_username = ? AND message_id = ?",
+            (channel_username, message_id),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -288,10 +278,7 @@ def save_category_record(processed_message_id, category, data):
     assignments = ", ".join(f"{field}=excluded.{field}" for field in fields)
     conn = get_connection()
     try:
-        conn.execute(
-            f"INSERT INTO {category} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT(processed_message_id) DO UPDATE SET {assignments}",
-            values,
-        )
+        conn.execute(f"INSERT INTO {category} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT(processed_message_id) DO UPDATE SET {assignments}", values)
         conn.commit()
     finally:
         conn.close()
@@ -300,10 +287,7 @@ def save_category_record(processed_message_id, category, data):
 def set_channel_target_date(channel_username, target_date_str):
     conn = get_connection()
     try:
-        conn.execute(
-            "INSERT INTO crawler_settings (channel_username, target_date) VALUES (?, ?) ON CONFLICT(channel_username) DO UPDATE SET target_date = excluded.target_date",
-            (channel_username, target_date_str),
-        )
+        conn.execute("INSERT INTO crawler_settings (channel_username, target_date) VALUES (?, ?) ON CONFLICT(channel_username) DO UPDATE SET target_date = excluded.target_date", (channel_username, target_date_str))
         conn.commit()
     finally:
         conn.close()
@@ -312,10 +296,7 @@ def set_channel_target_date(channel_username, target_date_str):
 def get_channel_target_date(channel_username):
     conn = get_connection()
     try:
-        row = conn.execute(
-            "SELECT target_date FROM crawler_settings WHERE channel_username = ?",
-            (channel_username,),
-        ).fetchone()
+        row = conn.execute("SELECT target_date FROM crawler_settings WHERE channel_username = ?", (channel_username,)).fetchone()
         return row["target_date"] if row else None
     finally:
         conn.close()

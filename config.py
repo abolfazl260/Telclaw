@@ -54,6 +54,10 @@ GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = max(
     GROQ_RATE_LIMIT_MIN_WAIT_SECONDS,
     float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "180")),
 )
+# Keep JSON responses compact. This is configurable because Groq model limits
+# differ, but the default is enough for the deliberately minimal extraction shape.
+GROQ_MAX_COMPLETION_TOKENS = max(256, int(os.getenv("TELCLAW_GROQ_MAX_COMPLETION_TOKENS", "1200")))
+GROQ_INVALID_JSON_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_INVALID_JSON_MAX_RETRIES", "1")))
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"
 }

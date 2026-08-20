@@ -30,7 +30,9 @@ class AdvertioClient:
         if response.status_code < 400:
             return
         detail = response.text.strip()[:4000]
-        retryable = response.status_code >= 500
+        # Advertio documents 429 (nginx/Cloudflare rate limiting) and 5xx
+        # as transient failures. Client-side validation 4xx errors are permanent.
+        retryable = response.status_code == 429 or response.status_code >= 500
         raise AdvertioError(
             f"Advertio request failed: HTTP {response.status_code}: {detail}",
             status=response.status_code,
@@ -81,7 +83,11 @@ class AdvertioClient:
         try:
             body = response.json()
         except ValueError as exc:
-            raise AdvertioError("Advertio lead response was not valid JSON", status=response.status_code, retryable=response.status_code >= 500) from exc
+            raise AdvertioError(
+                "Advertio lead response was not valid JSON",
+                status=response.status_code,
+                retryable=response.status_code >= 500,
+            ) from exc
 
         if not isinstance(body, dict) or not body.get("leadId"):
             raise AdvertioError("Advertio lead response did not contain leadId", status=response.status_code)

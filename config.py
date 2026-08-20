@@ -31,6 +31,8 @@ CHANNELS_JSON = os.getenv("TELCLAW_CHANNELS_FILE", "channels.json")
 ERROR_LOG_FILE = os.getenv("TELCLAW_ERROR_LOG", "crawler_errors.log")
 
 MAX_MEDIA_SIZE = int(os.getenv("TELCLAW_MAX_MEDIA_SIZE", str(2 * 1024 * 1024)))
+MEDIA_DIR = os.getenv("TELCLAW_MEDIA_DIR", "media")
+ADVERTIO_MEDIA_MAX_SIZE = int(os.getenv("TELCLAW_ADVERTIO_MEDIA_MAX_SIZE", str(8 * 1024 * 1024)))
 BASE_DELAY = int(os.getenv("TELCLAW_BASE_DELAY", "8"))
 RANDOM_DELAY_MAX = int(os.getenv("TELCLAW_RANDOM_DELAY_MAX", "400"))
 
@@ -56,8 +58,6 @@ AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lowe
 
 # Advertio Ingest API. Disabled by default so enabling the integration is an
 # explicit deployment decision. The key is only required when ingestion is enabled.
-# The API lives on its dedicated external-integration hostname; keep this configurable
-# because the hostname may change during the Advertio rollout.
 ADVERTIO_INGEST_ENABLED = os.getenv("TELCLAW_ADVERTIO_INGEST_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"
 }

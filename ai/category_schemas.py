@@ -27,7 +27,10 @@ CATEGORY_FIELDS = {
 # Advertio housing requirements are deliberately explicit so the extractor can
 # produce a compact, predictable object instead of a large all-fields document.
 REQUIRED_FIELDS = {
-    "housinglist": ("listing_type", "property_type", "bedrooms", "price", "currency", "country_code", "province", "city"),
+    "housinglist": (
+        "listing_type", "property_type", "bedrooms", "price", "currency",
+        "country_code", "province", "city", "title",
+    ),
 }
 
 
@@ -89,11 +92,7 @@ def validate_result(result):
 
     allowed = set(CATEGORY_FIELDS[category])
     normalized = {key: value for key, value in data.items() if key in allowed}
-
-    # Housing records intended for Advertio must contain the complete minimum
-    # set. Country/currency are normalized by the extractor before this check.
     missing = [field for field in REQUIRED_FIELDS.get(category, ()) if normalized.get(field) in (None, "")]
     if missing:
         raise ValueError(f"Missing required {category} fields: {', '.join(missing)}")
-
     return category, normalized

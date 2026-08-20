@@ -19,6 +19,7 @@ class AdvertioDeliveryService:
     PROPERTY_TYPES = {"apartment", "condo", "basement", "studio", "room", "house"}
     LISTING_TYPES = {"rent", "roommate"}
     BEDROOMS = {"0", "1", "2", "3", "4+"}
+    RENTAL_DURATIONS = {"daily", "short_term", "long_term"}
     AMENITIES = {
         "elevator", "parking", "storage", "balcony", "terrace", "garden", "rooftop",
         "security_system", "cctv", "doorman", "renovated", "kitchen_appliances",
@@ -125,7 +126,52 @@ class AdvertioDeliveryService:
         return text
 
     @classmethod
-    def _optional_attributes(cls, data, listing_type):
+    def _infer_rental_duration(cls, data, record):
+        """Resolve Advertio rental_duration from extracted data and, when absent, source text.
+
+        Explicit AI extraction wins. Otherwise obvious duration phrases are mapped to the
+        Advertio enum. Ambiguous/no duration defaults to long_term because this is the safest
+        interpretation for ordinary monthly housing rentals and does not invent a short stay.
+        """
+        explicit = str(
+            data.get("rental_duration")
+            or data.get("rent_period")
+            or ""
+        ).strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "daily": "daily", "day": "daily", "per_day": "daily", "daily_rental": "daily",
+            "short_term": "short_term", "shortterm": "short_term", "short": "short_term",
+            "weekly": "short_term", "week": "short_term", "per_week": "short_term",
+            "monthly": "long_term", "month": "long_term", "per_month": "long_term",
+            "long_term": "long_term", "longterm": "long_term", "long": "long_term",
+        }
+        if explicit in aliases:
+            return aliases[explicit]
+
+        text_parts = [
+            data.get("description"), data.get("title"), data.get("raw_text"),
+            data.get("text"), record.get("raw_text"), record.get("text"),
+        ]
+        text = " ".join(str(value or "") for value in text_parts).lower()
+        if not text:
+            return "long_term"
+
+        daily_patterns = (
+            r"\b(?:daily|per\s*day|day[- ]to[- ]day|nightly|per\s*night|nightly\s*rent)\b",
+            r"\b(?:روزانه|شبی|هر\s*روز|هر\s*شب)\b",
+        )
+        short_patterns = (
+            r"\b(?:short[- ]?term|weekly|per\s*week|week[- ]to[- ]week|vacation|temporary|monthly\s*stay)\b",
+            r"\b(?:کوتاه\s*مدت|هفتگی|موقت|تعطیلات)\b",
+        )
+        if any(re.search(pattern, text) for pattern in daily_patterns):
+            return "daily"
+        if any(re.search(pattern, text) for pattern in short_patterns):
+            return "short_term"
+        return "long_term"
+
+    @classmethod
+    def _optional_attributes(cls, data, listing_type, record=None):
         attributes = {}
 
         furnishing = data.get("furnished")
@@ -134,8 +180,8 @@ class AdvertioDeliveryService:
         if furnishing in {"furnished", "unfurnished", "partially"}:
             attributes["furnishing"] = furnishing
 
-        rental_duration = str(data.get("rent_period") or "").strip().lower()
-        if rental_duration in {"daily", "short_term", "long_term"}:
+        rental_duration = cls._infer_rental_duration(data, record or {})
+        if rental_duration in cls.RENTAL_DURATIONS:
             attributes["rental_duration"] = rental_duration
 
         area = cls._number(data.get("area"))
@@ -250,7 +296,7 @@ class AdvertioDeliveryService:
             "bedrooms": bedrooms,
             "price": price,
         }
-        attributes.update(self._optional_attributes(data, listing_type))
+        attributes.update(self._optional_attributes(data, listing_type, record))
 
         return {
             "sourceName": self.source_name,

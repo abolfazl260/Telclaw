@@ -19,6 +19,16 @@ class AdvertioDeliveryService:
     PROPERTY_TYPES = {"apartment", "condo", "basement", "studio", "room", "house"}
     LISTING_TYPES = {"rent", "roommate"}
     BEDROOMS = {"0", "1", "2", "3", "4+"}
+    AMENITIES = {
+        "elevator", "parking", "storage", "balcony", "terrace", "garden", "rooftop",
+        "security_system", "cctv", "doorman", "renovated", "kitchen_appliances",
+        "washing_machine", "dishwasher", "air_conditioning", "heating", "internet_ready",
+        "pool", "sauna", "gym",
+    }
+    LIFESTYLE_TAGS = {
+        "quiet", "early_bird", "night_owl", "social", "party_friendly", "private",
+        "student_only", "professional", "remote_worker", "vegetarian",
+    }
 
     def __init__(self, client=None, repository=None):
         if client is None:
@@ -102,6 +112,95 @@ class AdvertioDeliveryService:
             return []
         return [path]
 
+    @staticmethod
+    def _date(value):
+        if not value:
+            return None
+        text = str(value).strip()[:10]
+        try:
+            datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return None
+        return text
+
+    @classmethod
+    def _optional_attributes(cls, data, listing_type):
+        attributes = {}
+
+        furnishing = data.get("furnished")
+        furnishing_aliases = {True: "furnished", False: "unfurnished", "true": "furnished", "false": "unfurnished"}
+        furnishing = furnishing_aliases.get(furnishing, furnishing)
+        if furnishing in {"furnished", "unfurnished", "partially"}:
+            attributes["furnishing"] = furnishing
+
+        rental_duration = str(data.get("rent_period") or "").strip().lower()
+        if rental_duration in {"daily", "short_term", "long_term"}:
+            attributes["rental_duration"] = rental_duration
+
+        area = cls._number(data.get("area"))
+        if area is not None and 5 <= area <= 500:
+            attributes["area"] = area
+
+        bathrooms = cls._number(data.get("bathrooms"))
+        if bathrooms is not None and 1 <= bathrooms <= 10 and (bathrooms * 2) % 1 == 0:
+            attributes["bathrooms_count"] = bathrooms
+
+        floor = cls._number(data.get("floor_number", data.get("floor")))
+        if floor is not None and 0 <= floor <= 100:
+            attributes["floor_number"] = floor
+
+        year_built = str(data.get("year_built") or "").strip().lower()
+        if year_built in {"0_5", "5_10", "10_20", "20_plus"}:
+            attributes["year_built"] = year_built
+
+        for source_key in ("pets_allowed", "smoking_allowed", "is_owner"):
+            value = data.get(source_key)
+            if isinstance(value, bool):
+                attributes[source_key] = value
+            elif isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+                attributes[source_key] = value.strip().lower() == "true"
+
+        available_from = cls._date(data.get("available_from", data.get("availability")))
+        if available_from:
+            attributes["available_from"] = available_from
+
+        features = data.get("features", data.get("amenities"))
+        if isinstance(features, str):
+            try:
+                features = json.loads(features)
+            except json.JSONDecodeError:
+                features = [features]
+        if isinstance(features, list):
+            amenities = [str(x).strip().lower().replace(" ", "_") for x in features if str(x).strip()]
+            amenities = [x for x in amenities if x in cls.AMENITIES]
+            if amenities:
+                attributes["amenities"] = sorted(set(amenities))
+
+        if listing_type == "roommate":
+            gender = str(data.get("gender_preference") or "").strip().lower()
+            if gender in {"male", "female", "family", "any"}:
+                attributes["gender_preference"] = gender
+
+            age_range = data.get("age_range")
+            if isinstance(age_range, (list, tuple)) and len(age_range) == 2:
+                start, end = cls._number(age_range[0]), cls._number(age_range[1])
+                if start is not None and end is not None and 18 <= start <= end <= 70:
+                    attributes["age_range"] = [start, end]
+
+            lifestyle = data.get("lifestyle_tags")
+            if isinstance(lifestyle, str):
+                try:
+                    lifestyle = json.loads(lifestyle)
+                except json.JSONDecodeError:
+                    lifestyle = [lifestyle]
+            if isinstance(lifestyle, list):
+                tags = [str(x).strip().lower().replace(" ", "_") for x in lifestyle if str(x).strip()]
+                tags = [x for x in tags if x in cls.LIFESTYLE_TAGS]
+                if tags:
+                    attributes["lifestyle_tags"] = sorted(set(tags))
+
+        return attributes
+
     def build_payload(self, record, data):
         if not isinstance(data, dict):
             raise AdvertioMappingError("Housing AI data must be an object")
@@ -150,38 +249,7 @@ class AdvertioDeliveryService:
             "bedrooms": bedrooms,
             "price": price,
         }
-
-        optional_map = {
-            "furnishing": data.get("furnished"),
-            "rental_duration": data.get("rent_period"),
-            "area": self._number(data.get("area")),
-            "bathrooms_count": self._number(data.get("bathrooms")),
-            "available_from": data.get("availability"),
-        }
-        furnishing_aliases = {True: "furnished", False: "unfurnished", "true": "furnished", "false": "unfurnished"}
-        if optional_map["furnishing"] in furnishing_aliases:
-            optional_map["furnishing"] = furnishing_aliases[optional_map["furnishing"]]
-        if optional_map["furnishing"] in {"furnished", "unfurnished", "partially"}:
-            attributes["furnishing"] = optional_map["furnishing"]
-        if optional_map["rental_duration"] in {"daily", "short_term", "long_term"}:
-            attributes["rental_duration"] = optional_map["rental_duration"]
-        if optional_map["area"] is not None and 5 <= optional_map["area"] <= 500:
-            attributes["area"] = optional_map["area"]
-        if optional_map["bathrooms_count"] is not None and 1 <= optional_map["bathrooms_count"] <= 10:
-            attributes["bathrooms_count"] = optional_map["bathrooms_count"]
-        if optional_map["available_from"]:
-            attributes["available_from"] = str(optional_map["available_from"])[:10]
-
-        features = data.get("features")
-        if isinstance(features, str):
-            try:
-                features = json.loads(features)
-            except json.JSONDecodeError:
-                features = [features]
-        if isinstance(features, list):
-            amenities = [str(x).strip().lower() for x in features if str(x).strip()]
-            if amenities:
-                attributes["amenities"] = amenities
+        attributes.update(self._optional_attributes(data, listing_type))
 
         return {
             "sourceName": self.source_name,
@@ -201,14 +269,12 @@ class AdvertioDeliveryService:
         }
 
     def deliver(self, record, data):
-        """Upload media first, then create the lead. 400 is permanent; 5xx is retryable."""
+        """Upload media first, then create the lead. 400 is permanent; 429/5xx are retryable."""
         payload = self.build_payload(record, data)
         for path in self._media_paths(record)[:10]:
             key = self.client.upload_media(path, self.source_name)
             payload["mediaKeys"].append(key)
-
-        result = self.client.create_lead(payload)
-        return result
+        return self.client.create_lead(payload)
 
     def get_pending_count(self, channel_username=None):
         return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))
@@ -223,8 +289,8 @@ class AdvertioDeliveryService:
                 result = self.deliver(record, record["housing_data"])
                 status = "already_existed" if result.get("already_existed") else "sent"
                 self.repository.mark_advertio_result(
-                    record["message_id"], record["channel_username"],
-                    status=status, lead_id=result.get("lead_id"), error=None,
+                    record["message_id"], record["channel_username"], status=status,
+                    lead_id=result.get("lead_id"), error=None,
                     processed_at=datetime.now(timezone.utc).isoformat(),
                 )
                 if status == "already_existed":
@@ -237,9 +303,9 @@ class AdvertioDeliveryService:
                 retryable = isinstance(exc, AdvertioError) and exc.retryable
                 status = "retry" if retryable else "rejected"
                 self.repository.mark_advertio_result(
-                    record["message_id"], record["channel_username"],
-                    status=status, lead_id=getattr(exc, "lead_id", None),
-                    error=str(exc)[:4000], processed_at=datetime.now(timezone.utc).isoformat(),
+                    record["message_id"], record["channel_username"], status=status,
+                    lead_id=getattr(exc, "lead_id", None), error=str(exc)[:4000],
+                    processed_at=datetime.now(timezone.utc).isoformat(),
                 )
                 failed += 1
                 if progress:
@@ -247,7 +313,6 @@ class AdvertioDeliveryService:
         return {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}
 
     def delete_original_post_listing(self, external_id):
-        """Deactivate an Advertio listing after the original Telegram post is gone."""
         return self.client.delete_lead(self.source_name, str(external_id))
 
     def deactivate_source(self):

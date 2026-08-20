@@ -1,18 +1,23 @@
-"""Application-level scheduling service."""
+"""Independent scheduling service for collection, processing, and AI queues."""
 
 import asyncio
 
 import config
+from ai.ai_service import AIProcessingService
 from collection.crawler import CRAWL_MODE_ALL
 from services.crawl_job_service import CrawlJobService
+from services.processing_service import ProcessingService
 
 
 class SchedulerService:
-    """Schedule crawl jobs; collection and processing stay replaceable."""
+    """Run three independent workers while preserving queue order in SQLite."""
 
-    def __init__(self, crawl_job_service=None):
+    def __init__(self, crawl_job_service=None, processing_service=None, ai_service=None):
         self.crawl_job = crawl_job_service or CrawlJobService()
+        self.processing = processing_service or ProcessingService()
+        self.ai = ai_service or AIProcessingService()
         self._tasks = {}
+        self._worker_tasks = {}
 
     @staticmethod
     def _task_key(client, channel_username, from_date, to_date, crawl_mode):
@@ -44,13 +49,61 @@ class SchedulerService:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"[SCHEDULER] Job failed for {channel_username}: {exc}")
+                print(f"[COLLECTION] Job failed for {channel_username}: {exc}")
 
             print(
-                f"[SCHEDULER] Next run for {channel_username} "
+                f"[COLLECTION] Next run for {channel_username} "
                 f"in {interval_minutes:g} minute(s)."
             )
             await asyncio.sleep(interval_minutes * 60)
+
+    async def _run_processing_worker(self, interval_minutes):
+        while True:
+            try:
+                stats = self.processing.process_pending_with_stats()
+                print(
+                    "[PROCESSING QUEUE] "
+                    f"found={stats['found']} processed={stats['processed']} failed={stats['failed']}"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[PROCESSING QUEUE] Worker failed: {exc}")
+            await asyncio.sleep(interval_minutes * 60)
+
+    async def _run_ai_worker(self, interval_minutes):
+        while True:
+            try:
+                stats = self.ai.process_pending_with_stats()
+                print(
+                    "[AI QUEUE] "
+                    f"found={stats['found']} processed={stats['processed']} "
+                    f"failed={stats['failed']} skipped={stats.get('skipped', False)}"
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                print(f"[AI QUEUE] Worker failed: {exc}")
+            await asyncio.sleep(interval_minutes * 60)
+
+    def _ensure_workers(self):
+        worker_specs = {
+            "processing": (
+                self._run_processing_worker,
+                float(getattr(config, "PROCESSING_INTERVAL_MINUTES", 1)),
+            ),
+            "ai": (
+                self._run_ai_worker,
+                float(getattr(config, "AI_INTERVAL_MINUTES", 1)),
+            ),
+        }
+        for name, (worker, interval) in worker_specs.items():
+            if interval <= 0:
+                raise ValueError(f"{name} worker interval must be greater than zero")
+            existing = self._worker_tasks.get(name)
+            if existing and not existing.done():
+                continue
+            self._worker_tasks[name] = asyncio.create_task(worker(interval))
 
     def schedule_channel(
         self,
@@ -63,6 +116,8 @@ class SchedulerService:
     ):
         if from_date > to_date:
             raise ValueError("Start date cannot be later than end date")
+
+        self._ensure_workers()
 
         interval = float(
             interval_minutes
@@ -97,10 +152,19 @@ class SchedulerService:
         return task
 
     def active_jobs(self):
-        return {k: v for k, v in self._tasks.items() if not v.done()}
+        jobs = {k: v for k, v in self._tasks.items() if not v.done()}
+        jobs.update(
+            {
+                f"worker:{k}": v
+                for k, v in self._worker_tasks.items()
+                if not v.done()
+            }
+        )
+        return jobs
 
     def stop_all(self):
-        for task in self._tasks.values():
+        for task in list(self._tasks.values()) + list(self._worker_tasks.values()):
             if not task.done():
                 task.cancel()
         self._tasks.clear()
+        self._worker_tasks.clear()

@@ -34,27 +34,36 @@ MAX_MEDIA_SIZE = int(os.getenv("TELCLAW_MAX_MEDIA_SIZE", str(2 * 1024 * 1024)))
 BASE_DELAY = int(os.getenv("TELCLAW_BASE_DELAY", "8"))
 RANDOM_DELAY_MAX = int(os.getenv("TELCLAW_RANDOM_DELAY_MAX", "400"))
 
-# Collection, processing, and AI workers have independent schedules.
+# Collection, processing, AI, and delivery workers have independent schedules.
 CRAWL_INTERVAL_MINUTES = float(os.getenv("TELCLAW_CRAWL_INTERVAL_MINUTES", "5"))
-PROCESSING_INTERVAL_MINUTES = float(
-    os.getenv("TELCLAW_PROCESSING_INTERVAL_MINUTES", "1")
-)
+PROCESSING_INTERVAL_MINUTES = float(os.getenv("TELCLAW_PROCESSING_INTERVAL_MINUTES", "1"))
 AI_INTERVAL_MINUTES = float(os.getenv("TELCLAW_AI_INTERVAL_MINUTES", "1"))
 
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 
-# Groq AI extraction settings. The model is intentionally required: keeping a
-# provider model as a hidden source-code default can cause an environment with
-# stale/incorrect configuration to silently call an unintended model.
+# Groq AI extraction settings.
 GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
 GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
 if not GROQ_MODEL:
     raise RuntimeError(
-        "TELCLAW_GROQ_MODEL cannot be empty. Set it to an active Groq model, "
-        "for example openai/gpt-oss-20b."
+        "TELCLAW_GROQ_MODEL cannot be empty. Set it to an active Groq model."
     )
 
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {
     "1", "true", "yes", "on"
 }
+
+# Advertio Ingest API. Disabled by default so enabling the integration is an
+# explicit deployment decision. The key is only required when ingestion is enabled.
+ADVERTIO_INGEST_ENABLED = os.getenv("TELCLAW_ADVERTIO_INGEST_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on"
+}
+ADVERTIO_BASE_URL = os.getenv("TELCLAW_ADVERTIO_BASE_URL", "https://api.advertio.ca").rstrip("/")
+ADVERTIO_INGEST_KEY = os.getenv("TELCLAW_ADVERTIO_INGEST_KEY", "").strip()
+ADVERTIO_SOURCE_NAME = os.getenv("TELCLAW_ADVERTIO_SOURCE_NAME", "telegram-rent").strip()
+ADVERTIO_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_AUTO_PUBLISH", "false").lower() in {
+    "1", "true", "yes", "on"
+}
+ADVERTIO_CONCURRENCY = max(1, min(3, int(os.getenv("TELCLAW_ADVERTIO_CONCURRENCY", "3"))))
+ADVERTIO_TIMEOUT_SECONDS = float(os.getenv("TELCLAW_ADVERTIO_TIMEOUT_SECONDS", "60"))

@@ -110,6 +110,9 @@ class GroqExtractor:
 
         self.rate_limiter.wait()
         self._log_request_config()
+
+        # Diagnostic mode: send ordinary JSON output without response_format/json_schema.
+        # This isolates Groq access/model permissions from Structured Output support.
         payload = {
             "model": self.model,
             "messages": [
@@ -117,14 +120,6 @@ class GroqExtractor:
                 {"role": "user", "content": processed_text},
             ],
             "temperature": 0,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "telclaw_category_extraction",
-                    "strict": True,
-                    "schema": build_json_schema(),
-                },
-            },
         }
 
         body = json.dumps(payload).encode("utf-8")

@@ -2,8 +2,6 @@
 
 from datetime import datetime, timezone
 import logging
-import re
-import time
 
 import config
 from ai.extractor import AIExtractionError, GroqExtractor
@@ -31,36 +29,6 @@ class AIProcessingService:
             getattr(exc, "provider", "groq"), getattr(exc, "status", None), getattr(self.extractor, "model", None),
             getattr(exc, "reason", None), record.get("message_id"), record.get("channel_username"), str(exc), exc_info=True,
         )
-
-    @staticmethod
-    def _rate_limit_wait(exc, retry_number):
-        """Wait conservatively for Groq TPM limits before retrying a request."""
-        text = str(exc)
-        match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", text, re.IGNORECASE)
-        if match:
-            suggested = float(match.group(1))
-            wait = max(suggested, config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS)
-        else:
-            # 20s -> 40s -> 80s -> 120s, then remain capped at the configured maximum.
-            wait = config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS * (2 ** max(0, retry_number - 1))
-
-        wait = min(wait, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
-        print(
-            f"[AI] Groq rate limit reached; waiting {wait:.1f}s "
-            f"before retry {retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES}..."
-        )
-        time.sleep(wait)
-
-    def _extract_with_retry(self, source_text, record=None, progress=False):
-        attempts = 0
-        while True:
-            try:
-                return self.extractor.extract(source_text)
-            except AIExtractionError as exc:
-                if getattr(exc, "status", None) != 429 or attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
-                    raise
-                attempts += 1
-                self._rate_limit_wait(exc, attempts)
 
     def _deliver_to_advertio(self, record, category, data):
         if not self.advertio_service or category != "housinglist":
@@ -107,7 +75,9 @@ class AIProcessingService:
 
             self.repository.mark_ai_processing(record["message_id"], record["channel_username"])
             try:
-                category, data = self._extract_with_retry(source_text, record, progress=progress)
+                # Groq rate-limit retry/backoff is handled centrally by GroqExtractor.
+                # This avoids nested retry loops and makes the configured cooldown apply once.
+                category, data = self.extractor.extract(source_text)
                 self.repository.save_category_record(record["id"], category, data)
                 self.repository.mark_ai_result(
                     message_id=record["message_id"], channel_username=record["channel_username"], success=True,

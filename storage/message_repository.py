@@ -25,6 +25,9 @@ class MessageRepository:
             limit=limit, channel_username=channel_username
         )
 
+    def get_previous_messages_by_sender(self, sender_id, before_id):
+        return database.get_previous_messages_by_sender(sender_id, before_id)
+
     def update_message(self, message_id, channel_username, **fields):
         return database.update_message(message_id, channel_username, **fields)
 
@@ -52,15 +55,11 @@ class MessageRepository:
         if success:
             fields.update(ai_status="processed")
         else:
-            # Provider diagnostics are logger-only. Never persist exception text,
-            # provider response bodies, or transport details on the message row.
             fields.pop("ai_error", None)
             fields.update(ai_status="failed", ai_error=None)
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_skipped(self, message_id, channel_username, *, reason, **fields):
-        # Data-quality skips are intentionally distinguishable from provider
-        # failures, but only through a bounded internal reason.
         fields.update(ai_status="skipped", ai_error=f"skipped:{reason}")
         return self.update_message(message_id, channel_username, **fields)
 

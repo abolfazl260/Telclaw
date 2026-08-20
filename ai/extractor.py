@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 
 import requests
 
@@ -174,14 +175,35 @@ class GroqExtractor:
             response_detail[:4000],
         )
 
+    @staticmethod
+    def _retry_after_seconds(response, attempt):
+        """Calculate a conservative 429 cooldown from server hints and exponential backoff."""
+        retry_after = response.headers.get("Retry-After") or response.headers.get("retry-after")
+        reset_tokens = response.headers.get("x-ratelimit-reset-tokens")
+        detail = response.text or ""
+
+        hinted = None
+        for value in (retry_after, reset_tokens):
+            if not value:
+                continue
+            match = re.search(r"(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)?", str(value), re.I)
+            if match:
+                hinted = max(hinted or 0.0, float(match.group(1)))
+
+        if hinted is None:
+            match = re.search(r"try again in\s+(\d+(?:\.\d+)?)\s*s", detail, re.I)
+            if match:
+                hinted = float(match.group(1))
+
+        exponential = config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS * (2 ** max(0, attempt - 1))
+        wait_seconds = max(hinted or 0.0, exponential, config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS)
+        return min(wait_seconds, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
+
     def extract(self, processed_text):
         if not self.api_key:
             raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
         if not isinstance(processed_text, str) or not processed_text.strip():
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
-
-        self.rate_limiter.wait()
-        self._log_request_config()
 
         payload = {
             "model": self.model,
@@ -193,26 +215,53 @@ class GroqExtractor:
             "response_format": {"type": "json_object"},
         }
 
-        try:
-            response = requests.post(
-                self.ENDPOINT,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=self.timeout,
-            )
-        except requests.RequestException as exc:
-            raise AIExtractionError(
-                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
-                reason="network_error",
-            ) from exc
+        max_retries = config.GROQ_RATE_LIMIT_MAX_RETRIES
+        attempt = 0
 
-        if not response.ok:
+        while True:
+            self.rate_limiter.wait()
+            self._log_request_config()
+
+            try:
+                response = requests.post(
+                    self.ENDPOINT,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout,
+                )
+            except requests.RequestException as exc:
+                raise AIExtractionError(
+                    f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
+                    reason="network_error",
+                ) from exc
+
+            if response.ok:
+                break
+
             detail = response.text.strip()
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
+
+            if response.status_code == 429 and attempt < max_retries:
+                attempt += 1
+                wait_seconds = self._retry_after_seconds(response, attempt)
+                print(
+                    f"[AI] Groq rate limit reached. Waiting {wait_seconds:.1f}s "
+                    f"before retry {attempt}/{max_retries}..."
+                )
+                logger.warning(
+                    "Groq rate limit: waiting %.1fs before retry %s/%s request_id=%s",
+                    wait_seconds,
+                    attempt,
+                    max_retries,
+                    request_id or "<none>",
+                )
+                time.sleep(wait_seconds)
+                continue
+
             self._log_provider_error(
                 response.status_code,
                 self.model,

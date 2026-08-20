@@ -2,8 +2,8 @@
 
 import json
 import logging
-from urllib import request
-from urllib.error import HTTPError, URLError
+
+import requests
 
 import config
 from ai.category_schemas import build_json_schema, validate_result
@@ -34,7 +34,7 @@ class AIExtractionError(RuntimeError):
 
 
 class GroqExtractor:
-    """Dependency-free Groq client using Groq's OpenAI-compatible API."""
+    """Groq client using the OpenAI-compatible HTTP API."""
 
     ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -48,7 +48,6 @@ class GroqExtractor:
 
     @staticmethod
     def _provider_reason(status, detail):
-        """Normalize provider responses to a small, non-persisted diagnostic reason."""
         text = (detail or "").lower()
         if status == 401:
             return "invalid_api_key"
@@ -56,6 +55,8 @@ class GroqExtractor:
             if "model" in text and ("block" in text or "permission" in text or "access" in text):
                 return "model_blocked"
             return "permissions_error"
+        if status == 404:
+            return "model_not_found"
         if status == 429:
             return "rate_limit"
         if status >= 500:
@@ -63,12 +64,7 @@ class GroqExtractor:
         return "provider_error"
 
     def _log_request_config(self):
-        """Log request configuration without exposing any part of the API secret."""
-        logger.warning(
-            "[DEBUG GROQ REQUEST] MODEL=%s ENDPOINT=%s",
-            self.model,
-            self.ENDPOINT,
-        )
+        logger.warning("[DEBUG GROQ REQUEST] MODEL=%s ENDPOINT=%s", self.model, self.ENDPOINT)
         print(
             "\n[DEBUG GROQ REQUEST]\n"
             f"MODEL:\n{self.model}\n"
@@ -77,7 +73,6 @@ class GroqExtractor:
 
     @staticmethod
     def _log_provider_error(status, model, reason, detail, request_id=None):
-        """Print the provider's diagnostic response without exposing credentials."""
         response_detail = detail or "<empty>"
         diagnostic = (
             "\n[AI PROVIDER ERROR]\n"
@@ -101,18 +96,17 @@ class GroqExtractor:
 
     def extract(self, processed_text):
         if not self.api_key:
-            raise AIExtractionError(
-                "GROQ_API_KEY is not configured",
-                reason="missing_api_key",
-            )
+            raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
         if not isinstance(processed_text, str) or not processed_text.strip():
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
         self.rate_limiter.wait()
         self._log_request_config()
 
-        # Diagnostic mode: send ordinary JSON output without response_format/json_schema.
-        # This isolates Groq access/model permissions from Structured Output support.
+        # Production extraction uses Structured Outputs again. The connectivity
+        # investigation proved that the previous urllib transport, not JSON Schema,
+        # caused the 403/1010 response. requests is used here to match the working
+        # system curl transport more closely.
         payload = {
             "model": self.model,
             "messages": [
@@ -120,27 +114,38 @@ class GroqExtractor:
                 {"role": "user", "content": processed_text},
             ],
             "temperature": 0,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "telclaw_category_extraction",
+                    "strict": True,
+                    "schema": build_json_schema(),
+                },
+            },
         }
 
-        body = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            self.ENDPOINT,
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with request.urlopen(req, timeout=self.timeout) as response:
-                raw = response.read().decode("utf-8")
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace").strip()
-            request_id = exc.headers.get("x-request-id") or exc.headers.get("request-id")
-            reason = self._provider_reason(exc.code, detail)
+            response = requests.post(
+                self.ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise AIExtractionError(
+                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
+                reason="network_error",
+            ) from exc
+
+        if not response.ok:
+            detail = response.text.strip()
+            request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+            reason = self._provider_reason(response.status_code, detail)
             self._log_provider_error(
-                exc.code,
+                response.status_code,
                 self.model,
                 reason,
                 detail,
@@ -148,7 +153,7 @@ class GroqExtractor:
             )
             diagnostic = [
                 "provider=groq",
-                f"status={exc.code}",
+                f"status={response.status_code}",
                 f"model={self.model}",
                 f"reason={reason}",
                 f"response={detail[:4000] or '<empty>'}",
@@ -157,18 +162,13 @@ class GroqExtractor:
                 diagnostic.append(f"request_id={request_id}")
             raise AIExtractionError(
                 "Groq request failed: " + "; ".join(diagnostic),
-                status=exc.code,
+                status=response.status_code,
                 reason=reason,
-                stop_queue=exc.code == 403,
-            ) from exc
-        except (URLError, TimeoutError) as exc:
-            raise AIExtractionError(
-                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
-                reason="network_error" if isinstance(exc, URLError) else "timeout",
-            ) from exc
+                stop_queue=response.status_code == 403,
+            )
 
         try:
-            response_data = json.loads(raw)
+            response_data = response.json()
             choices = response_data.get("choices", [])
             if not choices:
                 raise ValueError("No choices returned")

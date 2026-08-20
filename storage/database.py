@@ -28,15 +28,20 @@ MESSAGE_COLUMNS = {
     "file_unique_id": "TEXT",
     "message_link": "TEXT",
     "media_reference": "TEXT",
+    "advertio_status": "TEXT NOT NULL DEFAULT 'waiting'",
+    "advertio_lead_id": "TEXT",
+    "advertio_error": "TEXT",
+    "advertio_processed_at": "TEXT",
 }
 
 CATEGORY_TABLES = {
     "housinglist": {
         "property_type": "TEXT", "listing_type": "TEXT", "title": "TEXT",
-        "description": "TEXT", "location": "TEXT", "price": "REAL",
-        "currency": "TEXT", "rent_period": "TEXT", "bedrooms": "INTEGER",
-        "bathrooms": "REAL", "area": "REAL", "area_unit": "TEXT",
-        "furnished": "INTEGER", "availability": "TEXT",
+        "description": "TEXT", "location": "TEXT", "country_code": "TEXT",
+        "province": "TEXT", "city": "TEXT", "neighborhood": "TEXT",
+        "price": "REAL", "currency": "TEXT", "rent_period": "TEXT",
+        "bedrooms": "INTEGER", "bathrooms": "REAL", "area": "REAL",
+        "area_unit": "TEXT", "furnished": "INTEGER", "availability": "TEXT",
         "property_condition": "TEXT", "contact": "TEXT", "features": "TEXT",
     },
     "transferlist": {
@@ -73,43 +78,44 @@ def _migrate_messages_table(cursor):
         if column not in existing:
             cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
     cursor.execute("UPDATE messages SET collection_status = COALESCE(collection_status, 'collected')")
-    cursor.execute(
-        """
-        UPDATE messages
-        SET processing_status = CASE processing_status
+    cursor.execute("""
+        UPDATE messages SET processing_status = CASE processing_status
             WHEN 'collected' THEN 'pending'
             WHEN 'processed' THEN 'processed'
             WHEN 'processing_failed' THEN 'failed'
             WHEN 'ai_processed' THEN 'processed'
             WHEN 'ai_failed' THEN 'processed'
-            ELSE processing_status
-        END
-        """
-    )
-    cursor.execute(
-        """
-        UPDATE messages
-        SET ai_status = CASE
+            ELSE processing_status END
+    """)
+    cursor.execute("""
+        UPDATE messages SET ai_status = CASE
             WHEN processing_status = 'processed' AND ai_category IS NOT NULL THEN 'processed'
             WHEN ai_processed_at IS NOT NULL AND ai_error IS NOT NULL THEN 'failed'
             WHEN ai_processed_at IS NOT NULL THEN 'processed'
             WHEN processing_status = 'processed' THEN 'pending'
-            ELSE COALESCE(ai_status, 'waiting')
-        END
-        """
-    )
+            ELSE COALESCE(ai_status, 'waiting') END
+    """)
 
 
 def _create_category_tables(cursor):
     for table, fields in CATEGORY_TABLES.items():
-        columns = [
-            "id INTEGER PRIMARY KEY AUTOINCREMENT",
-            "processed_message_id INTEGER NOT NULL UNIQUE",
-            *[f"{name} {definition}" for name, definition in fields.items()],
-            "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
-            "FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE",
-        ]
-        cursor.execute(f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(columns)})")
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        exists = cursor.fetchone() is not None
+        if not exists:
+            columns = [
+                "id INTEGER PRIMARY KEY AUTOINCREMENT",
+                "processed_message_id INTEGER NOT NULL UNIQUE",
+                *[f"{name} {definition}" for name, definition in fields.items()],
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+                "FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE",
+            ]
+            cursor.execute(f"CREATE TABLE {table} ({', '.join(columns)})")
+        else:
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing = {row[1] for row in cursor.fetchall()}
+            for name, definition in fields.items():
+                if name not in existing:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
         cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_processed_message ON {table}(processed_message_id)")
 
 
@@ -117,8 +123,7 @@ def initialize_db():
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            """
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel_username TEXT NOT NULL,
@@ -146,19 +151,26 @@ def initialize_db():
                 has_media INTEGER NOT NULL DEFAULT 0,
                 media_type TEXT,
                 file_unique_id TEXT,
+                advertio_status TEXT NOT NULL DEFAULT 'waiting',
+                advertio_lead_id TEXT,
+                advertio_error TEXT,
+                advertio_processed_at TEXT,
                 UNIQUE(channel_username, message_id)
             )
-            """
-        )
+        """)
         _migrate_messages_table(cursor)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username, date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)")
+        for sql in (
+            "CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username, date)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)",
+            "CREATE INDEX IF NOT EXISTS idx_messages_advertio_status ON messages(advertio_status)",
+        ):
+            cursor.execute(sql)
         cursor.execute("CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY, target_date TEXT NOT NULL, last_crawled_date TEXT)")
         _create_category_tables(cursor)
         conn.commit()
@@ -174,8 +186,7 @@ def insert_message(channel_username, message_id, text, date_str, *, raw_text=Non
                    media_reference=None):
     conn = get_connection()
     try:
-        cursor = conn.execute(
-            """
+        cursor = conn.execute("""
             INSERT OR IGNORE INTO messages (
                 channel_username, message_id, text, raw_text, cleaned_text, date,
                 media_path, message_link, media_reference, collection_status,
@@ -183,13 +194,11 @@ def insert_message(channel_username, message_id, text, date_str, *, raw_text=Non
                 channel_name, sender_id, sender_username, sender_type, has_media,
                 media_type, file_unique_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (channel_username, message_id, text, raw_text, cleaned_text, date_str,
-             media_path, message_link, media_reference, collection_status,
-             processing_status, ai_status, pipeline_version, cleaned_at, channel_id,
-             channel_name, sender_id, sender_username, sender_type, int(bool(has_media)),
-             media_type, str(file_unique_id) if file_unique_id is not None else None),
-        )
+        """, (channel_username, message_id, text, raw_text, cleaned_text, date_str,
+              media_path, message_link, media_reference, collection_status,
+              processing_status, ai_status, pipeline_version, cleaned_at, channel_id,
+              channel_name, sender_id, sender_username, sender_type, int(bool(has_media)),
+              media_type, str(file_unique_id) if file_unique_id is not None else None))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -206,8 +215,7 @@ def _get_messages(where_sql, params, limit, channel_username):
             values.append(channel_username)
         sql += " ORDER BY id LIMIT ?"
         values.append(int(limit))
-        rows = conn.execute(sql, values).fetchall()
-        return [dict(row) for row in rows]
+        return [dict(row) for row in conn.execute(sql, values).fetchall()]
     finally:
         conn.close()
 
@@ -225,26 +233,16 @@ def get_ai_pending_messages(limit=100, channel_username=None):
 
 
 def get_previous_messages_by_sender(sender_id, before_id):
-    """Return earlier crawled messages from the same Telegram user.
-
-    The query intentionally uses the original raw Telegram payload and is not
-    restricted to pending rows, so a newly crawled repost is compared with
-    already-processed historical messages as well.
-    """
     if sender_id is None:
         return []
     conn = get_connection()
     try:
-        rows = conn.execute(
-            """
+        rows = conn.execute("""
             SELECT id, message_id, channel_username, sender_id, raw_text, text
             FROM messages
-            WHERE sender_id = ? AND id < ?
-              AND COALESCE(raw_text, text, '') <> ''
+            WHERE sender_id = ? AND id < ? AND COALESCE(raw_text, text, '') <> ''
             ORDER BY id
-            """,
-            (sender_id, before_id),
-        ).fetchall()
+        """, (sender_id, before_id)).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -254,6 +252,7 @@ def update_message(message_id, channel_username, **fields):
     allowed = {
         "cleaned_text", "text", "collection_status", "processing_status", "ai_status",
         "pipeline_version", "cleaned_at", "ai_category", "ai_processed_at", "ai_error",
+        "advertio_status", "advertio_lead_id", "advertio_error", "advertio_processed_at",
     }
     updates = {key: value for key, value in fields.items() if key in allowed}
     if not updates:
@@ -270,13 +269,9 @@ def update_message(message_id, channel_username, **fields):
 
 
 def delete_message(message_id, channel_username):
-    """Delete one crawled message and its dependent AI/category data."""
     conn = get_connection()
     try:
-        cursor = conn.execute(
-            "DELETE FROM messages WHERE channel_username = ? AND message_id = ?",
-            (channel_username, message_id),
-        )
+        cursor = conn.execute("DELETE FROM messages WHERE channel_username = ? AND message_id = ?", (channel_username, message_id))
         conn.commit()
         return cursor.rowcount > 0
     finally:
@@ -306,6 +301,17 @@ def save_category_record(processed_message_id, category, data):
     try:
         conn.execute(f"INSERT INTO {category} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT(processed_message_id) DO UPDATE SET {assignments}", values)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_category_record(processed_message_id, category):
+    if category not in CATEGORY_TABLES:
+        raise ValueError(f"Unsupported category: {category}")
+    conn = get_connection()
+    try:
+        row = conn.execute(f"SELECT * FROM {category} WHERE processed_message_id = ?", (processed_message_id,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 

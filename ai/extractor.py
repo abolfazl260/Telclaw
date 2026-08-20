@@ -63,19 +63,40 @@ class GroqExtractor:
         return "provider_error"
 
     def _log_request_config(self):
-        """Log the effective request configuration without exposing the API secret."""
-        key_preview = self.api_key[:8] if self.api_key else "<missing>"
+        """Log request configuration without exposing any part of the API secret."""
         logger.warning(
-            "[DEBUG GROQ REQUEST] MODEL=%s KEY=%s ENDPOINT=%s",
+            "[DEBUG GROQ REQUEST] MODEL=%s ENDPOINT=%s",
             self.model,
-            key_preview,
             self.ENDPOINT,
         )
         print(
             "\n[DEBUG GROQ REQUEST]\n"
             f"MODEL:\n{self.model}\n"
-            f"KEY:\n{key_preview}\n"
             f"ENDPOINT:\n{self.ENDPOINT}\n"
+        )
+
+    @staticmethod
+    def _log_provider_error(status, model, reason, detail, request_id=None):
+        """Print the provider's diagnostic response without exposing credentials."""
+        response_detail = detail or "<empty>"
+        diagnostic = (
+            "\n[AI PROVIDER ERROR]\n"
+            "Provider: Groq\n"
+            f"HTTP Status: {status}\n"
+            f"Model: {model}\n"
+            f"Reason: {reason}\n"
+            f"Response: {response_detail[:4000]}\n"
+        )
+        if request_id:
+            diagnostic += f"Request ID: {request_id}\n"
+        print(diagnostic)
+        logger.error(
+            "Groq provider error: status=%s model=%s reason=%s request_id=%s response=%s",
+            status,
+            model,
+            reason,
+            request_id or "<none>",
+            response_detail[:4000],
         )
 
     def extract(self, processed_text):
@@ -123,6 +144,13 @@ class GroqExtractor:
             detail = exc.read().decode("utf-8", errors="replace").strip()
             request_id = exc.headers.get("x-request-id") or exc.headers.get("request-id")
             reason = self._provider_reason(exc.code, detail)
+            self._log_provider_error(
+                exc.code,
+                self.model,
+                reason,
+                detail,
+                request_id=request_id,
+            )
             diagnostic = [
                 "provider=groq",
                 f"status={exc.code}",

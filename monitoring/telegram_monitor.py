@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 class _TelegramErrorHandler(logging.Handler):
-    """Forward application ERROR/CRITICAL records without creating loops."""
-
     def __init__(self, monitor: "TelegramMonitor"):
         super().__init__(level=logging.ERROR)
         self.monitor = monitor
@@ -102,6 +100,26 @@ class TelegramMonitor:
         elif text.startswith("/stop"):
             database.unsubscribe_monitor_chat(int(chat_id))
             await self._send(chat_id, "⛔ دریافت گزارش‌های Telclaw متوقف شد.")
+        elif text.startswith("/status"):
+            await self._send(chat_id, await self._build_status_message())
+
+    async def _build_status_message(self) -> str:
+        status = database.get_pipeline_status()
+        return (
+            "📊 <b>Telclaw Current Status</b>\n\n"
+            f"🟢 <b>System:</b> {html.escape(status['system'])}\n"
+            f"📥 <b>Collected:</b> {status['collected']}\n"
+            f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n"
+            f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n"
+            f"🤖 <b>AI pending:</b> {status['ai_pending']}\n"
+            f"🤖 <b>AI failed:</b> {status['ai_failed']}\n"
+            f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n"
+            f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n"
+            f"📦 <b>Total messages:</b> {status['total_messages']}\n"
+            f"📡 <b>Channels:</b> {status['channels']}\n"
+            f"👥 <b>Active subscribers:</b> {status['subscribers']}\n\n"
+            f"🕐 <b>Checked:</b> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        )
 
     async def _send(self, chat_id: int, text: str) -> None:
         await self._api("sendMessage", {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True})
@@ -113,7 +131,6 @@ class TelegramMonitor:
             try:
                 await self._send(int(subscriber["chat_id"]), text)
             except Exception:
-                # Do not recursively report monitor delivery failures.
                 logger.warning("Telegram monitor delivery failed for subscriber %s", subscriber["chat_id"])
 
     async def error(self, level: str, source: str, message: str) -> None:

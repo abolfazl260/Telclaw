@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import logging
+import random
 import re
 import time
 
@@ -33,16 +34,45 @@ class AIProcessingService:
         )
 
     @staticmethod
-    def _rate_limit_wait(exc, retry_number):
-        """Use Groq's suggested wait time when present, otherwise exponential backoff."""
-        text = str(exc)
-        match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", text, re.IGNORECASE)
+    def _parse_wait_from_error(text):
+        """Fallback parser for provider response text when extractor metadata is absent."""
+        if not text:
+            return None
+        match = re.search(
+            r"try again in\s*(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s)?",
+            text,
+            re.IGNORECASE,
+        )
         if match:
-            wait = float(match.group(1))
+            return float(match.group(1) or 0) * 60 + float(match.group(2) or 0)
+        match = re.search(r"retry[- ]after[:=\s]+(\d+(?:\.\d+)?)\s*s?", text, re.IGNORECASE)
+        return float(match.group(1)) if match else None
+
+    def _rate_limit_wait(self, exc, retry_number):
+        """Honor Groq's wait hint; otherwise use exponential backoff with jitter."""
+        provider_wait = getattr(exc, "retry_after", None)
+        if provider_wait is None:
+            provider_wait = self._parse_wait_from_error(str(exc))
+
+        if provider_wait is not None:
+            wait = max(0.0, float(provider_wait))
+            reason = "provider_retry_after"
         else:
-            wait = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
-        wait = max(0.5, min(wait, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
-        print(f"[AI] Groq rate limit reached; waiting {wait:.1f}s before retry {retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES}...")
+            base = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
+            jitter = random.uniform(0.0, min(1.0, base * 0.25))
+            wait = min(base + jitter, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
+            wait = max(config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS, wait)
+            reason = "exponential_backoff_jitter"
+
+        logger.warning(
+            "[GROQ RATE LIMIT] provider=groq model=%s status=429 retry=%s/%s wait=%.2fs reason=%s",
+            getattr(self.extractor, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason,
+        )
+        print(
+            f"[AI] Groq rate limit: model={getattr(self.extractor, 'model', None)} "
+            f"status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} "
+            f"wait={wait:.2f}s reason={reason}"
+        )
         time.sleep(wait)
 
     def _extract_with_retry(self, source_text, record, progress=False):
@@ -52,6 +82,11 @@ class AIProcessingService:
                 return self.extractor.extract(source_text)
             except AIExtractionError as exc:
                 if getattr(exc, "status", None) != 429 or attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
+                    if getattr(exc, "status", None) == 429:
+                        logger.error(
+                            "[GROQ RATE LIMIT EXHAUSTED] provider=groq model=%s retries=%s",
+                            getattr(self.extractor, "model", None), attempts,
+                        )
                     raise
                 attempts += 1
                 self._rate_limit_wait(exc, attempts)

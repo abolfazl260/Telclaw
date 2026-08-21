@@ -1,4 +1,4 @@
-"""Application service that orchestrates message processing."""
+"""Application service that runs the independent processing queue."""
 
 from datetime import datetime, timezone
 
@@ -22,23 +22,54 @@ class ProcessingService:
     def process_records(self, records):
         return [self.process_record(record) for record in records]
 
-    def process_pending(self, limit=500, channel_username=None):
-        records = self.repository.get_pending(limit=limit, channel_username=channel_username)
-        processed = []
-        for record in records:
+    def _process(self, records, *, progress=False):
+        total = len(records)
+        processed = failed = 0
+        for index, record in enumerate(records, start=1):
+            self.repository.mark_processing(
+                record["message_id"], record["channel_username"]
+            )
             try:
                 result = self.process_record(record)
-                self.repository.mark_processed(
+                self.repository.mark_processing_result(
                     record["message_id"], record["channel_username"],
-                    text=result.get("text"), cleaned_text=result.get("cleaned_text"),
-                    processing_status="processed", pipeline_version="processing-v1",
+                    success=True,
+                    text=result.get("text"),
+                    cleaned_text=result.get("cleaned_text"),
+                    pipeline_version="processing-v1",
                     cleaned_at=datetime.now(timezone.utc).isoformat(),
                 )
-                processed.append(result)
+                processed += 1
             except Exception as exc:
-                self.repository.mark_processed(
+                self.repository.mark_processing_result(
                     record["message_id"], record["channel_username"],
-                    processing_status="processing_failed",
+                    success=False,
                 )
+                failed += 1
                 print(f"[PROCESSING] Failed message {record['message_id']}: {exc}")
+
+            if progress:
+                percent = index * 100 / total
+                print(
+                    f"[PROCESSING] {index}/{total} ({percent:6.2f}%) "
+                    f"processed={processed} failed={failed}"
+                )
+        return processed, failed
+
+    def process_pending(self, limit=500, channel_username=None):
+        """Process only records waiting in the processing queue."""
+        records = self.repository.get_processing_pending(
+            limit=limit, channel_username=channel_username
+        )
+        processed, _ = self._process(records)
         return processed
+
+    def process_pending_with_stats(self, limit=500, channel_username=None):
+        """Process one independent queue batch and expose progress stats."""
+        records = self.repository.get_processing_pending(
+            limit=limit, channel_username=channel_username
+        )
+        if not records:
+            return {"found": 0, "processed": 0, "failed": 0}
+        processed, failed = self._process(records, progress=True)
+        return {"found": len(records), "processed": processed, "failed": failed}

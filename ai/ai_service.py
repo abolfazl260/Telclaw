@@ -24,12 +24,7 @@ class AIProcessingService:
             self.advertio_service = AdvertioDeliveryService()
 
     def set_media_downloader(self, media_downloader):
-        """Set the existing Telegram media download operation for this AI run.
-
-        The callback is intentionally injected by the application layer because
-        AI processing is database-backed while the Telethon client is owned by
-        the running crawler/UI event loop.
-        """
+        """Set the existing Telegram media download operation for this AI run."""
         self.media_downloader = media_downloader
 
     @staticmethod
@@ -90,11 +85,6 @@ class AIProcessingService:
         if not media_path:
             raise RuntimeError("Telegram media download returned no file")
 
-        self.repository.update_message(
-            record["message_id"],
-            record["channel_username"],
-            media_path=media_path,
-        )
         record["media_path"] = media_path
         return True
 
@@ -102,10 +92,18 @@ class AIProcessingService:
         if not self.advertio_service or category != "housinglist":
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0}
         now = datetime.now(timezone.utc).isoformat()
+
+        # Media preparation is a distinct retryable step. AI remains successful
+        # when Telegram media retrieval fails; only Advertio delivery is retried.
         try:
-            # AI validation has already succeeded. Only now is a Telegram photo
-            # downloaded, immediately before the existing Advertio delivery flow.
             self._prepare_media_for_advertio(record)
+        except Exception as exc:
+            self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status="retry", lead_id=None, error=str(exc)[:4000], processed_at=now)
+            logger.error("[MEDIA ERROR] message_id=%s channel=%s detail=%s", record.get("message_id"), record.get("channel_username"), str(exc), exc_info=True)
+            print(f"[MEDIA] retry: message={record['message_id']} reason={str(exc)[:300]}")
+            return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1}
+
+        try:
             result = self.advertio_service.deliver(record, data)
             status = "already_existed" if result.get("already_existed") else "sent"
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)

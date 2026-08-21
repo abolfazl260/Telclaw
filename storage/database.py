@@ -205,6 +205,19 @@ def insert_message(channel_username, message_id, text, date_str, *, raw_text=Non
         conn.close()
 
 
+def get_latest_message_id(channel_username):
+    """Return the newest Telegram message id already collected for a channel."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT MAX(message_id) AS max_message_id FROM messages WHERE channel_username = ?",
+            (channel_username,),
+        ).fetchone()
+        return int(row["max_message_id"]) if row and row["max_message_id"] is not None else 0
+    finally:
+        conn.close()
+
+
 def _get_messages(where_sql, params, limit, channel_username):
     conn = get_connection()
     try:

@@ -2,12 +2,16 @@
 from __future__ import annotations
 import asyncio, html, json, logging
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 import aiohttp
 import config
 from storage import database
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
+PROJECT_ROOT=Path(__file__).resolve().parent.parent
+CRAWLER_ERRORS_LOG=PROJECT_ROOT / "crawler_errors.log"
+TELEGRAM_MAX_DOCUMENT_BYTES=50*1024*1024
 
 class _TelegramErrorHandler(logging.Handler):
     def __init__(self,monitor): super().__init__(level=logging.ERROR); self.monitor=monitor
@@ -23,7 +27,7 @@ class TelegramMonitor:
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -40,6 +44,15 @@ class TelegramMonitor:
                 data=await response.json(content_type=None)
                 if not response.ok or not data.get("ok"): raise RuntimeError(f"Telegram API {method} failed: HTTP {response.status}")
                 return data
+    async def _send_document(self,chat_id,file_path,caption):
+        form=aiohttp.FormData(); file_handle=file_path.open("rb"); form.add_field("chat_id",str(chat_id)); form.add_field("caption",caption); form.add_field("document",file_handle,filename=file_path.name)
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
+                async with session.post(f"https://api.telegram.org/bot{self.token}/sendDocument",data=form) as response:
+                    data=await response.json(content_type=None)
+                    if not response.ok or not data.get("ok"): raise RuntimeError(f"Telegram API sendDocument failed: HTTP {response.status}")
+                    return data
+        finally: file_handle.close()
     async def _poll_updates(self):
         while not self._stopping.is_set():
             try:
@@ -59,6 +72,7 @@ class TelegramMonitor:
         elif text.startswith("/health"): await self._send(chat_id,await self._build_health_message())
         elif text.startswith("/today"): await self._send(chat_id,await self._build_today_message())
         elif text.startswith("/source"): await self._send_source_chunks(chat_id)
+        elif text.startswith("/down_errors"): await self._download_errors(chat_id)
     def _tehran_timestamp(self,value):
         if not value:return "هنوز ثبت نشده"
         try:
@@ -66,6 +80,20 @@ class TelegramMonitor:
             if dt.tzinfo is None: dt=dt.replace(tzinfo=ZoneInfo("UTC"))
             return dt.astimezone(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
         except (TypeError,ValueError): return str(value)
+    def _is_subscribed(self,chat_id): return any(int(s["chat_id"])==int(chat_id) for s in database.get_monitor_subscribers())
+    async def _download_errors(self,chat_id):
+        if not self._is_subscribed(chat_id): await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
+        log_path=CRAWLER_ERRORS_LOG
+        try:
+            if not log_path.exists() or not log_path.is_file(): await self._send(chat_id,"❌ crawler_errors.log not found."); return
+            size=log_path.stat().st_size
+            if size==0: await self._send(chat_id,"⚠️ crawler_errors.log is empty."); return
+            if size>TELEGRAM_MAX_DOCUMENT_BYTES:
+                await self._send(chat_id,"❌ <b>crawler_errors.log is too large to send via Telegram.</b>\n\n" f"File size: {size/(1024*1024):.2f} MB"); return
+            timestamp=self._tehran_timestamp(datetime.now(ZoneInfo("UTC")).isoformat())
+            await self._send_document(chat_id,log_path,"📝 Telclaw crawler error log\n" f"🕐 Generated: {timestamp} Tehran")
+        except Exception:
+            logger.exception("Failed to send crawler_errors.log to chat %s",chat_id); await self._send(chat_id,"❌ Failed to send crawler_errors.log.")
     async def _build_status_message(self):
         status=database.get_pipeline_status(); last=status.get("last_crawl")
         return ("📊 <b>Telclaw Current Status</b>\n\n" f"🟢 <b>System:</b> {html.escape(str(status['system']))}\n" f"📥 <b>Collected:</b> {status['collected']}\n" f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n" f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n" f"🤖 <b>AI pending:</b> {status['ai_pending']}\n" f"🤖 <b>AI failed:</b> {status['ai_failed']}\n" f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n" f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n" f"📦 <b>Total messages:</b> {status['total_messages']}\n" f"📡 <b>Channels:</b> {status['channels']}\n" f"👥 <b>Active subscribers:</b> {status['subscribers']}\n" f"📥 <b>Last crawl:</b> {html.escape(self._tehran_timestamp(last))} Tehran")

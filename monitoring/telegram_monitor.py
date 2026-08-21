@@ -59,18 +59,23 @@ class TelegramMonitor:
         elif text.startswith("/health"): await self._send(chat_id,await self._build_health_message())
         elif text.startswith("/today"): await self._send(chat_id,await self._build_today_message())
         elif text.startswith("/source"): await self._send_source_chunks(chat_id)
-    def _tehran_now(self): return datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    def _tehran_timestamp(self,value):
+        if not value:return "هنوز ثبت نشده"
+        try:
+            dt=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+            if dt.tzinfo is None: dt=dt.replace(tzinfo=ZoneInfo("UTC"))
+            return dt.astimezone(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        except (TypeError,ValueError): return str(value)
     async def _build_status_message(self):
-        status=database.get_pipeline_status(); last=status.get("last_crawl") or "هنوز کرالی ثبت نشده"
-        return ("📊 <b>Telclaw Current Status</b>\n\n" f"🟢 <b>System:</b> {html.escape(str(status['system']))}\n" f"📥 <b>Collected:</b> {status['collected']}\n" f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n" f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n" f"🤖 <b>AI pending:</b> {status['ai_pending']}\n" f"🤖 <b>AI failed:</b> {status['ai_failed']}\n" f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n" f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n" f"📦 <b>Total messages:</b> {status['total_messages']}\n" f"📡 <b>Channels:</b> {status['channels']}\n" f"👥 <b>Active subscribers:</b> {status['subscribers']}\n" f"🕐 <b>Current Tehran time:</b> {self._tehran_now()}\n" f"📥 <b>Last crawl:</b> {html.escape(str(last))} Tehran\n\n" f"🕐 <b>Checked:</b> {self._tehran_now()} Tehran")
+        status=database.get_pipeline_status(); last=status.get("last_crawl")
+        return ("📊 <b>Telclaw Current Status</b>\n\n" f"🟢 <b>System:</b> {html.escape(str(status['system']))}\n" f"📥 <b>Collected:</b> {status['collected']}\n" f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n" f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n" f"🤖 <b>AI pending:</b> {status['ai_pending']}\n" f"🤖 <b>AI failed:</b> {status['ai_failed']}\n" f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n" f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n" f"📦 <b>Total messages:</b> {status['total_messages']}\n" f"📡 <b>Channels:</b> {status['channels']}\n" f"👥 <b>Active subscribers:</b> {status['subscribers']}\n" f"📥 <b>Last crawl:</b> {html.escape(self._tehran_timestamp(last))} Tehran")
     async def _build_health_message(self):
         health=database.get_pipeline_health(); icon=lambda state:"🟢" if state=="HEALTHY" else ("🟡" if state=="WARNING" else "🔴")
-        lines=["🏥 <b>TELCLAW SYSTEM HEALTH</b>","",f"📥 <b>Crawler activity:</b> {icon(health['crawler'])} {health['crawler']}",f"⚙️ <b>Processing:</b> {icon(health['processing'])} {health['processing']}",f"🤖 <b>AI:</b> {icon(health['ai'])} {health['ai']}",f"📤 <b>Advertio:</b> {icon(health['advertio'])} {health['advertio']}",f"🗄 <b>Database:</b> {icon(health['database'])} {health['database']}","",f"📥 <b>Last crawl:</b> {html.escape(str(health['last_crawl']))}",f"⚙️ <b>Last processing:</b> {html.escape(str(health['last_processing']))}",f"🤖 <b>Last AI:</b> {html.escape(str(health['last_ai']))}",f"📤 <b>Last Advertio:</b> {html.escape(str(health['last_advertio']))}","",f"📦 <b>Pipeline backlog:</b> {health['backlog']}",f"🚨 <b>Failed items:</b> {health['failed']}",f"🕐 <b>Tehran time:</b> {self._tehran_now()}"]
+        lines=["🏥 <b>TELCLAW SYSTEM HEALTH</b>","",f"📥 <b>Crawler activity:</b> {icon(health['crawler'])} {health['crawler']}",f"⚙️ <b>Processing:</b> {icon(health['processing'])} {health['processing']}",f"🤖 <b>AI:</b> {icon(health['ai'])} {health['ai']}",f"📤 <b>Advertio:</b> {icon(health['advertio'])} {health['advertio']}",f"🗄 <b>Database:</b> {icon(health['database'])} {health['database']}","",f"📥 <b>Last crawl:</b> {html.escape(self._tehran_timestamp(health['last_crawl']))} Tehran",f"⚙️ <b>Last processing:</b> {html.escape(self._tehran_timestamp(health['last_processing']))} Tehran",f"🤖 <b>Last AI:</b> {html.escape(self._tehran_timestamp(health['last_ai']))} Tehran",f"📤 <b>Last Advertio:</b> {html.escape(self._tehran_timestamp(health['last_advertio']))} Tehran","",f"📦 <b>Pipeline backlog:</b> {health['backlog']}",f"🚨 <b>Failed items:</b> {health['failed']}"]
         if health['warning']: lines.extend(["",f"⚠️ <b>Warning:</b> {html.escape(health['warning'])}"])
         return "\n".join(lines)
     async def _build_today_message(self):
-        today=datetime.now(TEHRAN_TZ).date().isoformat()
-        conn=database.get_connection()
+        today=datetime.now(TEHRAN_TZ).date().isoformat(); conn=database.get_connection()
         try:
             row=conn.execute("""SELECT COUNT(*) crawled,SUM(CASE WHEN collection_status='collected' THEN 1 ELSE 0 END) new_messages,SUM(CASE WHEN processing_status='processed' THEN 1 ELSE 0 END) processed,SUM(CASE WHEN ai_status='processed' THEN 1 ELSE 0 END) ai_processed,SUM(CASE WHEN ai_status='failed' THEN 1 ELSE 0 END) ai_failed,SUM(CASE WHEN advertio_status='sent' THEN 1 ELSE 0 END) advertio_sent,SUM(CASE WHEN advertio_status='failed' THEN 1 ELSE 0 END) advertio_failed FROM messages WHERE date LIKE ?""",(today+"%",)).fetchone()
             def n(key): return int(row[key] or 0)
@@ -79,8 +84,7 @@ class TelegramMonitor:
     async def _send_source_chunks(self,chat_id):
         try:
             with open(config.CHANNELS_JSON,"r",encoding="utf-8") as f:data=json.load(f)
-        except Exception as exc:
-            await self._send(chat_id,f"❌ <b>Source file error</b>\n<pre>{html.escape(str(exc))}</pre>"); return
+        except Exception as exc: await self._send(chat_id,f"❌ <b>Source file error</b>\n<pre>{html.escape(str(exc))}</pre>"); return
         lines=[f"📡 <b>Configured Sources</b>",f"<b>File:</b> {html.escape(config.CHANNELS_JSON)}",""]; total=0
         for category,items in data.items():
             lines.append(f"<b>{html.escape(str(category))}</b>")
@@ -102,9 +106,9 @@ class TelegramMonitor:
         for subscriber in database.get_monitor_subscribers():
             try: await self._send(int(subscriber["chat_id"]),text)
             except Exception: logger.warning("Telegram monitor delivery failed for subscriber %s",subscriber["chat_id"])
-    async def error(self,level,source,message): await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_now()} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
+    async def error(self,level,source,message): await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
     async def report(self,kind,stats):
-        titles={"crawl":"📥 CRAWL REPORT","processing":"⚙️ PROCESSING REPORT","ai":"🤖 AI REPORT","advertio":"📤 ADVERTIO REPORT"}; lines=[f"<b>{titles.get(kind,kind.upper()+' REPORT')}</b>",f"🕐 <b>Time:</b> {self._tehran_now()} Tehran"]
+        titles={"crawl":"📥 CRAWL REPORT","processing":"⚙️ PROCESSING REPORT","ai":"🤖 AI REPORT","advertio":"📤 ADVERTIO REPORT"}; lines=[f"<b>{titles.get(kind,kind.upper()+' REPORT')}</b>",f"🕐 <b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran"]
         for key,value in stats.items():lines.append(f"<b>{html.escape(str(key))}:</b> {html.escape(str(value))}")
         await self.broadcast("\n".join(lines))
 _monitor=None

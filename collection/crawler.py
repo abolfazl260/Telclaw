@@ -6,12 +6,10 @@ Cleaning, classification and property extraction belong to processing.
 
 import asyncio
 import random
-from pathlib import Path
 
 from colorama import Fore, init
 from telethon import errors
 
-import config
 from processing.normalizer import normalize_channel_username, normalize_date
 from services.message_service import MessageService
 
@@ -40,15 +38,7 @@ def _extract_sender(message):
 
 
 def _extract_message_text(message):
-    """Extract Telegram text/caption reliably, including media captions.
-
-    Telethon normally exposes a photo caption through ``message.text``. Some
-    Telegram/media message variants can expose the same caption through
-    ``raw_text`` or ``message`` instead. Collection must preserve the source
-    caption verbatim enough for later cleaning and AI title generation, so use
-    a deterministic fallback chain instead of allowing a media caption to be
-    persisted as an empty raw_text value.
-    """
+    """Extract Telegram text/caption reliably, including media captions."""
     for attribute in ("text", "raw_text", "message"):
         value = getattr(message, attribute, None)
         if isinstance(value, str) and value.strip():
@@ -93,59 +83,6 @@ def _should_collect(media_type, crawl_mode):
     return media_type == "photo"
 
 
-async def _download_photo(message, channel_username):
-    """Download a Telegram photo so the later Advertio delivery can upload it.
-
-    Advertio accepts JPEG/PNG/WebP up to 8 MB. Telegram photos are downloaded to
-    a deterministic local directory keyed by channel/message id. If Telegram
-    reports a known size above the Advertio limit, the photo is not downloaded.
-    """
-    if not getattr(message, "photo", None):
-        return None
-
-    file_size = getattr(getattr(message, "file", None), "size", None)
-    if file_size is not None and file_size > config.ADVERTIO_MEDIA_MAX_SIZE:
-        print(
-            f"   ⚠️ [MEDIA-SKIPPED] message_id={message.id} "
-            f"size={file_size} exceeds Advertio 8 MB limit"
-        )
-        return None
-
-    channel = (channel_username or "unknown").strip().lstrip("@").replace("/", "_")
-    media_dir = Path(config.MEDIA_DIR) / channel
-    media_dir.mkdir(parents=True, exist_ok=True)
-    target = media_dir / f"{message.id}"
-
-    try:
-        downloaded = await message.download_media(file=str(target))
-    except Exception as exc:
-        print(f"   ⚠️ [MEDIA-ERROR] message_id={message.id}: {exc}")
-        return None
-
-    if not downloaded:
-        print(f"   ⚠️ [MEDIA-ERROR] message_id={message.id}: Telegram returned no file")
-        return None
-
-    path = Path(downloaded)
-    if not path.is_file():
-        print(f"   ⚠️ [MEDIA-ERROR] message_id={message.id}: downloaded path is missing")
-        return None
-
-    if path.stat().st_size > config.ADVERTIO_MEDIA_MAX_SIZE:
-        print(
-            f"   ⚠️ [MEDIA-SKIPPED] message_id={message.id} "
-            f"downloaded file exceeds Advertio 8 MB limit"
-        )
-        try:
-            path.unlink()
-        except OSError:
-            pass
-        return None
-
-    print(f"   🖼️ [MEDIA-SAVED] {path}")
-    return str(path)
-
-
 def _log_extracted_message(channel_username, message, raw_text, media_type, message_link):
     """Show every collected message in the log before persistence/processing."""
     preview = raw_text.replace("\n", " ")
@@ -168,9 +105,9 @@ async def crawl_channel(
 ):
     """Collect messages whose dates fall inclusively inside ``from_date..to_date``.
 
-    Collection restriction: messages whose sender has no Telegram username are
-    rejected before persistence. They are not inserted into the raw-message
-    database and therefore never enter processing or AI extraction.
+    Collection stores message and media metadata only. Physical media download
+    is intentionally deferred until after AI validation and immediately before
+    Advertio delivery.
     """
     channel_username = normalize_channel_username(channel_username)
     crawl_mode = (crawl_mode or CRAWL_MODE_ALL).strip().lower()
@@ -187,7 +124,7 @@ async def crawl_channel(
     print(f"📅 DATE RANGE: {Fore.YELLOW}{from_date} → {to_date}")
     print(f"🔎 MODE: {Fore.YELLOW}{crawl_mode}")
     print(f"👤 USERNAME REQUIRED: {Fore.YELLOW}yes")
-    print(f"🖼️ MEDIA DOWNLOAD: {Fore.YELLOW}enabled for Telegram photos")
+    print(f"🖼️ MEDIA DOWNLOAD: {Fore.YELLOW}deferred until AI validation")
     print(f"{Fore.CYAN}{'=' * 50}")
 
     repository = MessageService()
@@ -196,8 +133,7 @@ async def crawl_channel(
     filtered_count = 0
     bot_filtered_count = 0
     no_username_count = 0
-    media_saved_count = 0
-    media_failed_count = 0
+    media_metadata_count = 0
     try:
         entity = await client.get_input_entity(channel_username)
         await asyncio.sleep(random.randint(30, 60))
@@ -208,9 +144,6 @@ async def crawl_channel(
                 continue
 
             msg_date = message.date.date()
-
-            # iter_messages is newest -> oldest. Ignore messages newer than the
-            # requested range, and stop as soon as we pass its lower boundary.
             if msg_date > to_date:
                 continue
             if msg_date < from_date:
@@ -226,9 +159,6 @@ async def crawl_channel(
                 )
                 continue
 
-            # New collection restriction: a message without a sender username
-            # must never be persisted. This happens before media/text processing
-            # and before MessageService.save_collected_message().
             if not sender_username or not str(sender_username).strip():
                 no_username_count += 1
                 skipped_count += 1
@@ -256,13 +186,15 @@ async def crawl_channel(
                 channel_username, message, raw_text, media_type, message_link
             )
 
+            # IMPORTANT: collection never downloads physical media anymore.
+            # Preserve metadata required for the post-AI downloader instead.
             media_path = None
-            if media_type == "photo":
-                media_path = await _download_photo(message, channel_username)
-                if media_path:
-                    media_saved_count += 1
-                else:
-                    media_failed_count += 1
+            if has_media:
+                media_metadata_count += 1
+                print(
+                    f"   🖼️ [MEDIA-METADATA] type={media_type or 'unknown'} "
+                    "download=deferred"
+                )
 
             try:
                 saved = repository.save_collected_message(
@@ -302,8 +234,8 @@ async def crawl_channel(
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
         print(f"📅 Range: {from_date} → {to_date}")
         print(f"✅ Saved: {saved_count}")
-        print(f"🖼️ Media saved: {media_saved_count}")
-        print(f"⚠️ Media download failed/skipped: {media_failed_count}")
+        print(f"🖼️ Media metadata saved: {media_metadata_count}")
+        print("🖼️ Media downloaded during crawl: 0")
         print(f"🔍 Filtered by crawl mode: {filtered_count}")
         print(f"🤖 Bot messages skipped: {bot_filtered_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")

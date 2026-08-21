@@ -7,7 +7,8 @@ import re
 import time
 
 import config
-from ai.extractor import AIExtractionError, GroqExtractor
+from ai.extractor import AIExtractionError
+from ai.provider_failover import GroqProviderFailover
 from storage.message_repository import MessageRepository
 
 logger = logging.getLogger("telclaw.ai")
@@ -16,12 +17,17 @@ logger = logging.getLogger("telclaw.ai")
 class AIProcessingService:
     def __init__(self, repository=None, extractor=None, advertio_service=None, media_downloader=None):
         self.repository = repository or MessageRepository()
-        self.extractor = extractor or GroqExtractor()
+        self.extractor = extractor or GroqProviderFailover()
         self.advertio_service = advertio_service
         self.media_downloader = media_downloader
         if self.advertio_service is None and config.ADVERTIO_INGEST_ENABLED:
             from delivery.advertio_service import AdvertioDeliveryService
             self.advertio_service = AdvertioDeliveryService()
+        print(
+            f"[AI] Providers configured: {len(config.GROQ_PROVIDERS)} | "
+            f"active={getattr(self.extractor, 'provider', 'groq-1')} | "
+            f"model={getattr(self.extractor, 'model', config.GROQ_MODEL)}"
+        )
 
     def set_media_downloader(self, media_downloader):
         """Set the existing Telegram media download operation for this AI run."""
@@ -32,7 +38,17 @@ class AIProcessingService:
         return (record.get("cleaned_text") or record.get("text") or record.get("raw_text") or "").strip()
 
     def _log_ai_error(self, record, exc):
-        logger.error("[AI ERROR] provider=%s status=%s model=%s reason=%s message_id=%s channel=%s detail=%s", getattr(exc, "provider", "groq"), getattr(exc, "status", None), getattr(self.extractor, "model", None), getattr(exc, "reason", None), record.get("message_id"), record.get("channel_username"), str(exc), exc_info=True)
+        logger.error(
+            "[AI ERROR] provider=%s status=%s model=%s reason=%s message_id=%s channel=%s detail=%s",
+            getattr(exc, "provider", getattr(self.extractor, "provider", "groq-1")),
+            getattr(exc, "status", None),
+            getattr(self.extractor, "model", None),
+            getattr(exc, "reason", None),
+            record.get("message_id"),
+            record.get("channel_username"),
+            str(exc),
+            exc_info=True,
+        )
 
     @staticmethod
     def _parse_wait_from_error(text):
@@ -52,8 +68,8 @@ class AIProcessingService:
             base = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
             wait = max(config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS, min(base + random.uniform(0, min(1.0, base * 0.25)), config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
             reason = "exponential_backoff_jitter"
-        logger.warning("[GROQ RATE LIMIT] provider=groq model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.extractor, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
-        print(f"[AI] Groq rate limit: model={getattr(self.extractor, 'model', None)} status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} wait={wait:.2f}s reason={reason}")
+        logger.warning("[GROQ RATE LIMIT] provider=%s model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.extractor, "provider", "groq-1"), getattr(self.extractor, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
+        print(f"[AI] Groq rate limit: provider={getattr(self.extractor, 'provider', 'groq-1')} model={getattr(self.extractor, 'model', None)} status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} wait={wait:.2f}s reason={reason}")
         time.sleep(wait)
 
     def _extract_with_retry(self, source_text, record, progress=False):
@@ -62,6 +78,9 @@ class AIProcessingService:
             try:
                 return self.extractor.extract(source_text)
             except AIExtractionError as exc:
+                # GroqProviderFailover already switches immediately on 429.
+                # This retry remains only for the case where all providers are
+                # exhausted and the final 429 must be retried later.
                 if getattr(exc, "status", None) != 429 or attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
                     raise
                 attempts += 1
@@ -71,20 +90,16 @@ class AIProcessingService:
         """Download only required media after AI acceptance and before Advertio."""
         if record.get("media_type") != "photo":
             return True
-
         existing = record.get("media_path")
         if existing:
             from pathlib import Path
             if Path(existing).is_file():
                 return True
-
         if self.media_downloader is None:
             raise RuntimeError("Telegram media downloader is not configured for this AI run")
-
         media_path = self.media_downloader(record)
         if not media_path:
             raise RuntimeError("Telegram media download returned no file")
-
         record["media_path"] = media_path
         return True
 
@@ -92,9 +107,6 @@ class AIProcessingService:
         if not self.advertio_service or category != "housinglist":
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0}
         now = datetime.now(timezone.utc).isoformat()
-
-        # Media preparation is a distinct retryable step. AI remains successful
-        # when Telegram media retrieval fails; only Advertio delivery is retried.
         try:
             self._prepare_media_for_advertio(record)
         except Exception as exc:
@@ -102,7 +114,6 @@ class AIProcessingService:
             logger.error("[MEDIA ERROR] message_id=%s channel=%s detail=%s", record.get("message_id"), record.get("channel_username"), str(exc), exc_info=True)
             print(f"[MEDIA] retry: message={record['message_id']} reason={str(exc)[:300]}")
             return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1}
-
         try:
             result = self.advertio_service.deliver(record, data)
             status = "already_existed" if result.get("already_existed") else "sent"
@@ -146,10 +157,10 @@ class AIProcessingService:
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: {getattr(exc, 'reason', 'ai_error')}")
                 if exc.stop_queue:
                     stopped = True
-                    logger.error("[AI QUEUE STOPPED] provider=groq status=403 model=%s reason=%s; remaining messages stay pending", self.extractor.model, getattr(exc, "reason", "permissions_error"))
+                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 model=%s reason=%s; remaining messages stay pending", getattr(self.extractor, "provider", "groq-1"), self.extractor.model, getattr(exc, "reason", "permissions_error"))
                     break
             except Exception:
-                logger.exception("[AI ERROR] provider=groq model=%s reason=unexpected_error message_id=%s channel=%s", self.extractor.model, record.get("message_id"), record.get("channel_username"))
+                logger.exception("[AI ERROR] provider=%s model=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.extractor, "provider", "groq-1"), self.extractor.model, record.get("message_id"), record.get("channel_username"))
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=False, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 failed += 1
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: unexpected_error")

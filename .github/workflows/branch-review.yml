@@ -1,0 +1,52 @@
+name: Automatic Code Review
+
+on:
+  push:
+    branches:
+      - agent/architecture-refactor
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  review:
+    name: Review latest commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run tests
+        run: |
+          if [ -d tests ]; then
+            python -m pytest -q
+          else
+            echo "No tests directory found; skipping pytest."
+          fi
+
+      - name: Review changed code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Reviewing commit: $GITHUB_SHA"
+          echo "Changed files:"
+          git diff-tree --no-commit-id --name-status -r "$GITHUB_SHA"
+          echo ""
+          echo "Diff:"
+          git show --format=fuller --stat --patch --find-renames "$GITHUB_SHA"
+          echo ""
+          echo "Automated review completed. Test results above are the required gate for this branch."

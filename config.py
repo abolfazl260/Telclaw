@@ -33,13 +33,31 @@ PROCESSING_INTERVAL_MINUTES = float(os.getenv("TELCLAW_PROCESSING_INTERVAL_MINUT
 AI_INTERVAL_MINUTES = float(os.getenv("TELCLAW_AI_INTERVAL_MINUTES", "1"))
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 
-# Independent Telegram Bot API monitoring service. Users subscribe with /start.
 TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 TELEGRAM_BOT_TOKEN = os.getenv("TELCLAW_TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = float(os.getenv("TELCLAW_TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", "30"))
 
+# AI extraction via Groq. GROQ_API_KEY remains the primary/backward-compatible key.
 GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
 GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
+
+# Optional failover providers. Configure GROQ_API_KEY_2, GROQ_API_KEY_3, ...
+# and optionally TELCLAW_GROQ_MODEL_2, TELCLAW_GROQ_MODEL_3, ... .
+# The first provider always uses the existing GROQ_API_KEY/TELCLAW_GROQ_MODEL.
+def _build_groq_providers():
+    providers = [{"api_key": GROQ_API_KEY, "model": GROQ_MODEL}]
+    index = 2
+    while True:
+        key = os.getenv(f"GROQ_API_KEY_{index}", "").strip()
+        if not key:
+            break
+        model = os.getenv(f"TELCLAW_GROQ_MODEL_{index}", GROQ_MODEL).strip()
+        providers.append({"api_key": key, "model": model})
+        index += 1
+    return providers
+
+
+GROQ_PROVIDERS = _build_groq_providers()
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", "5")))
 GROQ_RATE_LIMIT_MIN_WAIT_SECONDS = max(1, float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MIN_WAIT_SECONDS", "30")))

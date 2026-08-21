@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-import time
 
 import requests
 
@@ -228,7 +227,6 @@ class GroqExtractor:
 
     @staticmethod
     def _parse_retry_after(headers, detail):
-        """Return provider-requested wait seconds from headers/body, if available."""
         for name in ("retry-after", "Retry-After"):
             value = headers.get(name)
             if value:
@@ -242,30 +240,17 @@ class GroqExtractor:
                 match = re.search(r"([0-9]+(?:\.[0-9]+)?)", str(value))
                 if match:
                     return max(0.0, float(match.group(1)))
-        text = detail or ""
         patterns = (
             r"try again in\s*(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s)?",
             r"retry[- ]after[:=\s]+(\d+(?:\.\d+)?)\s*s?",
         )
         for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
+            match = re.search(pattern, detail or "", re.IGNORECASE)
             if match:
                 if len(match.groups()) == 2:
-                    minutes = float(match.group(1) or 0)
-                    seconds = float(match.group(2) or 0)
-                    return minutes * 60 + seconds
+                    return float(match.group(1) or 0) * 60 + float(match.group(2) or 0)
                 return float(match.group(1))
         return None
-
-    def _log_request_config(self):
-        logger.debug("Groq request model=%s endpoint=%s", self.model, self.ENDPOINT)
-
-    @staticmethod
-    def _log_provider_error(status, model, reason, detail, request_id=None, retry_after=None):
-        logger.error(
-            "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
-            status, model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", (detail or "<empty>")[:4000],
-        )
 
     def extract(self, processed_text):
         if not self.api_key:
@@ -274,11 +259,10 @@ class GroqExtractor:
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
         self.rate_limiter.wait()
-        self._log_request_config()
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _build_extraction_prompt(compact=True)},
+                {"role": "system", "content": _build_extraction_prompt()},
                 {"role": "user", "content": processed_text.strip()},
             ],
             "temperature": 0,
@@ -289,12 +273,13 @@ class GroqExtractor:
             payload["include_reasoning"] = False
 
         try:
-            response = requests.post(
-                self.ENDPOINT,
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                json=payload,
-                timeout=self.timeout,
-            )
+            with self.rate_limiter.slot():
+                response = requests.post(
+                    self.ENDPOINT,
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self.timeout,
+                )
         except requests.RequestException as exc:
             raise AIExtractionError(
                 f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
@@ -306,7 +291,10 @@ class GroqExtractor:
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
             retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            self._log_provider_error(response.status_code, self.model, reason, detail, request_id, retry_after)
+            logger.error(
+                "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
+                response.status_code, self.model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", detail[:4000] or "<empty>",
+            )
             diagnostic = [
                 "provider=groq", f"status={response.status_code}", f"model={self.model}",
                 f"reason={reason}", f"response={detail[:4000] or '<empty>'}",

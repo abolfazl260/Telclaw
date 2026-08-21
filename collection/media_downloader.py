@@ -7,6 +7,23 @@ Download operation later, after AI has accepted a listing for Advertio.
 from pathlib import Path
 
 import config
+from storage import database
+
+
+def _persist_media_path(record, path):
+    channel_username = str(record.get("channel_username") or "").strip()
+    message_id = record.get("message_id")
+    if not channel_username or message_id is None:
+        return
+    conn = database.get_connection()
+    try:
+        conn.execute(
+            "UPDATE messages SET media_path=? WHERE channel_username=? AND message_id=?",
+            (str(path), channel_username, int(message_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def download_photo_for_record(client, record):
@@ -28,6 +45,17 @@ async def download_photo_for_record(client, record):
     if not channel_username or message_id is None:
         raise ValueError("Telegram media metadata is incomplete")
 
+    channel = channel_username.replace("/", "_") or "unknown"
+    media_dir = Path(config.MEDIA_DIR) / channel
+    media_dir.mkdir(parents=True, exist_ok=True)
+    target = media_dir / str(message_id)
+
+    # The target is deterministic, so a previous successful download is reused
+    # even when an older database record has no media_path value.
+    if target.is_file():
+        _persist_media_path(record, target)
+        return str(target)
+
     message = await client.get_messages(channel_username, ids=int(message_id))
     if not message or not getattr(message, "photo", None):
         raise ValueError(f"Telegram photo not available for message {message_id}")
@@ -37,11 +65,6 @@ async def download_photo_for_record(client, record):
         raise ValueError(
             f"photo exceeds Advertio media limit: {file_size} bytes"
         )
-
-    channel = channel_username.replace("/", "_") or "unknown"
-    media_dir = Path(config.MEDIA_DIR) / channel
-    media_dir.mkdir(parents=True, exist_ok=True)
-    target = media_dir / str(message_id)
 
     downloaded = await message.download_media(file=str(target))
     if not downloaded:
@@ -58,4 +81,5 @@ async def download_photo_for_record(client, record):
             pass
         raise ValueError("downloaded photo exceeds Advertio media limit")
 
+    _persist_media_path(record, path)
     return str(path)

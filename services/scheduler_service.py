@@ -1,9 +1,11 @@
-"""Scheduling service for ordered crawl -> processing -> AI cycles."""
+"""Scheduling service for continuous crawl -> processing -> AI cycles."""
 
 import asyncio
+from datetime import date
 
 from colorama import Fore
 
+import config
 from ai.ai_service import AIProcessingService
 from collection.crawler import CRAWL_MODE_ALL
 from services.crawl_job_service import CrawlJobService
@@ -11,7 +13,13 @@ from services.processing_service import ProcessingService
 
 
 class SchedulerService:
-    """Run each channel cycle in the explicit order: crawl, process, then AI."""
+    """Run continuous channel cycles in the order crawl -> process -> AI.
+
+    The configured end date is used only for the first historical crawl. Every
+    later cycle switches to incremental collection, so newly published Telegram
+    messages are checked forever instead of being trapped inside the original
+    date range.
+    """
 
     def __init__(self, crawl_job_service=None, processing_service=None, ai_service=None):
         self.crawl_job = crawl_job_service or CrawlJobService()
@@ -30,7 +38,7 @@ class SchedulerService:
         )
 
     async def _run_post_crawl_pipeline(self, channel_username):
-        """Process and AI are deliberately started only after crawl completion."""
+        """Process and AI only after the channel crawl has completely finished."""
         async with self._pipeline_lock:
             print(f"\n{Fore.CYAN}{'=' * 60}")
             print(f"{Fore.GREEN}✅ CRAWL COMPLETED: @{channel_username}")
@@ -72,27 +80,60 @@ class SchedulerService:
         from_date,
         to_date,
         crawl_mode,
+        start_delay_minutes=0,
     ):
+        # Keep channels/groups staggered so they do not all hit Telegram together.
+        if start_delay_minutes > 0:
+            print(
+                f"[SCHEDULER] @{channel_username} starts in "
+                f"{start_delay_minutes:g} minute(s) to preserve channel spacing."
+            )
+            await asyncio.sleep(start_delay_minutes * 60)
+
+        first_cycle = True
         while True:
             try:
+                if first_cycle:
+                    cycle_from_date = from_date
+                    cycle_to_date = to_date
+                    print(
+                        f"[SCHEDULER] @{channel_username} initial historical crawl: "
+                        f"{cycle_from_date} -> {cycle_to_date}"
+                    )
+                else:
+                    # Do not reuse the configured end date. The scheduler is now
+                    # a live watcher: each cycle targets the latest available day.
+                    # Keeping the previous day as the lower bound also gives a
+                    # small recovery window across midnight/restarts.
+                    today = date.today()
+                    cycle_from_date = max(from_date, today)
+                    cycle_to_date = today
+                    print(
+                        f"[SCHEDULER] @{channel_username} incremental crawl: "
+                        f"{cycle_from_date} -> {cycle_to_date} (live)"
+                    )
+
                 await self.crawl_job.run_channel(
                     client,
                     channel_username,
-                    from_date,
-                    to_date,
+                    cycle_from_date,
+                    cycle_to_date,
                     crawl_mode=crawl_mode,
+                    incremental=not first_cycle,
                 )
-                # IMPORTANT: no processing/AI can start until the crawl call above
-                # has returned. This prevents partially crawled data from reaching
-                # the downstream queues.
+
+                # Processing and AI are mandatory downstream stages. They are
+                # invoked only after collection has returned for this channel.
                 await self._run_post_crawl_pipeline(channel_username)
+                first_cycle = False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 print(f"[COLLECTION] Pipeline failed for {channel_username}: {exc}")
+                first_cycle = False
 
             print(
-                f"[COLLECTION] Next complete crawl cycle for {channel_username} "
+                f"[COLLECTION] Next check for {channel_username} "
                 f"in {interval_minutes:g} minute(s)."
             )
             await asyncio.sleep(interval_minutes * 60)
@@ -104,6 +145,7 @@ class SchedulerService:
         from_date,
         to_date,
         interval_minutes=None,
+        start_delay_minutes=None,
         crawl_mode=CRAWL_MODE_ALL,
     ):
         if from_date > to_date:
@@ -112,10 +154,18 @@ class SchedulerService:
         interval = float(
             interval_minutes
             if interval_minutes is not None
-            else 5
+            else config.CRAWL_INTERVAL_MINUTES
         )
         if interval <= 0:
             raise ValueError("Crawler interval must be greater than zero")
+
+        stagger = float(
+            start_delay_minutes
+            if start_delay_minutes is not None
+            else 0
+        )
+        if stagger < 0:
+            raise ValueError("Channel start delay cannot be negative")
 
         key = self._task_key(
             client,
@@ -136,6 +186,7 @@ class SchedulerService:
                 from_date,
                 to_date,
                 crawl_mode,
+                start_delay_minutes=stagger,
             )
         )
         self._tasks[key] = task

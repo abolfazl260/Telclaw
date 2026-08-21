@@ -99,8 +99,37 @@ def _validate_english_title(result):
     return result
 
 
+def _english_fallback_title(category, category_data):
+    """Build a deterministic English marketplace title from already extracted fields."""
+    if not isinstance(category_data, dict):
+        return None
+
+    if category == "housinglist":
+        listing_type = str(category_data.get("listing_type") or "rent").strip().lower()
+        action = "Room for Rent" if listing_type == "roommate" else "Property for Rent"
+        bedrooms = category_data.get("bedrooms")
+        property_type = str(category_data.get("property_type") or "property").strip()
+        city = str(category_data.get("city") or "").strip()
+        if bedrooms is not None and str(bedrooms).strip():
+            action = f"{bedrooms}-Bedroom {property_type.title()} for Rent" if listing_type != "roommate" else f"{bedrooms}-Bedroom Room for Rent"
+        elif listing_type != "roommate":
+            action = f"{property_type.title()} for Rent"
+        return f"{action} in {city}" if city else action
+
+    if category == "joblist":
+        job_title = str(category_data.get("job_title") or category_data.get("position") or "Job Opportunity").strip()
+        city = str(category_data.get("city") or "").strip()
+        return f"{job_title} in {city}" if city else job_title
+
+    if category == "transferlist":
+        city = str(category_data.get("city") or category_data.get("from_city") or "").strip()
+        return f"Property Transfer Opportunity in {city}" if city else "Property Transfer Opportunity"
+
+    return "Marketplace Listing"
+
+
 def _fallback_title(source_text):
-    """Create a source-derived fallback title when the provider omits one."""
+    """Return a source-derived title only when it is already English."""
     if not isinstance(source_text, str):
         return None
     lines = [re.sub(r"\s+", " ", line).strip() for line in source_text.splitlines()]
@@ -111,11 +140,13 @@ def _fallback_title(source_text):
     title = re.sub(r"https?://\S+|www\.\S+", "", title, flags=re.IGNORECASE)
     title = re.sub(r"#[\w-]+", "", title)
     title = re.sub(r"\s+", " ", title).strip()
+    if not _title_is_english(title):
+        return None
     return title[:200] or None
 
 
 def _ensure_titles(result, source_text):
-    """Ensure every selected category has a non-empty title."""
+    """Ensure every selected category has a non-empty English title."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
@@ -125,11 +156,20 @@ def _ensure_titles(result, source_text):
     category_data = data.get(category)
     if not isinstance(category_data, dict):
         return result
+
     title = category_data.get("title")
-    if not isinstance(title, str) or not title.strip():
-        fallback = _fallback_title(source_text)
-        if fallback:
-            category_data["title"] = fallback
+    if isinstance(title, str) and title.strip() and _title_is_english(title):
+        category_data["title"] = title.strip()[:200]
+        return result
+
+    fallback = _fallback_title(source_text)
+    if fallback:
+        category_data["title"] = fallback
+        return result
+
+    generated = _english_fallback_title(category, category_data)
+    if generated:
+        category_data["title"] = generated[:200]
     return result
 
 
@@ -258,10 +298,13 @@ class GroqExtractor:
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
-            # GPT-OSS reasoning output must be hidden/parsed when JSON mode is used.
-            # Otherwise reasoning tokens can interfere with JSON validation at Groq.
-            "reasoning_format": "hidden",
         }
+
+        # GPT-OSS does not support reasoning_format. Groq exposes reasoning control
+        # for GPT-OSS through include_reasoning instead; setting it false keeps the
+        # reasoning field out while preserving JSON-mode compatibility.
+        if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
+            payload["include_reasoning"] = False
 
         try:
             response = requests.post(

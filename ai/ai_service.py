@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 import logging
+import re
+import time
 
 import config
 from ai.extractor import AIExtractionError, GroqExtractor
@@ -29,6 +31,30 @@ class AIProcessingService:
             getattr(exc, "provider", "groq"), getattr(exc, "status", None), getattr(self.extractor, "model", None),
             getattr(exc, "reason", None), record.get("message_id"), record.get("channel_username"), str(exc), exc_info=True,
         )
+
+    @staticmethod
+    def _rate_limit_wait(exc, retry_number):
+        """Use Groq's suggested wait time when present, otherwise exponential backoff."""
+        text = str(exc)
+        match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", text, re.IGNORECASE)
+        if match:
+            wait = float(match.group(1))
+        else:
+            wait = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
+        wait = max(0.5, min(wait, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
+        print(f"[AI] Groq rate limit reached; waiting {wait:.1f}s before retry {retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES}...")
+        time.sleep(wait)
+
+    def _extract_with_retry(self, source_text, record, progress=False):
+        attempts = 0
+        while True:
+            try:
+                return self.extractor.extract(source_text)
+            except AIExtractionError as exc:
+                if getattr(exc, "status", None) != 429 or attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
+                    raise
+                attempts += 1
+                self._rate_limit_wait(exc, attempts)
 
     def _deliver_to_advertio(self, record, category, data):
         if not self.advertio_service or category != "housinglist":
@@ -75,9 +101,7 @@ class AIProcessingService:
 
             self.repository.mark_ai_processing(record["message_id"], record["channel_username"])
             try:
-                # Groq rate-limit retry/backoff is handled centrally by GroqExtractor.
-                # This avoids nested retry loops and makes the configured cooldown apply once.
-                category, data = self.extractor.extract(source_text)
+                category, data = self._extract_with_retry(source_text, record, progress=progress)
                 self.repository.save_category_record(record["id"], category, data)
                 self.repository.mark_ai_result(
                     message_id=record["message_id"], channel_username=record["channel_username"], success=True,
@@ -98,18 +122,12 @@ class AIProcessingService:
                     print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: {getattr(exc, 'reason', 'ai_error')}")
                 if exc.stop_queue:
                     stopped = True
-                    logger.error(
-                        "[AI QUEUE STOPPED] provider=groq status=403 model=%s reason=%s; remaining messages stay pending",
-                        self.extractor.model, getattr(exc, "reason", "permissions_error"),
-                    )
+                    logger.error("[AI QUEUE STOPPED] provider=groq status=403 model=%s reason=%s; remaining messages stay pending", self.extractor.model, getattr(exc, "reason", "permissions_error"))
                     if progress:
                         print("[AI] queue stopped after provider permission error; remaining messages remain pending")
                     break
             except Exception:
-                logger.exception(
-                    "[AI ERROR] provider=groq model=%s reason=unexpected_error message_id=%s channel=%s",
-                    self.extractor.model, record.get("message_id"), record.get("channel_username"),
-                )
+                logger.exception("[AI ERROR] provider=groq model=%s reason=unexpected_error message_id=%s channel=%s", self.extractor.model, record.get("message_id"), record.get("channel_username"))
                 self.repository.mark_ai_result(
                     message_id=record["message_id"], channel_username=record["channel_username"], success=False,
                     ai_processed_at=datetime.now(timezone.utc).isoformat(),

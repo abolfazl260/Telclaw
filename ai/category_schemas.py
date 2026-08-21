@@ -24,18 +24,77 @@ CATEGORY_FIELDS = {
     ),
 }
 
-# Advertio housing requirements are deliberately explicit so the extractor can
-# produce a compact, predictable object instead of a large all-fields document.
-REQUIRED_FIELDS = {
-    "housinglist": (
-        "listing_type", "property_type", "bedrooms", "price", "currency",
-        "country_code", "province", "city", "title",
-    ),
+# Canada is the platform default. These mappings cover common cities and
+# neighborhoods so an omitted country/province can still be canonicalized
+# without inventing a location from arbitrary text.
+_CANADIAN_CITY_PROVINCE = {
+    "toronto": "Ontario", "mississauga": "Ontario", "brampton": "Ontario",
+    "markham": "Ontario", "vaughan": "Ontario", "richmond hill": "Ontario",
+    "ottawa": "Ontario", "hamilton": "Ontario", "london": "Ontario",
+    "waterloo": "Ontario", "kitchener": "Ontario", "windsor": "Ontario",
+    "vancouver": "British Columbia", "burnaby": "British Columbia",
+    "richmond": "British Columbia", "surrey": "British Columbia",
+    "coquitlam": "British Columbia", "kelowna": "British Columbia",
+    "victoria": "British Columbia", "calgary": "Alberta", "edmonton": "Alberta",
+    "red deer": "Alberta", "montreal": "Quebec", "laval": "Quebec",
+    "quebec city": "Quebec", "gatineau": "Quebec", "winnipeg": "Manitoba",
+    "halifax": "Nova Scotia", "saskatoon": "Saskatchewan", "regina": "Saskatchewan",
+    "st. john's": "Newfoundland and Labrador", "st john's": "Newfoundland and Labrador",
+    "fredericton": "New Brunswick", "moncton": "New Brunswick",
+    "charlottetown": "Prince Edward Island", "yellowknife": "Northwest Territories",
+    "whitehorse": "Yukon", "iqaluit": "Nunavut",
+}
+
+_CANADIAN_NEIGHBORHOODS = {
+    "yonge": ("Toronto", "Ontario"), "eglinton": ("Toronto", "Ontario"),
+    "yonge and eglinton": ("Toronto", "Ontario"), "midtown": ("Toronto", "Ontario"),
+    "downtown toronto": ("Toronto", "Ontario"), "north york": ("Toronto", "Ontario"),
+    "scarborough": ("Toronto", "Ontario"), "etobicoke": ("Toronto", "Ontario"),
+    "leslieville": ("Toronto", "Ontario"), "liberty village": ("Toronto", "Ontario"),
+    "the annex": ("Toronto", "Ontario"), "kensingston market": ("Toronto", "Ontario"),
+    "downtown vancouver": ("Vancouver", "British Columbia"), "kitsilano": ("Vancouver", "British Columbia"),
+    "yaletown": ("Vancouver", "British Columbia"), "gastown": ("Vancouver", "British Columbia"),
+    "burnaby": ("Burnaby", "British Columbia"), "richmond bc": ("Richmond", "British Columbia"),
 }
 
 
+def _infer_housing_location(data):
+    """Canonicalize housing location using Canada as the safe default."""
+    if not isinstance(data, dict):
+        return data
+    city = str(data.get("city") or "").strip()
+    province = str(data.get("province") or "").strip()
+    country = str(data.get("country_code") or "").strip().upper()
+    neighborhood = str(data.get("neighborhood") or "").strip().lower()
+
+    # Housing on this platform is Canada-only. Never emit another canonical country.
+    if not country:
+        country = "CA"
+    elif country != "CA":
+        country = "CA"
+
+    city_key = city.lower()
+    if city_key in _CANADIAN_CITY_PROVINCE:
+        province = province or _CANADIAN_CITY_PROVINCE[city_key]
+        city = city or city_key.title()
+
+    if (not city or not province) and neighborhood:
+        # Exact/substring matching is intentionally conservative.
+        for name, (mapped_city, mapped_province) in _CANADIAN_NEIGHBORHOODS.items():
+            if name == neighborhood or name in neighborhood:
+                city = city or mapped_city
+                province = province or mapped_province
+                break
+
+    data["country_code"] = country
+    if province:
+        data["province"] = province
+    if city:
+        data["city"] = city
+    return data
+
+
 def _field_schema(field):
-    """Use a compact nullable JSON value for fields not required by Advertio."""
     if field in {"features", "skills"}:
         return {"type": ["array", "null"], "items": {"type": "string"}}
     if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity"}:
@@ -46,20 +105,14 @@ def _field_schema(field):
 
 
 def build_json_schema():
-    """Build a compact schema compatible with Groq JSON Schema structured outputs."""
     category_data = {}
     for category, fields in CATEGORY_FIELDS.items():
-        # Do not force every optional field to be generated. Requiring dozens of
-        # nullable fields wastes completion tokens and can cause Groq to hit its
-        # completion limit before producing valid JSON.
-        required = list(REQUIRED_FIELDS.get(category, ()))
         category_data[category] = {
             "type": "object",
             "additionalProperties": False,
             "properties": {field: _field_schema(field) for field in fields},
-            "required": required,
+            "required": list(fields),
         }
-
     return {
         "type": "object",
         "additionalProperties": False,
@@ -68,8 +121,8 @@ def build_json_schema():
             "data": {
                 "type": "object",
                 "additionalProperties": False,
-                "properties": {category: category_data[category] for category in CATEGORIES},
-                "required": [],
+                "properties": {category: {**category_data[category]} for category in CATEGORIES},
+                "required": list(CATEGORIES),
             },
         },
         "required": ["category", "data"],
@@ -85,14 +138,11 @@ def validate_result(result):
     data_container = result.get("data")
     if not isinstance(data_container, dict):
         raise ValueError("AI result data must be an object")
-
     data = data_container.get(category)
     if not isinstance(data, dict):
         raise ValueError(f"AI result data.{category} must be an object")
-
     allowed = set(CATEGORY_FIELDS[category])
     normalized = {key: value for key, value in data.items() if key in allowed}
-    missing = [field for field in REQUIRED_FIELDS.get(category, ()) if normalized.get(field) in (None, "")]
-    if missing:
-        raise ValueError(f"Missing required {category} fields: {', '.join(missing)}")
+    if category == "housinglist":
+        normalized = _infer_housing_location(normalized)
     return category, normalized

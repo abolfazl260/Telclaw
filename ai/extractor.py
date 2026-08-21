@@ -87,6 +87,7 @@ def _title_is_english(title):
 
 
 def _validate_english_title(result):
+    """Validate every returned marketplace title without changing its content."""
     data = result.get("data") if isinstance(result, dict) else None
     if not isinstance(data, dict):
         return result
@@ -174,8 +175,6 @@ class GroqExtractor:
             return "rate_limit"
         if status >= 500:
             return "server_error"
-        if "json_validate_failed" in text or "failed to generate json" in text:
-            return "invalid_json_generation"
         return "provider_error"
 
     def _log_request_config(self):
@@ -202,55 +201,11 @@ class GroqExtractor:
         print(diagnostic)
         logger.error(
             "Groq provider error: status=%s model=%s reason=%s request_id=%s response=%s",
-            status, model, reason, request_id or "<none>", response_detail[:4000],
-        )
-
-    @staticmethod
-    def _retry_after_seconds(response, attempt):
-        retry_after = response.headers.get("Retry-After") or response.headers.get("retry-after")
-        reset_tokens = response.headers.get("x-ratelimit-reset-tokens")
-        detail = response.text or ""
-        hinted = None
-        for value in (retry_after, reset_tokens):
-            if not value:
-                continue
-            match = re.search(r"(\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)?", str(value), re.I)
-            if match:
-                hinted = max(hinted or 0.0, float(match.group(1)))
-        if hinted is None:
-            match = re.search(r"try again in\s+(\d+(?:\.\d+)?)\s*s", detail, re.I)
-            if match:
-                hinted = float(match.group(1))
-        exponential = config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS * (2 ** max(0, attempt - 1))
-        wait_seconds = max(hinted or 0.0, exponential, config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS)
-        return min(wait_seconds, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
-
-    @staticmethod
-    def _is_invalid_json_generation(status, detail):
-        if status != 400:
-            return False
-        text = (detail or "").lower()
-        return "json_validate_failed" in text or "failed to generate json" in text or "max completion tokens reached" in text
-
-    def _request(self, processed_text, *, compact=False):
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": _build_extraction_prompt(compact=compact)},
-                {"role": "user", "content": processed_text},
-            ],
-            "temperature": 0,
-            "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
-            "response_format": {"type": "json_object"},
-        }
-        return requests.post(
-            self.ENDPOINT,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=self.timeout,
+            status,
+            model,
+            reason,
+            request_id or "<none>",
+            response_detail[:4000],
         )
 
     def extract(self, processed_text):
@@ -259,52 +214,46 @@ class GroqExtractor:
         if not isinstance(processed_text, str) or not processed_text.strip():
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
-        max_rate_retries = config.GROQ_RATE_LIMIT_MAX_RETRIES
-        invalid_json_retries = config.GROQ_INVALID_JSON_MAX_RETRIES
-        rate_attempt = 0
-        json_attempt = 0
-        compact = False
+        self.rate_limiter.wait()
+        self._log_request_config()
 
-        while True:
-            self.rate_limiter.wait()
-            self._log_request_config()
-            try:
-                response = self._request(processed_text, compact=compact)
-            except requests.RequestException as exc:
-                raise AIExtractionError(
-                    f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
-                    reason="network_error",
-                ) from exc
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _build_extraction_prompt()},
+                {"role": "user", "content": processed_text},
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
 
-            if response.ok:
-                break
+        try:
+            response = requests.post(
+                self.ENDPOINT,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise AIExtractionError(
+                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
+                reason="network_error",
+            ) from exc
 
+        if not response.ok:
             detail = response.text.strip()
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
-
-            if response.status_code == 429 and rate_attempt < max_rate_retries:
-                rate_attempt += 1
-                wait_seconds = self._retry_after_seconds(response, rate_attempt)
-                print(f"[AI] Groq rate limit reached. Waiting {wait_seconds:.1f}s before retry {rate_attempt}/{max_rate_retries}...")
-                logger.warning(
-                    "Groq rate limit: waiting %.1fs before retry %s/%s request_id=%s",
-                    wait_seconds, rate_attempt, max_rate_retries, request_id or "<none>",
-                )
-                time.sleep(wait_seconds)
-                continue
-
-            if self._is_invalid_json_generation(response.status_code, detail) and json_attempt < invalid_json_retries:
-                json_attempt += 1
-                compact = True
-                print(f"[AI] Groq JSON generation failed. Retrying with compact schema {json_attempt}/{invalid_json_retries}...")
-                logger.warning(
-                    "Groq JSON generation failed; retrying compact prompt attempt=%s/%s request_id=%s",
-                    json_attempt, invalid_json_retries, request_id or "<none>",
-                )
-                continue
-
-            self._log_provider_error(response.status_code, self.model, reason, detail, request_id=request_id)
+            self._log_provider_error(
+                response.status_code,
+                self.model,
+                reason,
+                detail,
+                request_id=request_id,
+            )
             diagnostic = [
                 "provider=groq",
                 f"status={response.status_code}",
@@ -333,7 +282,7 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
-            result = _normalize_defaults(result)
+            result = _ensure_titles(result, processed_text)
             result = _normalize_currencies(result)
             result = _validate_english_title(result)
             return validate_result(result)

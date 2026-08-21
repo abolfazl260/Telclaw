@@ -99,6 +99,40 @@ def _validate_english_title(result):
     return result
 
 
+def _fallback_title(source_text):
+    """Create a source-derived fallback title when the provider omits one."""
+    if not isinstance(source_text, str):
+        return None
+    lines = [re.sub(r"\s+", " ", line).strip() for line in source_text.splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return None
+    title = lines[0]
+    title = re.sub(r"https?://\S+|www\.\S+", "", title, flags=re.IGNORECASE)
+    title = re.sub(r"#[\w-]+", "", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title[:200] or None
+
+
+def _ensure_titles(result, source_text):
+    """Ensure every selected category has a non-empty title."""
+    if not isinstance(result, dict):
+        return result
+    category = result.get("category")
+    data = result.get("data")
+    if category not in CATEGORIES or not isinstance(data, dict):
+        return result
+    category_data = data.get(category)
+    if not isinstance(category_data, dict):
+        return result
+    title = category_data.get("title")
+    if not isinstance(title, str) or not title.strip():
+        fallback = _fallback_title(source_text)
+        if fallback:
+            category_data["title"] = fallback
+    return result
+
+
 def _normalize_defaults(result):
     """Apply safe platform defaults before strict local validation."""
     if not isinstance(result, dict):
@@ -110,7 +144,6 @@ def _normalize_defaults(result):
 
     category_data = data[category]
     if category == "housinglist":
-        # Advertio is Canada-only. A missing country is therefore safely CA.
         if not str(category_data.get("country_code") or "").strip():
             category_data["country_code"] = "CA"
         if not str(category_data.get("currency") or "").strip():
@@ -225,6 +258,9 @@ class GroqExtractor:
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
+            # GPT-OSS reasoning output must be hidden/parsed when JSON mode is used.
+            # Otherwise reasoning tokens can interfere with JSON validation at Groq.
+            "reasoning_format": "hidden",
         }
 
         try:
@@ -283,6 +319,7 @@ class GroqExtractor:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
             result = _ensure_titles(result, processed_text)
+            result = _normalize_defaults(result)
             result = _normalize_currencies(result)
             result = _validate_english_title(result)
             return validate_result(result)

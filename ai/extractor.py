@@ -17,12 +17,13 @@ logger = logging.getLogger("telclaw.ai")
 class AIExtractionError(RuntimeError):
     """An AI failure whose details are diagnostic-only and must not reach message storage."""
 
-    def __init__(self, message, *, status=None, reason=None, provider="groq", stop_queue=False):
+    def __init__(self, message, *, status=None, reason=None, provider="groq", stop_queue=False, retry_after=None):
         super().__init__(message)
         self.status = status
         self.reason = reason
         self.provider = provider
         self.stop_queue = stop_queue
+        self.retry_after = retry_after
 
 
 def _build_extraction_prompt(compact=False):
@@ -72,7 +73,6 @@ Allowed fields:
 
 
 def _title_is_english(title):
-    """Reject titles containing characters from common non-Latin scripts."""
     if not isinstance(title, str) or not title.strip():
         return False
     if re.search(r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff]", title):
@@ -87,7 +87,6 @@ def _title_is_english(title):
 
 
 def _validate_english_title(result):
-    """Validate every returned marketplace title without changing its content."""
     data = result.get("data") if isinstance(result, dict) else None
     if not isinstance(data, dict):
         return result
@@ -100,10 +99,8 @@ def _validate_english_title(result):
 
 
 def _english_fallback_title(category, category_data):
-    """Build a deterministic English marketplace title from already extracted fields."""
     if not isinstance(category_data, dict):
         return None
-
     if category == "housinglist":
         listing_type = str(category_data.get("listing_type") or "rent").strip().lower()
         action = "Room for Rent" if listing_type == "roommate" else "Property for Rent"
@@ -115,38 +112,30 @@ def _english_fallback_title(category, category_data):
         elif listing_type != "roommate":
             action = f"{property_type.title()} for Rent"
         return f"{action} in {city}" if city else action
-
     if category == "joblist":
         job_title = str(category_data.get("job_title") or category_data.get("position") or "Job Opportunity").strip()
         city = str(category_data.get("city") or "").strip()
         return f"{job_title} in {city}" if city else job_title
-
     if category == "transferlist":
         city = str(category_data.get("city") or category_data.get("from_city") or "").strip()
         return f"Property Transfer Opportunity in {city}" if city else "Property Transfer Opportunity"
-
     return "Marketplace Listing"
 
 
 def _fallback_title(source_text):
-    """Return a source-derived title only when it is already English."""
     if not isinstance(source_text, str):
         return None
     lines = [re.sub(r"\s+", " ", line).strip() for line in source_text.splitlines()]
     lines = [line for line in lines if line]
     if not lines:
         return None
-    title = lines[0]
-    title = re.sub(r"https?://\S+|www\.\S+", "", title, flags=re.IGNORECASE)
+    title = re.sub(r"https?://\S+|www\.\S+", "", lines[0], flags=re.IGNORECASE)
     title = re.sub(r"#[\w-]+", "", title)
     title = re.sub(r"\s+", " ", title).strip()
-    if not _title_is_english(title):
-        return None
-    return title[:200] or None
+    return title[:200] if _title_is_english(title) else None
 
 
 def _ensure_titles(result, source_text):
-    """Ensure every selected category has a non-empty English title."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
@@ -156,17 +145,14 @@ def _ensure_titles(result, source_text):
     category_data = data.get(category)
     if not isinstance(category_data, dict):
         return result
-
     title = category_data.get("title")
     if isinstance(title, str) and title.strip() and _title_is_english(title):
         category_data["title"] = title.strip()[:200]
         return result
-
     fallback = _fallback_title(source_text)
     if fallback:
         category_data["title"] = fallback
         return result
-
     generated = _english_fallback_title(category, category_data)
     if generated:
         category_data["title"] = generated[:200]
@@ -174,38 +160,30 @@ def _ensure_titles(result, source_text):
 
 
 def _normalize_defaults(result):
-    """Apply safe platform defaults before strict local validation."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
     data = result.get("data")
     if not isinstance(data, dict) or category not in data or not isinstance(data[category], dict):
         return result
-
     category_data = data[category]
     if category == "housinglist":
-        if not str(category_data.get("country_code") or "").strip():
-            category_data["country_code"] = "CA"
-        if not str(category_data.get("currency") or "").strip():
-            category_data["currency"] = "CAD"
+        category_data.setdefault("country_code", "CA")
+        category_data.setdefault("currency", "CAD")
     elif category == "transferlist":
-        if not str(category_data.get("currency") or "").strip():
-            category_data["currency"] = "CAD"
-    elif category == "joblist":
-        if not str(category_data.get("salary_currency") or "").strip() and category_data.get("salary") is not None:
-            category_data["salary_currency"] = "CAD"
+        category_data.setdefault("currency", "CAD")
+    elif category == "joblist" and category_data.get("salary") is not None:
+        category_data.setdefault("salary_currency", "CAD")
     return result
 
 
 def _normalize_currencies(result):
-    """Reject explicit non-CAD currencies instead of silently converting them."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
     data = result.get("data")
     if not isinstance(data, dict) or category not in data or not isinstance(data[category], dict):
         return result
-
     category_data = data[category]
     if category in {"housinglist", "transferlist"}:
         currency = category_data.get("currency")
@@ -229,9 +207,7 @@ class GroqExtractor:
         self.api_key = api_key or config.GROQ_API_KEY
         self.model = model or config.GROQ_MODEL
         self.timeout = timeout
-        self.rate_limiter = rate_limiter or RateLimiter(
-            requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE
-        )
+        self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE)
 
     @staticmethod
     def _provider_reason(status, detail):
@@ -239,7 +215,7 @@ class GroqExtractor:
         if status == 401:
             return "invalid_api_key"
         if status == 403:
-            if "model" in text and ("block" in text or "permission" in text or "access" in text):
+            if "model" in text and any(x in text for x in ("block", "permission", "access")):
                 return "model_blocked"
             return "permissions_error"
         if status == 404:
@@ -250,35 +226,45 @@ class GroqExtractor:
             return "server_error"
         return "provider_error"
 
-    def _log_request_config(self):
-        logger.warning("[DEBUG GROQ REQUEST] MODEL=%s ENDPOINT=%s", self.model, self.ENDPOINT)
-        print(
-            "\n[DEBUG GROQ REQUEST]\n"
-            f"MODEL:\n{self.model}\n"
-            f"ENDPOINT:\n{self.ENDPOINT}\n"
+    @staticmethod
+    def _parse_retry_after(headers, detail):
+        """Return provider-requested wait seconds from headers/body, if available."""
+        for name in ("retry-after", "Retry-After"):
+            value = headers.get(name)
+            if value:
+                try:
+                    return max(0.0, float(value))
+                except (TypeError, ValueError):
+                    pass
+        for name in ("x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+            value = headers.get(name)
+            if value:
+                match = re.search(r"([0-9]+(?:\.[0-9]+)?)", str(value))
+                if match:
+                    return max(0.0, float(match.group(1)))
+        text = detail or ""
+        patterns = (
+            r"try again in\s*(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s)?",
+            r"retry[- ]after[:=\s]+(\d+(?:\.\d+)?)\s*s?",
         )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                if len(match.groups()) == 2:
+                    minutes = float(match.group(1) or 0)
+                    seconds = float(match.group(2) or 0)
+                    return minutes * 60 + seconds
+                return float(match.group(1))
+        return None
+
+    def _log_request_config(self):
+        logger.debug("Groq request model=%s endpoint=%s", self.model, self.ENDPOINT)
 
     @staticmethod
-    def _log_provider_error(status, model, reason, detail, request_id=None):
-        response_detail = detail or "<empty>"
-        diagnostic = (
-            "\n[AI PROVIDER ERROR]\n"
-            "Provider: Groq\n"
-            f"HTTP Status: {status}\n"
-            f"Model: {model}\n"
-            f"Reason: {reason}\n"
-            f"Response: {response_detail[:4000]}\n"
-        )
-        if request_id:
-            diagnostic += f"Request ID: {request_id}\n"
-        print(diagnostic)
+    def _log_provider_error(status, model, reason, detail, request_id=None, retry_after=None):
         logger.error(
-            "Groq provider error: status=%s model=%s reason=%s request_id=%s response=%s",
-            status,
-            model,
-            reason,
-            request_id or "<none>",
-            response_detail[:4000],
+            "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
+            status, model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", (detail or "<empty>")[:4000],
         )
 
     def extract(self, processed_text):
@@ -289,30 +275,23 @@ class GroqExtractor:
 
         self.rate_limiter.wait()
         self._log_request_config()
-
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _build_extraction_prompt()},
-                {"role": "user", "content": processed_text},
+                {"role": "system", "content": _build_extraction_prompt(compact=True)},
+                {"role": "user", "content": processed_text.strip()},
             ],
             "temperature": 0,
+            "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
             "response_format": {"type": "json_object"},
         }
-
-        # GPT-OSS does not support reasoning_format. Groq exposes reasoning control
-        # for GPT-OSS through include_reasoning instead; setting it false keeps the
-        # reasoning field out while preserving JSON-mode compatibility.
         if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
             payload["include_reasoning"] = False
 
         try:
             response = requests.post(
                 self.ENDPOINT,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                 json=payload,
                 timeout=self.timeout,
             )
@@ -326,27 +305,22 @@ class GroqExtractor:
             detail = response.text.strip()
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
-            self._log_provider_error(
-                response.status_code,
-                self.model,
-                reason,
-                detail,
-                request_id=request_id,
-            )
+            retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
+            self._log_provider_error(response.status_code, self.model, reason, detail, request_id, retry_after)
             diagnostic = [
-                "provider=groq",
-                f"status={response.status_code}",
-                f"model={self.model}",
-                f"reason={reason}",
-                f"response={detail[:4000] or '<empty>'}",
+                "provider=groq", f"status={response.status_code}", f"model={self.model}",
+                f"reason={reason}", f"response={detail[:4000] or '<empty>'}",
             ]
             if request_id:
                 diagnostic.append(f"request_id={request_id}")
+            if retry_after is not None:
+                diagnostic.append(f"retry_after={retry_after:.3f}")
             raise AIExtractionError(
                 "Groq request failed: " + "; ".join(diagnostic),
                 status=response.status_code,
                 reason=reason,
                 stop_queue=response.status_code == 403,
+                retry_after=retry_after,
             )
 
         try:
@@ -367,7 +341,4 @@ class GroqExtractor:
             result = _validate_english_title(result)
             return validate_result(result)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise AIExtractionError(
-                f"Invalid Groq JSON output: {exc}",
-                reason="invalid_provider_output",
-            ) from exc
+            raise AIExtractionError(f"Invalid Groq JSON output: {exc}", reason="invalid_provider_output") from exc

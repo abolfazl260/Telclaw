@@ -5,6 +5,7 @@ or Telegram implementation details to callers.
 """
 
 from collection.crawler import CRAWL_MODE_ALL
+import config
 from services.channel_service import ChannelService
 from services.scheduler_service import SchedulerService
 
@@ -34,6 +35,14 @@ class CrawlerService:
             raise ValueError("Start date cannot be later than end date")
 
         channels = self.channels_for_category(category)
+        spacing = (
+            float(channel_interval_minutes)
+            if channel_interval_minutes is not None
+            else float(config.CHANNEL_INTERVAL_MINUTES)
+        )
+        if spacing < 0:
+            raise ValueError("Channel interval cannot be negative")
+
         jobs = []
         for index, channel in enumerate(channels):
             username = channel.get("username")
@@ -46,11 +55,7 @@ class CrawlerService:
                     from_date,
                     to_date,
                     interval_minutes=interval_minutes,
-                    start_delay_minutes=(
-                        float(channel_interval_minutes) * index
-                        if channel_interval_minutes is not None
-                        else None
-                    ),
+                    start_delay_minutes=spacing * index,
                     crawl_mode=crawl_mode,
                 )
             )

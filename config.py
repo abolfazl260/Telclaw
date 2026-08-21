@@ -46,6 +46,17 @@ AI_INTERVAL_MINUTES = float(os.getenv("TELCLAW_AI_INTERVAL_MINUTES", "1"))
 
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 
+# Optional, isolated Telegram Bot API monitor. It has no dependency on the
+# crawler's Telethon client/session and can be disabled without changing flow.
+TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "false").lower() in {
+    "1", "true", "yes", "on"
+}
+TELEGRAM_BOT_TOKEN = os.getenv("TELCLAW_TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELCLAW_TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_CHAT_USERNAME = os.getenv("TELCLAW_TELEGRAM_CHAT_USERNAME", "").strip()
+TELEGRAM_REPORT_INTERVAL_MINUTES = max(1, int(os.getenv("TELCLAW_TELEGRAM_REPORT_INTERVAL_MINUTES", "5")))
+TELEGRAM_ERROR_HISTORY_SIZE = max(10, int(os.getenv("TELCLAW_TELEGRAM_ERROR_HISTORY_SIZE", "100")))
+
 GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
 GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
 if not GROQ_MODEL:

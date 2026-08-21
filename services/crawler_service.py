@@ -27,6 +27,7 @@ class CrawlerService:
         from_date,
         to_date,
         interval_minutes=None,
+        channel_interval_minutes=None,
         crawl_mode=CRAWL_MODE_ALL,
     ):
         if from_date > to_date:
@@ -34,7 +35,7 @@ class CrawlerService:
 
         channels = self.channels_for_category(category)
         jobs = []
-        for channel in channels:
+        for index, channel in enumerate(channels):
             username = channel.get("username")
             if not username:
                 continue
@@ -45,6 +46,11 @@ class CrawlerService:
                     from_date,
                     to_date,
                     interval_minutes=interval_minutes,
+                    start_delay_minutes=(
+                        float(channel_interval_minutes) * index
+                        if channel_interval_minutes is not None
+                        else None
+                    ),
                     crawl_mode=crawl_mode,
                 )
             )

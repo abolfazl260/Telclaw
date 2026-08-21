@@ -1,9 +1,12 @@
 """System menu extensions for independently running database-backed queues."""
 
+import asyncio
+
 from colorama import Fore
 
 from ai.ai_service import AIProcessingService
 from ai.groq_connection_test import test_groq_connection
+from collection.media_downloader import download_photo_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
 from services.processing_service import ProcessingService
 import config
@@ -23,6 +26,20 @@ class SystemConsoleUI(ConsoleUI):
                 self.advertio_service = AdvertioDeliveryService()
             except AdvertioMappingError:
                 self.advertio_service = None
+
+    def _make_sync_media_downloader(self):
+        """Bridge the async Telethon media downloader into the AI worker thread."""
+        if self.client is None:
+            return None
+        loop = asyncio.get_running_loop()
+
+        def download(record):
+            future = asyncio.run_coroutine_threadsafe(
+                download_photo_for_record(self.client, record), loop
+            )
+            return future.result()
+
+        return download
 
     async def run_processing_queue(self):
         self.clear_screen()
@@ -46,6 +63,7 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("AI Processing Queue")
         self.show_message("Checking the AI queue in the database...", Fore.CYAN)
         try:
+            self.ai_service.set_media_downloader(self._make_sync_media_downloader())
             result = self.ai_service.process_pending_with_stats()
             if result.get("disabled"):
                 self.show_message("AI extraction is disabled in configuration.", Fore.YELLOW)

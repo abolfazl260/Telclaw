@@ -16,9 +16,9 @@ class SchedulerService:
     """Run continuous channel cycles in the order crawl -> process -> AI.
 
     The configured end date is used only for the first historical crawl. Every
-    later cycle switches to incremental collection, so newly published Telegram
-    messages are checked forever instead of being trapped inside the original
-    date range.
+    later cycle switches its date window to the current day, so newly published
+    Telegram messages are checked forever instead of being trapped inside the
+    original date range.
     """
 
     def __init__(self, crawl_job_service=None, processing_service=None, ai_service=None):
@@ -82,7 +82,6 @@ class SchedulerService:
         crawl_mode,
         start_delay_minutes=0,
     ):
-        # Keep channels/groups staggered so they do not all hit Telegram together.
         if start_delay_minutes > 0:
             print(
                 f"[SCHEDULER] @{channel_username} starts in "
@@ -101,16 +100,14 @@ class SchedulerService:
                         f"{cycle_from_date} -> {cycle_to_date}"
                     )
                 else:
-                    # Do not reuse the configured end date. The scheduler is now
-                    # a live watcher: each cycle targets the latest available day.
-                    # Keeping the previous day as the lower bound also gives a
-                    # small recovery window across midnight/restarts.
+                    # The configured end date is NOT reused. This is a live watcher.
+                    # Each cycle checks the current day for newly published messages.
                     today = date.today()
                     cycle_from_date = max(from_date, today)
                     cycle_to_date = today
                     print(
-                        f"[SCHEDULER] @{channel_username} incremental crawl: "
-                        f"{cycle_from_date} -> {cycle_to_date} (live)"
+                        f"[SCHEDULER] @{channel_username} live crawl: "
+                        f"{cycle_from_date} -> {cycle_to_date}"
                     )
 
                 await self.crawl_job.run_channel(
@@ -119,11 +116,9 @@ class SchedulerService:
                     cycle_from_date,
                     cycle_to_date,
                     crawl_mode=crawl_mode,
-                    incremental=not first_cycle,
                 )
 
-                # Processing and AI are mandatory downstream stages. They are
-                # invoked only after collection has returned for this channel.
+                # Mandatory downstream pipeline: crawl -> processing -> AI.
                 await self._run_post_crawl_pipeline(channel_username)
                 first_cycle = False
             except asyncio.CancelledError:

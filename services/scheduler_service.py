@@ -9,6 +9,7 @@ from colorama import Fore
 import config
 from ai.ai_service import AIProcessingService
 from collection.crawler import CRAWL_MODE_ALL
+from collection.media_downloader import download_photo_for_record
 from services.crawl_job_service import CrawlJobService
 from services.processing_service import ProcessingService
 from monitoring.telegram_monitor import get_telegram_monitor
@@ -31,7 +32,20 @@ class SchedulerService:
         session_name = getattr(session, "filename", None) or str(session)
         return f"{session_name}:{channel_username.lower().lstrip('@')}:{from_date}:{to_date}:{crawl_mode}"
 
-    async def _run_post_crawl_pipeline(self, channel_username, crawl_result=None):
+    @staticmethod
+    def _make_sync_media_downloader(client):
+        """Bridge the async Telethon downloader into the AI worker thread."""
+        loop = asyncio.get_running_loop()
+
+        def download(record):
+            future = asyncio.run_coroutine_threadsafe(
+                download_photo_for_record(client, record), loop
+            )
+            return future.result()
+
+        return download
+
+    async def _run_post_crawl_pipeline(self, client, channel_username, crawl_result=None):
         async with self._pipeline_lock:
             print(f"\n{Fore.CYAN}{'=' * 60}")
             print(f"{Fore.GREEN}✅ CRAWL COMPLETED: @{channel_username}")
@@ -45,6 +59,12 @@ class SchedulerService:
             processing_stats = await asyncio.to_thread(self.processing.process_pending_with_stats)
             print(f"{Fore.GREEN}✅ Normal processing completed | Found: {processing_stats['found']} | Processed: {processing_stats['processed']} | Failed: {processing_stats['failed']}")
             await self.monitor.report("processing", processing_stats)
+
+            # AI runs in a worker thread. The existing Telethon client remains
+            # owned by the main event loop, so provide a safe bridge to the
+            # existing media download operation. It is called only after AI
+            # accepts a housing advertisement and immediately before Advertio.
+            self.ai.set_media_downloader(self._make_sync_media_downloader(client))
 
             print(f"\n{Fore.CYAN}▸ Starting AI processing...")
             ai_stats = await asyncio.to_thread(self.ai.process_pending_with_stats)
@@ -90,7 +110,7 @@ class SchedulerService:
                     print(f"[SCHEDULER] @{channel_username} live crawl: {cycle_from_date} -> {cycle_to_date}")
 
                 crawl_result = await self.crawl_job.run_channel(client, channel_username, cycle_from_date, cycle_to_date, crawl_mode=crawl_mode)
-                await self._run_post_crawl_pipeline(channel_username, crawl_result)
+                await self._run_post_crawl_pipeline(client, channel_username, crawl_result)
                 first_cycle = False
             except asyncio.CancelledError:
                 raise

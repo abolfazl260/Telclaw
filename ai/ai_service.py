@@ -14,13 +14,23 @@ logger = logging.getLogger("telclaw.ai")
 
 
 class AIProcessingService:
-    def __init__(self, repository=None, extractor=None, advertio_service=None):
+    def __init__(self, repository=None, extractor=None, advertio_service=None, media_downloader=None):
         self.repository = repository or MessageRepository()
         self.extractor = extractor or GroqExtractor()
         self.advertio_service = advertio_service
+        self.media_downloader = media_downloader
         if self.advertio_service is None and config.ADVERTIO_INGEST_ENABLED:
             from delivery.advertio_service import AdvertioDeliveryService
             self.advertio_service = AdvertioDeliveryService()
+
+    def set_media_downloader(self, media_downloader):
+        """Set the existing Telegram media download operation for this AI run.
+
+        The callback is intentionally injected by the application layer because
+        AI processing is database-backed while the Telethon client is owned by
+        the running crawler/UI event loop.
+        """
+        self.media_downloader = media_downloader
 
     @staticmethod
     def _source_text(record):
@@ -62,11 +72,40 @@ class AIProcessingService:
                 attempts += 1
                 self._rate_limit_wait(exc, attempts)
 
+    def _prepare_media_for_advertio(self, record):
+        """Download only required media after AI acceptance and before Advertio."""
+        if record.get("media_type") != "photo":
+            return True
+
+        existing = record.get("media_path")
+        if existing:
+            from pathlib import Path
+            if Path(existing).is_file():
+                return True
+
+        if self.media_downloader is None:
+            raise RuntimeError("Telegram media downloader is not configured for this AI run")
+
+        media_path = self.media_downloader(record)
+        if not media_path:
+            raise RuntimeError("Telegram media download returned no file")
+
+        self.repository.update_message(
+            record["message_id"],
+            record["channel_username"],
+            media_path=media_path,
+        )
+        record["media_path"] = media_path
+        return True
+
     def _deliver_to_advertio(self, record, category, data):
         if not self.advertio_service or category != "housinglist":
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0}
         now = datetime.now(timezone.utc).isoformat()
         try:
+            # AI validation has already succeeded. Only now is a Telegram photo
+            # downloaded, immediately before the existing Advertio delivery flow.
+            self._prepare_media_for_advertio(record)
             result = self.advertio_service.deliver(record, data)
             status = "already_existed" if result.get("already_existed") else "sent"
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)

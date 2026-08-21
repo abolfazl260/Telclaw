@@ -1,6 +1,7 @@
 """Scheduling service for continuous crawl -> processing -> AI cycles."""
 
 import asyncio
+import time
 from datetime import date
 
 from colorama import Fore
@@ -90,7 +91,9 @@ class SchedulerService:
             await asyncio.sleep(start_delay_minutes * 60)
 
         first_cycle = True
+        next_run_at = time.monotonic()
         while True:
+            cycle_started_at = time.monotonic()
             try:
                 if first_cycle:
                     cycle_from_date = from_date
@@ -127,11 +130,16 @@ class SchedulerService:
                 print(f"[COLLECTION] Pipeline failed for {channel_username}: {exc}")
                 first_cycle = False
 
+            # Schedule the next START at a fixed interval rather than sleeping
+            # interval_minutes after the pipeline. This preserves the configured
+            # spacing between channels/groups even when processing takes time.
+            next_run_at += interval_minutes * 60
+            sleep_seconds = max(0, next_run_at - time.monotonic())
             print(
                 f"[COLLECTION] Next check for {channel_username} "
-                f"in {interval_minutes:g} minute(s)."
+                f"in {sleep_seconds / 60:g} minute(s)."
             )
-            await asyncio.sleep(interval_minutes * 60)
+            await asyncio.sleep(sleep_seconds)
 
     def schedule_channel(
         self,

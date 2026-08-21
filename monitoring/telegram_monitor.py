@@ -23,7 +23,7 @@ class TelegramMonitor:
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -56,11 +56,18 @@ class TelegramMonitor:
         elif text.startswith("/stop"):
             database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت گزارش‌های Telclaw متوقف شد.")
         elif text.startswith("/status"): await self._send(chat_id,await self._build_status_message())
+        elif text.startswith("/health"): await self._send(chat_id,await self._build_health_message())
         elif text.startswith("/source"): await self._send_source_chunks(chat_id)
     def _tehran_now(self): return datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
     async def _build_status_message(self):
         status=database.get_pipeline_status(); last=status.get("last_crawl") or "هنوز کرالی ثبت نشده"
         return ("📊 <b>Telclaw Current Status</b>\n\n" f"🟢 <b>System:</b> {html.escape(str(status['system']))}\n" f"📥 <b>Collected:</b> {status['collected']}\n" f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n" f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n" f"🤖 <b>AI pending:</b> {status['ai_pending']}\n" f"🤖 <b>AI failed:</b> {status['ai_failed']}\n" f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n" f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n" f"📦 <b>Total messages:</b> {status['total_messages']}\n" f"📡 <b>Channels:</b> {status['channels']}\n" f"👥 <b>Active subscribers:</b> {status['subscribers']}\n" f"🕐 <b>Current Tehran time:</b> {self._tehran_now()}\n" f"📥 <b>Last crawl:</b> {html.escape(str(last))} Tehran\n\n" f"🕐 <b>Checked:</b> {self._tehran_now()} Tehran")
+    async def _build_health_message(self):
+        health=database.get_pipeline_health()
+        icon=lambda state:"🟢" if state=="HEALTHY" else ("🟡" if state=="WARNING" else "🔴")
+        lines=["🏥 <b>TELCLAW SYSTEM HEALTH</b>","",f"📥 <b>Crawler activity:</b> {icon(health['crawler'])} {health['crawler']}",f"⚙️ <b>Processing:</b> {icon(health['processing'])} {health['processing']}",f"🤖 <b>AI:</b> {icon(health['ai'])} {health['ai']}",f"📤 <b>Advertio:</b> {icon(health['advertio'])} {health['advertio']}",f"🗄 <b>Database:</b> {icon(health['database'])} {health['database']}","",f"📥 <b>Last crawl:</b> {html.escape(str(health['last_crawl']))}",f"⚙️ <b>Last processing:</b> {html.escape(str(health['last_processing']))}",f"🤖 <b>Last AI:</b> {html.escape(str(health['last_ai']))}",f"📤 <b>Last Advertio:</b> {html.escape(str(health['last_advertio']))}","",f"📦 <b>Pipeline backlog:</b> {health['backlog']}",f"🚨 <b>Failed items:</b> {health['failed']}",f"🕐 <b>Tehran time:</b> {self._tehran_now()}"]
+        if health['warning']: lines.extend(["",f"⚠️ <b>Warning:</b> {html.escape(health['warning'])}"])
+        return "\n".join(lines)
     async def _send_source_chunks(self,chat_id):
         try:
             with open(config.CHANNELS_JSON,"r",encoding="utf-8") as f:data=json.load(f)

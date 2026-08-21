@@ -36,7 +36,11 @@ ADVERTIO_MEDIA_MAX_SIZE = int(os.getenv("TELCLAW_ADVERTIO_MEDIA_MAX_SIZE", str(8
 BASE_DELAY = int(os.getenv("TELCLAW_BASE_DELAY", "8"))
 RANDOM_DELAY_MAX = int(os.getenv("TELCLAW_RANDOM_DELAY_MAX", "400"))
 
+# How often each channel/group is checked again after its previous cycle.
 CRAWL_INTERVAL_MINUTES = float(os.getenv("TELCLAW_CRAWL_INTERVAL_MINUTES", "5"))
+# How much start-time spacing is kept between channels/groups in one category.
+# This prevents all Telegram targets from being hit at the same moment.
+CHANNEL_INTERVAL_MINUTES = float(os.getenv("TELCLAW_CHANNEL_INTERVAL_MINUTES", "1"))
 PROCESSING_INTERVAL_MINUTES = float(os.getenv("TELCLAW_PROCESSING_INTERVAL_MINUTES", "1"))
 AI_INTERVAL_MINUTES = float(os.getenv("TELCLAW_AI_INTERVAL_MINUTES", "1"))
 
@@ -54,8 +58,6 @@ GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = max(
     GROQ_RATE_LIMIT_MIN_WAIT_SECONDS,
     float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "180")),
 )
-# Keep JSON responses compact. This is configurable because Groq model limits
-# differ, but the default is enough for the deliberately minimal extraction shape.
 GROQ_MAX_COMPLETION_TOKENS = max(256, int(os.getenv("TELCLAW_GROQ_MAX_COMPLETION_TOKENS", "1200")))
 GROQ_INVALID_JSON_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_INVALID_JSON_MAX_RETRIES", "1")))
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {

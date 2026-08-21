@@ -1,4 +1,9 @@
-"""Independent Telegram Bot API monitor for Telclaw."""
+"""Independent Telegram Bot API monitor for Telclaw.
+
+The monitor is deliberately isolated from the Telethon crawler client. Users
+subscribe with /start and unsubscribe with /stop. Subscribers are persisted
+in SQLite so a process restart does not remove them.
+"""
 
 from __future__ import annotations
 
@@ -48,8 +53,23 @@ class TelegramMonitor:
         self._error_handler = _TelegramErrorHandler(self)
         self._error_handler.setFormatter(logging.Formatter("%(message)s"))
         logging.getLogger().addHandler(self._error_handler)
+        await self._register_commands()
         self._task = asyncio.create_task(self._poll_updates(), name="telegram-monitor-poll")
         logger.info("Telegram monitoring bot started")
+
+    async def _register_commands(self) -> None:
+        """Register commands shown by Telegram's '/' command suggestions."""
+        commands = [
+            {"command": "start", "description": "فعال‌سازی دریافت گزارش‌ها"},
+            {"command": "stop", "description": "توقف دریافت گزارش‌ها"},
+            {"command": "status", "description": "نمایش وضعیت فعلی سیستم"},
+        ]
+        try:
+            await self._api("setMyCommands", {"commands": commands})
+            logger.info("Telegram monitor commands registered")
+        except Exception:
+            # A command-menu failure must never stop the crawler.
+            logger.exception("Failed to register Telegram monitor commands")
 
     async def stop(self) -> None:
         self._stopping.set()

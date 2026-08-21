@@ -24,6 +24,9 @@ class MessageRepository:
     def get_advertio_pending(self, limit=100, channel_username=None):
         return database.get_advertio_pending_messages(limit=limit, channel_username=channel_username)
 
+    def get_latest_message_id(self, channel_username):
+        return database.get_latest_message_id(channel_username)
+
     def get_previous_messages_by_sender(self, sender_id, before_id):
         return database.get_previous_messages_by_sender(sender_id, before_id)
 

@@ -85,6 +85,18 @@ def test_all_three_rate_limited_returns_final_429():
     assert failover.active_index == 2
 
 
+def test_single_provider_over_200_returns_429_without_fake_failover():
+    failover = GroqProviderFailover([_providers()[0]])
+    failover.providers[0].extract = lambda text: (_ for _ in ()).throw(_error(305))
+
+    with pytest.raises(AIExtractionError) as raised:
+        failover.extract("message")
+
+    assert raised.value.status == 429
+    assert raised.value.retry_after == 305
+    assert failover.active_index == 0
+
+
 def test_authentication_error_does_not_switch():
     failover = GroqProviderFailover(_providers())
     failover.providers[0].extract = lambda text: (_ for _ in ()).throw(

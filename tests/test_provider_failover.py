@@ -1,12 +1,16 @@
+import os
+
 import pytest
+
+# config.py validates required runtime settings at import time. These values
+# are test-only placeholders and are never used for network requests.
+os.environ.setdefault("TELEGRAM_API_ID", "1")
+os.environ.setdefault("TELEGRAM_API_HASH", "test-hash")
+os.environ.setdefault("GROQ_API_KEY", "test-primary-key")
+os.environ.setdefault("TELCLAW_GROQ_MODEL", "test-model")
 
 from ai.extractor import AIExtractionError
 from ai.provider_failover import GroqProviderFailover
-
-
-class FakeResponse:
-    def __init__(self, status=200):
-        self.status = status
 
 
 def _providers():
@@ -80,7 +84,7 @@ def test_non_rate_limit_error_does_not_switch():
     assert failover.active_index == 0
 
 
-def test_recovered_api_one_regains_priority(monkeypatch):
+def test_recovered_api_one_regains_priority():
     failover = GroqProviderFailover(_providers())
     failover.providers[0].extract = lambda text: (_ for _ in ()).throw(_error(201))
     failover.providers[1].extract = lambda text: {"provider": 2}

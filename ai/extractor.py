@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-import time
 
 import requests
 
@@ -199,23 +198,15 @@ def _normalize_currencies(result):
 
 
 class GroqExtractor:
-    """Groq client using the OpenAI-compatible HTTP API with three-key failover."""
+    """Groq client using the OpenAI-compatible HTTP API."""
 
     ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
     def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None):
-        # Explicit api_key/model arguments remain backward compatible and mean
-        # "use this single provider". The normal path uses configured providers.
-        if api_key:
-            self.providers = [{"api_key": api_key, "model": model or config.GROQ_MODEL}]
-        else:
-            self.providers = list(getattr(config, "GROQ_PROVIDERS", [{"api_key": config.GROQ_API_KEY, "model": config.GROQ_MODEL}]))[:3]
+        self.api_key = api_key or config.GROQ_API_KEY
+        self.model = model or config.GROQ_MODEL
         self.timeout = timeout
         self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE)
-        self._provider_state = {
-            index: {"available_at": 0.0, "rate_limited": False}
-            for index in range(len(self.providers))
-        }
 
     @staticmethod
     def _provider_reason(status, detail):
@@ -261,157 +252,81 @@ class GroqExtractor:
                 return float(match.group(1))
         return None
 
-    def _recover_providers(self):
-        now = time.monotonic()
-        for index, state in self._provider_state.items():
-            if state["rate_limited"] and now >= state["available_at"]:
-                state["rate_limited"] = False
-                state["available_at"] = 0.0
-                logger.info("[AI] API #%s recovered", index + 1)
-
-    def _available_provider_indices(self):
-        self._recover_providers()
-        return [
-            index for index in range(len(self.providers))
-            if not self._provider_state[index]["rate_limited"]
-        ]
-
-    def _mark_rate_limited(self, index, wait_seconds):
-        wait_seconds = max(0.0, float(wait_seconds))
-        state = self._provider_state[index]
-        state["available_at"] = time.monotonic() + wait_seconds
-        state["rate_limited"] = True
-
-    def _request(self, provider_index, payload):
-        provider = self.providers[provider_index]
-        self.rate_limiter.wait()
-        with self.rate_limiter.slot():
-            return requests.post(
-                self.ENDPOINT,
-                headers={"Authorization": f"Bearer {provider['api_key']}", "Content-Type": "application/json"},
-                json=payload,
-                timeout=self.timeout,
-            )
-
     def extract(self, processed_text):
-        if not self.providers or not self.providers[0].get("api_key"):
+        if not self.api_key:
             raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
         if not isinstance(processed_text, str) or not processed_text.strip():
             raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
 
-        last_error = None
-        attempts = 0
-        max_attempts = max(1, config.GROQ_RATE_LIMIT_MAX_RETRIES + len(self.providers))
+        self.rate_limiter.wait()
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _build_extraction_prompt()},
+                {"role": "user", "content": processed_text.strip()},
+            ],
+            "temperature": 0,
+            "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
+            "response_format": {"type": "json_object"},
+        }
+        if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
+            payload["include_reasoning"] = False
 
-        while attempts < max_attempts:
-            available = self._available_provider_indices()
-            if not available:
-                raise last_error or AIExtractionError("All Groq APIs are temporarily unavailable", reason="rate_limit")
-            provider_index = available[0]
-            provider = self.providers[provider_index]
-            model = provider["model"]
-
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": _build_extraction_prompt()},
-                    {"role": "user", "content": processed_text.strip()},
-                ],
-                "temperature": 0,
-                "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
-                "response_format": {"type": "json_object"},
-            }
-            if model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
-                payload["include_reasoning"] = False
-
-            try:
-                response = self._request(provider_index, payload)
-            except requests.RequestException as exc:
-                raise AIExtractionError(
-                    f"Groq request failed: provider=groq; model={model}; transport={exc}",
-                    reason="network_error",
-                ) from exc
-
-            if response.status_code == 429:
-                detail = response.text.strip()
-                retry_after = self._parse_retry_after(response.headers, detail)
-                if retry_after is None:
-                    retry_after = min(
-                        config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS,
-                        config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS * (2 ** min(attempts, 5)),
-                    )
-
-                logger.warning("[AI] API #%s rate limited", provider_index + 1)
-                logger.warning("[AI] Required wait: %.0fs", retry_after)
-
-                if retry_after > config.GROQ_FAILOVER_THRESHOLD_SECONDS and provider_index < len(self.providers) - 1:
-                    self._mark_rate_limited(provider_index, retry_after)
-                    logger.warning("[AI] Wait exceeds %.0fs", config.GROQ_FAILOVER_THRESHOLD_SECONDS)
-                    logger.warning("[AI] Switching to API #%s", provider_index + 2)
-                    last_error = AIExtractionError(
-                        "Groq rate limit exceeded; failing over to next API",
-                        status=429,
-                        reason="rate_limit",
-                        retry_after=retry_after,
-                    )
-                    attempts += 1
-                    continue
-
-                if retry_after <= config.GROQ_FAILOVER_THRESHOLD_SECONDS:
-                    logger.info("[AI] API #%s retrying after %.0fs", provider_index + 1, retry_after)
-                    time.sleep(retry_after)
-                    attempts += 1
-                    continue
-
-                self._mark_rate_limited(provider_index, retry_after)
-                last_error = AIExtractionError(
-                    "Groq rate limit exceeded on final API",
-                    status=429,
-                    reason="rate_limit",
-                    retry_after=retry_after,
+        try:
+            with self.rate_limiter.slot():
+                response = requests.post(
+                    self.ENDPOINT,
+                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self.timeout,
                 )
-                attempts += 1
-                continue
+        except requests.RequestException as exc:
+            raise AIExtractionError(
+                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
+                reason="network_error",
+            ) from exc
 
-            if not response.ok:
-                detail = response.text.strip()
-                request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
-                reason = self._provider_reason(response.status_code, detail)
-                logger.error(
-                    "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s response=%s",
-                    response.status_code, model, reason, request_id or "<none>", detail[:4000] or "<empty>",
-                )
-                diagnostic = [
-                    "provider=groq", f"status={response.status_code}", f"model={model}",
-                    f"reason={reason}", f"response={detail[:4000] or '<empty>'}",
-                ]
-                if request_id:
-                    diagnostic.append(f"request_id={request_id}")
-                raise AIExtractionError(
-                    "Groq request failed: " + "; ".join(diagnostic),
-                    status=response.status_code,
-                    reason=reason,
-                    stop_queue=response.status_code == 403,
-                )
+        if not response.ok:
+            detail = response.text.strip()
+            request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+            reason = self._provider_reason(response.status_code, detail)
+            retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
+            logger.error(
+                "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
+                response.status_code, self.model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", detail[:4000] or "<empty>",
+            )
+            diagnostic = [
+                "provider=groq", f"status={response.status_code}", f"model={self.model}",
+                f"reason={reason}", f"response={detail[:4000] or '<empty>'}",
+            ]
+            if request_id:
+                diagnostic.append(f"request_id={request_id}")
+            if retry_after is not None:
+                diagnostic.append(f"retry_after={retry_after:.3f}")
+            raise AIExtractionError(
+                "Groq request failed: " + "; ".join(diagnostic),
+                status=response.status_code,
+                reason=reason,
+                stop_queue=response.status_code == 403,
+                retry_after=retry_after,
+            )
 
-            try:
-                response_data = response.json()
-                choices = response_data.get("choices", [])
-                if not choices:
-                    raise ValueError("No choices returned")
-                message = choices[0].get("message", {})
-                if message.get("refusal"):
-                    raise ValueError(f"Model refused extraction: {message['refusal']}")
-                output_text = message.get("content")
-                if not output_text:
-                    raise ValueError("No JSON output returned")
-                result = json.loads(output_text)
-                result = _ensure_titles(result, processed_text)
-                result = _normalize_defaults(result)
-                result = _normalize_currencies(result)
-                result = _validate_english_title(result)
-                return validate_result(result)
-            except (ValueError, TypeError, json.JSONDecodeError) as exc:
-                raise AIExtractionError(f"Invalid Groq JSON output: {exc}", reason="invalid_provider_output") from exc
-
-        raise last_error or AIExtractionError("Groq extraction failed after retries", reason="provider_error")
+        try:
+            response_data = response.json()
+            choices = response_data.get("choices", [])
+            if not choices:
+                raise ValueError("No choices returned")
+            message = choices[0].get("message", {})
+            if message.get("refusal"):
+                raise ValueError(f"Model refused extraction: {message['refusal']}")
+            output_text = message.get("content")
+            if not output_text:
+                raise ValueError("No JSON output returned")
+            result = json.loads(output_text)
+            result = _ensure_titles(result, processed_text)
+            result = _normalize_defaults(result)
+            result = _normalize_currencies(result)
+            result = _validate_english_title(result)
+            return validate_result(result)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise AIExtractionError(f"Invalid Groq JSON output: {exc}", reason="invalid_provider_output") from exc

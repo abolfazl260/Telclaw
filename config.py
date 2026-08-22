@@ -41,23 +41,19 @@ TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = float(os.getenv("TELCLAW_TELEGRAM_MON
 GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
 GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
 
-# Optional failover providers. Configure GROQ_API_KEY_2, GROQ_API_KEY_3, ...
-# and optionally TELCLAW_GROQ_MODEL_2, TELCLAW_GROQ_MODEL_3, ... .
-# The first provider always uses the existing GROQ_API_KEY/TELCLAW_GROQ_MODEL.
+# At most three Groq credentials are used, in priority order.
 def _build_groq_providers():
     providers = [{"api_key": GROQ_API_KEY, "model": GROQ_MODEL}]
-    index = 2
-    while True:
+    for index in (2, 3):
         key = os.getenv(f"GROQ_API_KEY_{index}", "").strip()
-        if not key:
-            break
-        model = os.getenv(f"TELCLAW_GROQ_MODEL_{index}", GROQ_MODEL).strip()
-        providers.append({"api_key": key, "model": model})
-        index += 1
+        if key:
+            model = os.getenv(f"TELCLAW_GROQ_MODEL_{index}", GROQ_MODEL).strip()
+            providers.append({"api_key": key, "model": model})
     return providers
 
 
 GROQ_PROVIDERS = _build_groq_providers()
+GROQ_FAILOVER_THRESHOLD_SECONDS = 200.0
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", "5")))
 GROQ_RATE_LIMIT_MIN_WAIT_SECONDS = max(1, float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MIN_WAIT_SECONDS", "30")))

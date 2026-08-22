@@ -71,16 +71,43 @@ def test_api_two_can_fail_over_to_api_three():
     assert failover.active_index == 2
 
 
-def test_non_rate_limit_error_does_not_switch():
+def test_all_three_rate_limited_returns_final_429():
+    failover = GroqProviderFailover(_providers())
+    failover.providers[0].extract = lambda text: (_ for _ in ()).throw(_error(201))
+    failover.providers[1].extract = lambda text: (_ for _ in ()).throw(_error(300))
+    failover.providers[2].extract = lambda text: (_ for _ in ()).throw(_error(400))
+
+    with pytest.raises(AIExtractionError) as raised:
+        failover.extract("message")
+
+    assert raised.value.status == 429
+    assert raised.value.retry_after == 400
+    assert failover.active_index == 2
+
+
+def test_authentication_error_does_not_switch():
     failover = GroqProviderFailover(_providers())
     failover.providers[0].extract = lambda text: (_ for _ in ()).throw(
-        AIExtractionError("bad request", status=400, reason="provider_error")
+        AIExtractionError("invalid key", status=401, reason="invalid_api_key")
     )
 
     with pytest.raises(AIExtractionError) as raised:
         failover.extract("message")
 
-    assert raised.value.status == 400
+    assert raised.value.status == 401
+    assert failover.active_index == 0
+
+
+def test_invalid_json_does_not_switch():
+    failover = GroqProviderFailover(_providers())
+    failover.providers[0].extract = lambda text: (_ for _ in ()).throw(
+        AIExtractionError("invalid output", reason="invalid_provider_output")
+    )
+
+    with pytest.raises(AIExtractionError) as raised:
+        failover.extract("message")
+
+    assert raised.value.reason == "invalid_provider_output"
     assert failover.active_index == 0
 
 

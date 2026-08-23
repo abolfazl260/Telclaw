@@ -11,6 +11,7 @@ removed when its original text is at least 80% similar to an earlier message.
 
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+import logging
 import re
 
 from processing.contracts import ProcessingRecord
@@ -19,6 +20,7 @@ from storage.message_repository import MessageRepository
 
 
 DUPLICATE_SIMILARITY_THRESHOLD = 0.80
+logger = logging.getLogger("telclaw.processing")
 
 
 class ProcessingService:
@@ -69,6 +71,18 @@ class ProcessingService:
                 return True, similarity
         return False, best_similarity
 
+    @staticmethod
+    def _log_failure(data, exc, *, reason="processing_exception"):
+        logger.error(
+            "[PROCESSING][FAILED] message_id=%s channel=%s reason=%s error_type=%s detail=%s",
+            data.get("message_id"),
+            data.get("channel_username"),
+            reason,
+            type(exc).__name__,
+            str(exc) or "<empty>",
+            exc_info=True,
+        )
+
     def process_pending(self, limit=500, channel_username=None):
         records = self.repository.get_pending(
             limit=limit, channel_username=channel_username
@@ -79,9 +93,6 @@ class ProcessingService:
 
         for data in records:
             try:
-                # IMPORTANT: this is the first processing operation. The duplicate
-                # decision uses raw_text/text from the original Crawl payload and
-                # can see already-processed historical messages from the same user.
                 is_duplicate, similarity = self._is_duplicate(data)
                 if is_duplicate:
                     self.repository.delete_message(
@@ -89,6 +100,13 @@ class ProcessingService:
                         channel_username=data["channel_username"],
                     )
                     duplicates_removed += 1
+                    logger.info(
+                        "[PROCESSING][DUPLICATE_REMOVED] message_id=%s channel=%s sender_id=%s similarity=%.2f%%",
+                        data.get("message_id"),
+                        data.get("channel_username"),
+                        data.get("sender_id"),
+                        similarity * 100,
+                    )
                     print(
                         "[PROCESS] duplicate removed: "
                         f"message={data['message_id']} "
@@ -98,7 +116,6 @@ class ProcessingService:
                     )
                     continue
 
-                # Only non-duplicates reach cleaning/normalization.
                 record = self.pipeline.process(ProcessingRecord(data=dict(data)))
                 result = record.data
                 self.repository.mark_processed(
@@ -113,10 +130,12 @@ class ProcessingService:
                 processed += 1
             except Exception as exc:
                 failed += 1
+                self._log_failure(data, exc)
                 print(
                     "[PROCESS] failed: "
                     f"message={data.get('message_id')} "
                     f"channel={data.get('channel_username')} "
+                    f"reason=processing_exception "
                     f"error={type(exc).__name__}: {exc}"
                 )
 

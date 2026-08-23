@@ -12,6 +12,7 @@ from collection.crawler import CRAWL_MODE_ALL
 from collection.media_downloader import download_photo_for_record
 from services.crawl_job_service import CrawlJobService
 from services.processing_service import ProcessingService
+from services.stage_control import get_stage_control
 from monitoring.telegram_monitor import get_telegram_monitor
 
 
@@ -23,8 +24,19 @@ class SchedulerService:
         self.processing = processing_service or ProcessingService()
         self.ai = ai_service or AIProcessingService()
         self.monitor = get_telegram_monitor()
+        self.stage_control = get_stage_control()
+        self.monitor.set_stage_skip_callback(self.request_stage_skip)
         self._tasks = {}
         self._pipeline_lock = asyncio.Lock()
+
+    def request_stage_skip(self, stage):
+        """Request a graceful skip of the currently running stage."""
+        if stage not in {"crawl", "processing", "ai", "advertio"}:
+            return False
+        accepted = self.stage_control.request_skip(stage)
+        if accepted:
+            print(f"[PIPELINE] Operator requested skip: {stage}")
+        return accepted
 
     @staticmethod
     def _task_key(client, channel_username, from_date, to_date, crawl_mode):
@@ -34,15 +46,10 @@ class SchedulerService:
 
     @staticmethod
     def _make_sync_media_downloader(client):
-        """Bridge the async Telethon downloader into the AI worker thread."""
         loop = asyncio.get_running_loop()
-
         def download(record):
-            future = asyncio.run_coroutine_threadsafe(
-                download_photo_for_record(client, record), loop
-            )
+            future = asyncio.run_coroutine_threadsafe(download_photo_for_record(client, record), loop)
             return future.result()
-
         return download
 
     async def _run_post_crawl_pipeline(self, client, channel_username, crawl_result=None):
@@ -55,30 +62,43 @@ class SchedulerService:
             crawl_stats.setdefault("channel", f"@{channel_username}")
             await self.monitor.report("crawl", crawl_stats)
 
-            print(f"{Fore.CYAN}▸ Starting normal information processing...")
-            processing_stats = await asyncio.to_thread(self.processing.process_pending_with_stats)
-            print(f"{Fore.GREEN}✅ Normal processing completed | Found: {processing_stats['found']} | Processed: {processing_stats['processed']} | Failed: {processing_stats['failed']}")
-            await self.monitor.report("processing", processing_stats)
+            self.stage_control.consume_skip("crawl")
 
-            # AI runs in a worker thread. The existing Telethon client remains
-            # owned by the main event loop, so provide a safe bridge to the
-            # existing media download operation. It is called only after AI
-            # accepts a housing advertisement and immediately before Advertio.
+            self.stage_control.clear("processing")
+            print(f"{Fore.CYAN}▸ Starting normal information processing...")
+            processing_stats = await asyncio.to_thread(
+                self.processing.process_pending_with_stats,
+                should_stop=lambda: self.stage_control.is_skip_requested("processing"),
+            )
+            if processing_stats.get("stopped"):
+                print(f"{Fore.YELLOW}⚠️ Processing stage skipped by operator; remaining records stay pending.")
+            else:
+                print(f"{Fore.GREEN}✅ Normal processing completed | Found: {processing_stats['found']} | Processed: {processing_stats['processed']} | Failed: {processing_stats['failed']}")
+            await self.monitor.report("processing", processing_stats)
+            self.stage_control.consume_skip("processing")
+
             self.ai.set_media_downloader(self._make_sync_media_downloader(client))
 
+            self.stage_control.clear("ai")
             print(f"\n{Fore.CYAN}▸ Starting AI processing...")
-            ai_stats = await asyncio.to_thread(self.ai.process_pending_with_stats)
+            ai_stats = await asyncio.to_thread(
+                self.ai.process_pending_with_stats,
+                should_stop=lambda: self.stage_control.is_skip_requested("ai"),
+            )
             if ai_stats.get("disabled"):
                 print(f"{Fore.YELLOW}⚠️ AI extraction is disabled in configuration.")
+            elif ai_stats.get("stopped"):
+                print(f"{Fore.YELLOW}⚠️ AI stage skipped by operator; remaining records stay pending.")
             else:
                 print(f"{Fore.GREEN}✅ AI processing completed | Found: {ai_stats['found']} | Processed: {ai_stats['processed']} | Skipped: {ai_stats['skipped']} | Failed: {ai_stats['failed']}")
-                if ai_stats.get("stopped"):
-                    print(f"{Fore.YELLOW}⚠️ AI queue stopped; remaining records stay pending.")
             await self.monitor.report("ai", {k: v for k, v in ai_stats.items() if k != "disabled"})
+            self.stage_control.consume_skip("ai")
 
             advertio_stats = ai_stats.get("advertio")
             if advertio_stats is not None:
                 await self.monitor.report("advertio", advertio_stats)
+                if self.stage_control.consume_skip("advertio"):
+                    print(f"{Fore.YELLOW}⚠️ Advertio stage skip request consumed; remaining deliveries stay pending.")
 
             return processing_stats, ai_stats
 
@@ -87,7 +107,7 @@ class SchedulerService:
         if isinstance(result, dict):
             return dict(result)
         stats = {}
-        for name in ("saved", "media_saved", "media_failed", "filtered", "bot_skipped", "no_username", "skipped", "from_date", "to_date"):
+        for name in ("saved", "media_saved", "media_failed", "filtered", "bot_skipped", "no_username", "skipped", "from_date", "to_date", "stopped", "status"):
             if hasattr(result, name):
                 stats[name] = getattr(result, name)
         return stats or {"status": "completed"}
@@ -109,7 +129,15 @@ class SchedulerService:
                     cycle_from_date, cycle_to_date = max(from_date, today), today
                     print(f"[SCHEDULER] @{channel_username} live crawl: {cycle_from_date} -> {cycle_to_date}")
 
-                crawl_result = await self.crawl_job.run_channel(client, channel_username, cycle_from_date, cycle_to_date, crawl_mode=crawl_mode)
+                self.stage_control.clear("crawl")
+                crawl_result = await self.crawl_job.run_channel(
+                    client,
+                    channel_username,
+                    cycle_from_date,
+                    cycle_to_date,
+                    crawl_mode=crawl_mode,
+                    should_stop=lambda: self.stage_control.is_skip_requested("crawl"),
+                )
                 await self._run_post_crawl_pipeline(client, channel_username, crawl_result)
                 first_cycle = False
             except asyncio.CancelledError:

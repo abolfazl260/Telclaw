@@ -10,6 +10,7 @@ import config
 from ai.extractor import AIExtractionError
 from ai.provider_failover import GroqProviderFailover
 from storage.message_repository import MessageRepository
+from services.stage_control import get_stage_control
 
 logger = logging.getLogger("telclaw.ai")
 
@@ -30,7 +31,6 @@ class AIProcessingService:
         )
 
     def set_media_downloader(self, media_downloader):
-        """Set the existing Telegram media download operation for this AI run."""
         self.media_downloader = media_downloader
 
     @staticmethod
@@ -78,16 +78,12 @@ class AIProcessingService:
             try:
                 return self.extractor.extract(source_text)
             except AIExtractionError as exc:
-                # GroqProviderFailover already switches immediately on 429.
-                # This retry remains only for the case where all providers are
-                # exhausted and the final 429 must be retried later.
                 if getattr(exc, "status", None) != 429 or attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
                     raise
                 attempts += 1
                 self._rate_limit_wait(exc, attempts)
 
     def _prepare_media_for_advertio(self, record):
-        """Download only required media after AI acceptance and before Advertio."""
         if record.get("media_type") != "photo":
             return True
         existing = record.get("media_path")
@@ -105,7 +101,10 @@ class AIProcessingService:
 
     def _deliver_to_advertio(self, record, category, data):
         if not self.advertio_service or category != "housinglist":
-            return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0}
+            return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}
+        if get_stage_control().is_skip_requested("advertio"):
+            print(f"[ADVERTIO] Stage skip requested; remaining delivery stays pending. message={record['message_id']}")
+            return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         now = datetime.now(timezone.utc).isoformat()
         try:
             self._prepare_media_for_advertio(record)
@@ -113,13 +112,13 @@ class AIProcessingService:
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status="retry", lead_id=None, error=str(exc)[:4000], processed_at=now)
             logger.error("[MEDIA ERROR] message_id=%s channel=%s detail=%s", record.get("message_id"), record.get("channel_username"), str(exc), exc_info=True)
             print(f"[MEDIA] retry: message={record['message_id']} reason={str(exc)[:300]}")
-            return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1}
+            return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
         try:
             result = self.advertio_service.deliver(record, data)
             status = "already_existed" if result.get("already_existed") else "sent"
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)
             print(f"[ADVERTIO] {status}: message={record['message_id']} lead={result.get('lead_id')} http={result.get('http_status')}")
-            return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0}
+            return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0, "skipped": 0}
         except Exception as exc:
             from delivery.advertio_client import AdvertioError
             retryable = isinstance(exc, AdvertioError) and exc.retryable
@@ -127,14 +126,18 @@ class AIProcessingService:
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=getattr(exc, "lead_id", None), error=str(exc)[:4000], processed_at=now)
             logger.error("[ADVERTIO ERROR] status=%s retryable=%s message_id=%s detail=%s", getattr(exc, "status", None), retryable, record.get("message_id"), str(exc), exc_info=True)
             print(f"[ADVERTIO] {status}: message={record['message_id']} reason={str(exc)[:300]}")
-            return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1}
+            return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
 
-    def _process(self, records, *, progress=False):
+    def _process(self, records, *, progress=False, should_stop=None):
         total = len(records)
         processed = failed = skipped = 0
-        advertio = {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0}
+        advertio = {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}
         stopped = False
         for index, record in enumerate(records, start=1):
+            if should_stop and should_stop():
+                stopped = True
+                print(f"[AI] Stage skip requested; remaining {total - index + 1} records stay pending.")
+                break
             source_text = self._source_text(record)
             if not source_text:
                 self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="no_text", ai_processed_at=datetime.now(timezone.utc).isoformat())
@@ -166,19 +169,19 @@ class AIProcessingService:
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: unexpected_error")
         return processed, failed, skipped, stopped, advertio
 
-    def process_pending(self, limit=100, channel_username=None):
+    def process_pending(self, limit=100, channel_username=None, should_stop=None):
         if not config.AI_EXTRACTION_ENABLED:
             return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None}
         records = self.repository.get_ai_pending(limit=limit, channel_username=channel_username)
-        processed, failed, skipped, stopped, advertio = self._process(records)
+        processed, failed, skipped, stopped, advertio = self._process(records, should_stop=should_stop)
         return {"found": len(records), "processed": processed, "failed": failed, "skipped": skipped, "stopped": stopped, "disabled": False, "advertio": advertio}
 
-    def process_pending_with_stats(self, limit=100, channel_username=None):
+    def process_pending_with_stats(self, limit=100, channel_username=None, should_stop=None):
         if not config.AI_EXTRACTION_ENABLED:
             print("[AI] Extraction disabled; skipping AI queue.")
             return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None}
         records = self.repository.get_ai_pending(limit=limit, channel_username=channel_username)
         if not records:
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False, "advertio": {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0}}
-        processed, failed, skipped, stopped, advertio = self._process(records, progress=True)
+            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False, "advertio": {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}}
+        processed, failed, skipped, stopped, advertio = self._process(records, progress=True, should_stop=should_stop)
         return {"found": len(records), "processed": processed, "failed": failed, "skipped": skipped, "stopped": stopped, "disabled": False, "advertio": advertio}

@@ -19,6 +19,7 @@ COLLECTION_VERSION = "collection-v4"
 CRAWL_MODE_ALL = "all"
 CRAWL_MODE_PHOTOS_ONLY = "photos_only"
 VALID_CRAWL_MODES = {CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY}
+MIN_MESSAGE_WORDS = 10
 
 
 def _extract_sender(message):
@@ -44,6 +45,16 @@ def _extract_message_text(message):
         if isinstance(value, str) and value.strip():
             return value
     return ""
+
+
+def _word_count(text):
+    """Count normalized whitespace-delimited words in collected text."""
+    return len(" ".join((text or "").split()).split())
+
+
+def _has_minimum_message_text(text):
+    """Return True only when the message has at least the minimum text value."""
+    return _word_count(text) >= MIN_MESSAGE_WORDS
 
 
 def _build_message_link(channel_username, message_id):
@@ -133,6 +144,7 @@ async def crawl_channel(
     filtered_count = 0
     bot_filtered_count = 0
     no_username_count = 0
+    weak_text_count = 0
     media_metadata_count = 0
     try:
         entity = await client.get_input_entity(channel_username)
@@ -170,6 +182,17 @@ async def crawl_channel(
                 continue
 
             raw_text = _extract_message_text(message)
+            word_count = _word_count(raw_text)
+            if not _has_minimum_message_text(raw_text):
+                weak_text_count += 1
+                skipped_count += 1
+                print(
+                    f"⏭ [WEAK-TEXT-SKIPPED] channel={channel_username} "
+                    f"message_id={message.id} word_count={word_count} "
+                    f"threshold={MIN_MESSAGE_WORDS} reason=insufficient_text"
+                )
+                continue
+
             (
                 has_media,
                 media_type,
@@ -239,6 +262,7 @@ async def crawl_channel(
         print(f"🖼️ Media metadata saved: {media_metadata_count}")
         print("🖼️ Media downloaded during crawl: 0")
         print(f"🔍 Filtered by crawl mode: {filtered_count}")
+        print(f"🤏 Weak-text messages skipped: {weak_text_count}")
         print(f"🤖 Bot messages skipped: {bot_filtered_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")

@@ -66,8 +66,6 @@ class SchedulerService:
             await self.monitor.report("crawl", crawl_stats)
             self.stage_control.consume_skip("crawl")
 
-            # Do not clear here: a request made while Crawl was finishing is a
-            # valid request to skip the upcoming Processing stage.
             print(f"{Fore.CYAN}▸ Starting normal information processing...")
             processing_stats = await asyncio.to_thread(
                 self.processing.process_pending_with_stats,
@@ -81,8 +79,6 @@ class SchedulerService:
             self.stage_control.consume_skip("processing")
 
             self.ai.set_media_downloader(self._make_sync_media_downloader(client))
-            # Do not clear here for the same reason: a request made while
-            # Processing was finishing must be allowed to skip the AI stage.
             print(f"\n{Fore.CYAN}▸ Starting AI processing...")
             ai_stats = await asyncio.to_thread(
                 self.ai.process_pending_with_stats,
@@ -129,7 +125,6 @@ class SchedulerService:
                     today = date.today()
                     cycle_from_date, cycle_to_date = max(from_date, today), today
                     print(f"[SCHEDULER] @{channel_username} live crawl: {cycle_from_date} -> {cycle_to_date}")
-                self.stage_control.consume_skip("crawl")
                 crawl_result = await self.crawl_job.run_channel(client, channel_username, cycle_from_date, cycle_to_date, crawl_mode=crawl_mode, should_stop=lambda: self.stage_control.is_skip_requested("crawl"))
                 await self._run_post_crawl_pipeline(client, channel_username, crawl_result)
                 first_cycle = False

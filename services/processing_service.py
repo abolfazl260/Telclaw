@@ -22,10 +22,15 @@ class ProcessingService:
     def process_records(self, records):
         return [self.process_record(record) for record in records]
 
-    def _process(self, records, *, progress=False):
+    def _process(self, records, *, progress=False, should_stop=None):
         total = len(records)
         processed = failed = 0
+        stopped = False
         for index, record in enumerate(records, start=1):
+            if should_stop and should_stop():
+                stopped = True
+                print(f"[PROCESSING] Stage skip requested; remaining {total - index + 1} records stay pending.")
+                break
             self.repository.mark_processing(
                 record["message_id"], record["channel_username"]
             )
@@ -46,7 +51,7 @@ class ProcessingService:
                     success=False,
                 )
                 failed += 1
-                print(f"[PROCESSING] Failed message {record['message_id']}: {exc}")
+                print(f"[PROCESSING][FAILED] message_id={record['message_id']} channel={record['channel_username']} reason=processing_exception detail={exc}")
 
             if progress:
                 percent = index * 100 / total
@@ -54,22 +59,22 @@ class ProcessingService:
                     f"[PROCESSING] {index}/{total} ({percent:6.2f}%) "
                     f"processed={processed} failed={failed}"
                 )
-        return processed, failed
+        return processed, failed, stopped
 
-    def process_pending(self, limit=500, channel_username=None):
+    def process_pending(self, limit=500, channel_username=None, should_stop=None):
         """Process only records waiting in the processing queue."""
         records = self.repository.get_processing_pending(
             limit=limit, channel_username=channel_username
         )
-        processed, _ = self._process(records)
+        processed, _, _ = self._process(records, should_stop=should_stop)
         return processed
 
-    def process_pending_with_stats(self, limit=500, channel_username=None):
+    def process_pending_with_stats(self, limit=500, channel_username=None, should_stop=None):
         """Process one independent queue batch and expose progress stats."""
         records = self.repository.get_processing_pending(
             limit=limit, channel_username=channel_username
         )
         if not records:
-            return {"found": 0, "processed": 0, "failed": 0}
-        processed, failed = self._process(records, progress=True)
-        return {"found": len(records), "processed": processed, "failed": failed}
+            return {"found": 0, "processed": 0, "failed": 0, "stopped": False}
+        processed, failed, stopped = self._process(records, progress=True, should_stop=should_stop)
+        return {"found": len(records), "processed": processed, "failed": failed, "stopped": stopped}

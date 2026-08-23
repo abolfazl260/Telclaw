@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 import config
 from storage import database
+from services.stage_control import get_stage_control
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
@@ -56,11 +57,33 @@ class TelegramMonitor:
     async def _poll_updates(self):
         while not self._stopping.is_set():
             try:
-                result=await self._api("getUpdates",{"offset":self._offset,"timeout":20,"allowed_updates":["message"]})
+                result=await self._api("getUpdates",{"offset":self._offset,"timeout":20,"allowed_updates":["message","callback_query"]})
                 for update in result.get("result",[]): self._offset=max(self._offset,int(update["update_id"])+1); await self._handle_update(update)
             except asyncio.CancelledError: raise
             except Exception: logger.exception("Telegram monitor polling failed"); await asyncio.sleep(5)
+    def _stage_keyboard(self):
+        return {"inline_keyboard":[
+            [{"text":"⏭️ Skip Crawl","callback_data":"skip:crawl"},{"text":"⏭️ Skip Processing","callback_data":"skip:processing"}],
+            [{"text":"⏭️ Skip AI","callback_data":"skip:ai"},{"text":"⏭️ Skip Advertio","callback_data":"skip:advertio"}],
+            [{"text":"🔄 Refresh Status","callback_data":"refresh:status"}],
+        ]}
+    async def _handle_callback(self,callback):
+        callback_id=callback.get("id"); data=str(callback.get("data") or ""); message=callback.get("message") or {}; chat=(message.get("chat") or {}); chat_id=chat.get("id")
+        if callback_id: await self._api("answerCallbackQuery",{"callback_query_id":callback_id})
+        if chat_id is None: return
+        if not self._is_subscribed(chat_id):
+            await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
+        if data == "refresh:status":
+            await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard()); return
+        if data.startswith("skip:"):
+            stage=data.split(":",1)[1]
+            if stage not in {"crawl","processing","ai","advertio"}: return
+            get_stage_control().request_skip(stage)
+            labels={"crawl":"کرال","processing":"پروسس","ai":"هوش مصنوعی","advertio":"Advertio"}
+            await self._send(chat_id,f"⏭️ درخواست رد کردن مرحله <b>{labels[stage]}</b> ثبت شد.\n\nمرحله در اولین نقطه امن متوقف می‌شود و Pipeline به مرحله بعد می‌رود.")
     async def _handle_update(self,update):
+        if update.get("callback_query"):
+            await self._handle_callback(update["callback_query"]); return
         message=update.get("message") or {}; chat=message.get("chat") or {}; chat_id=chat.get("id")
         if chat_id is None:return
         text=(message.get("text") or "").strip().lower()
@@ -68,7 +91,7 @@ class TelegramMonitor:
             database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
         elif text.startswith("/stop"):
             database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت گزارش‌های Telclaw متوقف شد.")
-        elif text.startswith("/status"): await self._send(chat_id,await self._build_status_message())
+        elif text.startswith("/status"): await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard())
         elif text.startswith("/health"): await self._send(chat_id,await self._build_health_message())
         elif text.startswith("/today"): await self._send(chat_id,await self._build_today_message())
         elif text.startswith("/source"): await self._send_source_chunks(chat_id)
@@ -128,7 +151,10 @@ class TelegramMonitor:
             current+=line
         if current:chunks.append(current)
         for chunk in chunks: await self._send(chat_id,chunk)
-    async def _send(self,chat_id,text): await self._api("sendMessage",{"chat_id":chat_id,"text":text,"parse_mode":"HTML","disable_web_page_preview":True})
+    async def _send(self,chat_id,text,reply_markup=None):
+        payload={"chat_id":chat_id,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}
+        if reply_markup is not None: payload["reply_markup"]=reply_markup
+        await self._api("sendMessage",payload)
     async def broadcast(self,text):
         if not self.enabled:return
         for subscriber in database.get_monitor_subscribers():

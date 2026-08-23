@@ -21,6 +21,7 @@ class CrawlJobService:
         from_date,
         to_date,
         crawl_mode=CRAWL_MODE_ALL,
+        should_stop=None,
     ):
         print(f"\n{'=' * 60}")
         print(f"📥 COLLECTION: {channel_username}")
@@ -32,4 +33,5 @@ class CrawlJobService:
             from_date,
             to_date,
             crawl_mode=crawl_mode,
+            should_stop=should_stop,
         )

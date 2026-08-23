@@ -25,12 +25,10 @@ class SchedulerService:
         self.ai = ai_service or AIProcessingService()
         self.monitor = get_telegram_monitor()
         self.stage_control = get_stage_control()
-        self.monitor.set_stage_skip_callback(self.request_stage_skip)
         self._tasks = {}
         self._pipeline_lock = asyncio.Lock()
 
     def request_stage_skip(self, stage):
-        """Request a graceful skip of the currently running stage."""
         if stage not in {"crawl", "processing", "ai", "advertio"}:
             return False
         accepted = self.stage_control.request_skip(stage)
@@ -61,15 +59,11 @@ class SchedulerService:
             crawl_stats = self._normalize_crawl_stats(crawl_result)
             crawl_stats.setdefault("channel", f"@{channel_username}")
             await self.monitor.report("crawl", crawl_stats)
-
             self.stage_control.consume_skip("crawl")
 
             self.stage_control.clear("processing")
             print(f"{Fore.CYAN}▸ Starting normal information processing...")
-            processing_stats = await asyncio.to_thread(
-                self.processing.process_pending_with_stats,
-                should_stop=lambda: self.stage_control.is_skip_requested("processing"),
-            )
+            processing_stats = await asyncio.to_thread(self.processing.process_pending_with_stats, should_stop=lambda: self.stage_control.is_skip_requested("processing"))
             if processing_stats.get("stopped"):
                 print(f"{Fore.YELLOW}⚠️ Processing stage skipped by operator; remaining records stay pending.")
             else:
@@ -78,13 +72,9 @@ class SchedulerService:
             self.stage_control.consume_skip("processing")
 
             self.ai.set_media_downloader(self._make_sync_media_downloader(client))
-
             self.stage_control.clear("ai")
             print(f"\n{Fore.CYAN}▸ Starting AI processing...")
-            ai_stats = await asyncio.to_thread(
-                self.ai.process_pending_with_stats,
-                should_stop=lambda: self.stage_control.is_skip_requested("ai"),
-            )
+            ai_stats = await asyncio.to_thread(self.ai.process_pending_with_stats, should_stop=lambda: self.stage_control.is_skip_requested("ai"))
             if ai_stats.get("disabled"):
                 print(f"{Fore.YELLOW}⚠️ AI extraction is disabled in configuration.")
             elif ai_stats.get("stopped"):
@@ -99,7 +89,6 @@ class SchedulerService:
                 await self.monitor.report("advertio", advertio_stats)
                 if self.stage_control.consume_skip("advertio"):
                     print(f"{Fore.YELLOW}⚠️ Advertio stage skip request consumed; remaining deliveries stay pending.")
-
             return processing_stats, ai_stats
 
     @staticmethod
@@ -116,7 +105,6 @@ class SchedulerService:
         if start_delay_minutes > 0:
             print(f"[SCHEDULER] @{channel_username} starts in {start_delay_minutes:g} minute(s) to preserve channel spacing.")
             await asyncio.sleep(start_delay_minutes * 60)
-
         first_cycle = True
         next_run_at = time.monotonic()
         while True:
@@ -128,16 +116,8 @@ class SchedulerService:
                     today = date.today()
                     cycle_from_date, cycle_to_date = max(from_date, today), today
                     print(f"[SCHEDULER] @{channel_username} live crawl: {cycle_from_date} -> {cycle_to_date}")
-
                 self.stage_control.clear("crawl")
-                crawl_result = await self.crawl_job.run_channel(
-                    client,
-                    channel_username,
-                    cycle_from_date,
-                    cycle_to_date,
-                    crawl_mode=crawl_mode,
-                    should_stop=lambda: self.stage_control.is_skip_requested("crawl"),
-                )
+                crawl_result = await self.crawl_job.run_channel(client, channel_username, cycle_from_date, cycle_to_date, crawl_mode=crawl_mode, should_stop=lambda: self.stage_control.is_skip_requested("crawl"))
                 await self._run_post_crawl_pipeline(client, channel_username, crawl_result)
                 first_cycle = False
             except asyncio.CancelledError:
@@ -146,7 +126,6 @@ class SchedulerService:
                 print(f"[COLLECTION] Pipeline failed for {channel_username}: {exc}")
                 await self.monitor.error("ERROR", "services.scheduler_service", f"Pipeline failed for @{channel_username}: {exc}")
                 first_cycle = False
-
             next_run_at += interval_minutes * 60
             sleep_seconds = max(0, next_run_at - time.monotonic())
             print(f"[COLLECTION] Next check for {channel_username} in {sleep_seconds / 60:g} minute(s).")

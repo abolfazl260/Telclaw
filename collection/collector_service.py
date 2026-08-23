@@ -13,6 +13,7 @@ class CollectionService:
         from_date,
         to_date,
         crawl_mode=CRAWL_MODE_ALL,
+        should_stop=None,
     ):
         return await crawl_channel(
             client,
@@ -20,4 +21,5 @@ class CollectionService:
             from_date,
             to_date,
             crawl_mode=crawl_mode,
+            should_stop=should_stop,
         )

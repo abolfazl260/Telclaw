@@ -113,13 +113,9 @@ async def crawl_channel(
     from_date,
     to_date,
     crawl_mode=CRAWL_MODE_ALL,
+    should_stop=None,
 ):
-    """Collect messages whose dates fall inclusively inside ``from_date..to_date``.
-
-    Collection stores message and media metadata only. Physical media download
-    is intentionally deferred until after AI validation and immediately before
-    Advertio delivery.
-    """
+    """Collect messages whose dates fall inclusively inside ``from_date..to_date``."""
     channel_username = normalize_channel_username(channel_username)
     crawl_mode = (crawl_mode or CRAWL_MODE_ALL).strip().lower()
     if crawl_mode not in VALID_CRAWL_MODES:
@@ -146,11 +142,16 @@ async def crawl_channel(
     no_username_count = 0
     weak_text_count = 0
     media_metadata_count = 0
+    stopped = False
     try:
         entity = await client.get_input_entity(channel_username)
         await asyncio.sleep(random.randint(30, 60))
 
         async for message in client.iter_messages(entity):
+            if should_stop and should_stop():
+                stopped = True
+                print(f"\n⏭ [CRAWL-SKIPPED] Operator requested stage skip; remaining messages were not checked.")
+                break
             if not message:
                 skipped_count += 1
                 continue
@@ -165,20 +166,13 @@ async def crawl_channel(
             sender_id, sender_username, sender_type = _extract_sender(message)
             if sender_type == "bot":
                 bot_filtered_count += 1
-                print(
-                    f"⏭ [BOT-SKIPPED] channel={channel_username} "
-                    f"message_id={message.id}"
-                )
+                print(f"⏭ [BOT-SKIPPED] channel={channel_username} message_id={message.id}")
                 continue
 
             if not sender_username or not str(sender_username).strip():
                 no_username_count += 1
                 skipped_count += 1
-                print(
-                    f"⏭ [NO-USERNAME-SKIPPED] channel={channel_username} "
-                    f"message_id={message.id} sender_id={sender_id} "
-                    "reason=sender has no Telegram username"
-                )
+                print(f"⏭ [NO-USERNAME-SKIPPED] channel={channel_username} message_id={message.id} sender_id={sender_id} reason=sender has no Telegram username")
                 continue
 
             raw_text = _extract_message_text(message)
@@ -186,38 +180,19 @@ async def crawl_channel(
             if not _has_minimum_message_text(raw_text):
                 weak_text_count += 1
                 skipped_count += 1
-                print(
-                    f"⏭ [WEAK-TEXT-SKIPPED] channel={channel_username} "
-                    f"message_id={message.id} word_count={word_count} "
-                    f"threshold={MIN_MESSAGE_WORDS} reason=insufficient_text"
-                )
+                print(f"⏭ [WEAK-TEXT-SKIPPED] channel={channel_username} message_id={message.id} word_count={word_count} threshold={MIN_MESSAGE_WORDS} reason=insufficient_text")
                 continue
 
-            (
-                has_media,
-                media_type,
-                file_unique_id,
-                message_link,
-                media_reference,
-            ) = _extract_media(message, channel_username)
-
+            has_media, media_type, file_unique_id, message_link, media_reference = _extract_media(message, channel_username)
             if not _should_collect(media_type, crawl_mode):
                 filtered_count += 1
                 continue
 
-            _log_extracted_message(
-                channel_username, message, raw_text, media_type, message_link
-            )
-
-            # IMPORTANT: collection never downloads physical media anymore.
-            # Preserve metadata required for the post-AI downloader instead.
+            _log_extracted_message(channel_username, message, raw_text, media_type, message_link)
             media_path = None
             if has_media:
                 media_metadata_count += 1
-                print(
-                    f"   🖼️ [MEDIA-METADATA] type={media_type or 'unknown'} "
-                    "download=deferred"
-                )
+                print(f"   🖼️ [MEDIA-METADATA] type={media_type or 'unknown'} download=deferred")
 
             try:
                 saved = repository.save_collected_message(
@@ -266,25 +241,17 @@ async def crawl_channel(
         print(f"🤖 Bot messages skipped: {bot_filtered_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")
+        return {"saved": saved_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
     except errors.ChannelInvalidError:
         print(f"\n❌ Invalid channel: {channel_username}")
+        return {"status": "failed", "saved": saved_count, "stopped": stopped}
     except errors.ChannelPrivateError:
         print(f"\n❌ Private channel access denied: {channel_username}")
+        return {"status": "failed", "saved": saved_count, "stopped": stopped}
     except Exception as exc:
         print(f"\n❌ Crawl error ({channel_username}): {exc}")
+        return {"status": "failed", "saved": saved_count, "stopped": stopped}
 
 
-async def start_crawler(
-    client,
-    channel_username,
-    from_date,
-    to_date,
-    crawl_mode=CRAWL_MODE_ALL,
-):
-    return await crawl_channel(
-        client,
-        channel_username,
-        from_date,
-        to_date,
-        crawl_mode=crawl_mode,
-    )
+async def start_crawler(client, channel_username, from_date, to_date, crawl_mode=CRAWL_MODE_ALL, should_stop=None):
+    return await crawl_channel(client, channel_username, from_date, to_date, crawl_mode=crawl_mode, should_stop=should_stop)

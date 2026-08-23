@@ -45,15 +45,20 @@ class SchedulerService:
     @staticmethod
     def _make_sync_media_downloader(client):
         loop = asyncio.get_running_loop()
+
         def download(record):
             future = asyncio.run_coroutine_threadsafe(download_photo_for_record(client, record), loop)
             return future.result()
+
         return download
 
     async def _run_post_crawl_pipeline(self, client, channel_username, crawl_result=None):
         async with self._pipeline_lock:
             print(f"\n{Fore.CYAN}{'=' * 60}")
-            print(f"{Fore.GREEN}✅ CRAWL COMPLETED: @{channel_username}")
+            if isinstance(crawl_result, dict) and crawl_result.get("stopped"):
+                print(f"{Fore.YELLOW}⏭️ CRAWL SKIPPED BY OPERATOR: @{channel_username}")
+            else:
+                print(f"{Fore.GREEN}✅ CRAWL COMPLETED: @{channel_username}")
             print(f"{Fore.CYAN}{'=' * 60}")
 
             crawl_stats = self._normalize_crawl_stats(crawl_result)
@@ -61,9 +66,13 @@ class SchedulerService:
             await self.monitor.report("crawl", crawl_stats)
             self.stage_control.consume_skip("crawl")
 
-            self.stage_control.clear("processing")
+            # Do not clear here: a request made while Crawl was finishing is a
+            # valid request to skip the upcoming Processing stage.
             print(f"{Fore.CYAN}▸ Starting normal information processing...")
-            processing_stats = await asyncio.to_thread(self.processing.process_pending_with_stats, should_stop=lambda: self.stage_control.is_skip_requested("processing"))
+            processing_stats = await asyncio.to_thread(
+                self.processing.process_pending_with_stats,
+                should_stop=lambda: self.stage_control.is_skip_requested("processing"),
+            )
             if processing_stats.get("stopped"):
                 print(f"{Fore.YELLOW}⚠️ Processing stage skipped by operator; remaining records stay pending.")
             else:
@@ -72,9 +81,13 @@ class SchedulerService:
             self.stage_control.consume_skip("processing")
 
             self.ai.set_media_downloader(self._make_sync_media_downloader(client))
-            self.stage_control.clear("ai")
+            # Do not clear here for the same reason: a request made while
+            # Processing was finishing must be allowed to skip the AI stage.
             print(f"\n{Fore.CYAN}▸ Starting AI processing...")
-            ai_stats = await asyncio.to_thread(self.ai.process_pending_with_stats, should_stop=lambda: self.stage_control.is_skip_requested("ai"))
+            ai_stats = await asyncio.to_thread(
+                self.ai.process_pending_with_stats,
+                should_stop=lambda: self.stage_control.is_skip_requested("ai"),
+            )
             if ai_stats.get("disabled"):
                 print(f"{Fore.YELLOW}⚠️ AI extraction is disabled in configuration.")
             elif ai_stats.get("stopped"):
@@ -96,7 +109,7 @@ class SchedulerService:
         if isinstance(result, dict):
             return dict(result)
         stats = {}
-        for name in ("saved", "media_saved", "media_failed", "filtered", "bot_skipped", "no_username", "skipped", "from_date", "to_date", "stopped", "status"):
+        for name in ("saved", "media_saved", "media_failed", "filtered", "bot_skipped", "no_username", "weak_text", "skipped", "from_date", "to_date", "stopped", "status"):
             if hasattr(result, name):
                 stats[name] = getattr(result, name)
         return stats or {"status": "completed"}
@@ -116,7 +129,7 @@ class SchedulerService:
                     today = date.today()
                     cycle_from_date, cycle_to_date = max(from_date, today), today
                     print(f"[SCHEDULER] @{channel_username} live crawl: {cycle_from_date} -> {cycle_to_date}")
-                self.stage_control.clear("crawl")
+                self.stage_control.consume_skip("crawl")
                 crawl_result = await self.crawl_job.run_channel(client, channel_username, cycle_from_date, cycle_to_date, crawl_mode=crawl_mode, should_stop=lambda: self.stage_control.is_skip_requested("crawl"))
                 await self._run_post_crawl_pipeline(client, channel_username, crawl_result)
                 first_cycle = False

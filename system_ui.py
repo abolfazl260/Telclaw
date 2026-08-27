@@ -121,9 +121,15 @@ class SystemConsoleUI(ConsoleUI):
                 color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
                 self.show_message(
                     f"Completed. Found: {result['found']} | Classified: {result['processed']} | "
-                    f"Failed: {result['failed']} | Skipped: {result['skipped']}",
+                    f"Failed: {result['failed']} | Skipped (no text): {result['skipped']}",
                     color,
                 )
+                if result.get("provider_configuration_error"):
+                    self.show_message(
+                        "Groq rejected the configured model or API key (HTTP 403). "
+                        "Check GROQ_API_KEY and TELCLAW_GROQ_MODEL, then requeue failed classifications.",
+                        Fore.RED,
+                    )
         except Exception as exc:
             self.show_message(f"Classification queue failed: {exc}", Fore.RED)
         self.show_classification_queue_summary()

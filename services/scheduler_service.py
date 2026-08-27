@@ -73,6 +73,11 @@ class SchedulerService:
             )
             if classification_stats.get("disabled"):
                 print(f"{Fore.YELLOW}⚠️ AI category classification is disabled in configuration.")
+            elif classification_stats.get("provider_configuration_error"):
+                print(
+                    f"{Fore.RED}❌ AI category classification stopped: Groq rejected the configured "
+                    "model or API key (HTTP 403). Check GROQ_API_KEY and TELCLAW_GROQ_MODEL."
+                )
             elif classification_stats.get("stopped"):
                 print(f"{Fore.YELLOW}⚠️ AI category classification skipped by operator; remaining records stay pending.")
             else:

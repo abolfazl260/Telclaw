@@ -77,9 +77,48 @@ class CategoryClassificationService:
             attempts=int(record.get("classification_attempts") or 0) + 1,
         )
 
+    @staticmethod
+    def _report_error(message, *args, exc_info=False):
+        """Write classification failures to the application log and terminal."""
+        logger.error(message, *args, exc_info=exc_info)
+        try:
+            rendered = message % args if args else message
+        except (TypeError, ValueError):
+            rendered = message
+        print(rendered)
+
+    def _mark_batch_failed(self, candidates, exc, skipped):
+        now = datetime.now(timezone.utc).isoformat()
+        error = str(exc)[:4000]
+        for item in candidates:
+            record = item["record"]
+            self.repository.mark_classification_result(
+                record["message_id"],
+                record["channel_username"],
+                success=False,
+                error=error,
+                processed_at=now,
+                attempts=int(record.get("classification_attempts") or 0) + 1,
+            )
+        self._report_error(
+            "[AI CLASSIFICATION ERROR] failed whole batch: %s",
+            exc,
+            exc_info=True,
+        )
+        # A 403 is not transient: do not let a scheduled worker repeatedly send
+        # batches until the model/key configuration has been corrected.
+        provider_configuration_error = bool(getattr(exc, "stop_queue", False))
+        return {
+            "processed": 0,
+            "failed": len(candidates),
+            "skipped": skipped,
+            "stopped": provider_configuration_error,
+            "provider_configuration_error": provider_configuration_error,
+        }
+
     def _process_batch(self, records, *, progress=False, should_stop=None):
         if should_stop and should_stop():
-            return {"processed": 0, "failed": 0, "skipped": 0, "stopped": True}
+            return {"processed": 0, "failed": 0, "skipped": 0, "stopped": True, "provider_configuration_error": False}
 
         candidates = []
         skipped = 0
@@ -93,24 +132,14 @@ class CategoryClassificationService:
             candidates.append({"message_id": record["message_id"], "text": source_text, "record": record})
 
         if not candidates:
-            return {"processed": 0, "failed": 0, "skipped": skipped, "stopped": False}
+            return {"processed": 0, "failed": 0, "skipped": skipped, "stopped": False, "provider_configuration_error": False}
 
         try:
             classifications = self._classify_with_retry(candidates)
         except AIExtractionError as exc:
-            now = datetime.now(timezone.utc).isoformat()
-            for item in candidates:
-                record = item["record"]
-                self.repository.mark_classification_result(
-                    record["message_id"],
-                    record["channel_username"],
-                    success=False,
-                    error=str(exc)[:4000],
-                    processed_at=now,
-                    attempts=int(record.get("classification_attempts") or 0) + 1,
-                )
-            logger.error("[AI CLASSIFICATION ERROR] failed whole batch: %s", exc, exc_info=True)
-            return {"processed": 0, "failed": len(candidates), "skipped": skipped, "stopped": bool(getattr(exc, "stop_queue", False))}
+            return self._mark_batch_failed(candidates, exc, skipped)
+        except Exception as exc:
+            return self._mark_batch_failed(candidates, exc, skipped)
 
         processed = failed = 0
         now = datetime.now(timezone.utc).isoformat()
@@ -138,12 +167,17 @@ class CategoryClassificationService:
                     processed_at=now,
                     attempts=int(record.get("classification_attempts") or 0) + 1,
                 )
+                self._report_error(
+                    "[AI CLASSIFICATION ERROR] message=%s channel=%s: missing classification result",
+                    record["message_id"],
+                    record["channel_username"],
+                )
                 failed += 1
-        return {"processed": processed, "failed": failed, "skipped": skipped, "stopped": False}
+        return {"processed": processed, "failed": failed, "skipped": skipped, "stopped": False, "provider_configuration_error": False}
 
     def process_pending(self, limit=None, channel_username=None, should_stop=None):
         if not config.AI_CLASSIFICATION_ENABLED:
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True}
+            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "provider_configuration_error": False, "disabled": True}
         limit = int(limit or self.batch_size)
         records = self.repository.get_classification_pending(limit=limit, channel_username=channel_username)
         stats = self._process_batch(records, should_stop=should_stop)
@@ -152,11 +186,11 @@ class CategoryClassificationService:
     def process_pending_with_stats(self, limit=None, channel_username=None, should_stop=None):
         if not config.AI_CLASSIFICATION_ENABLED:
             print("[AI CLASSIFICATION] disabled; skipping classification queue.")
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True}
+            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "provider_configuration_error": False, "disabled": True}
         limit = int(limit or self.batch_size)
         records = self.repository.get_classification_pending(limit=limit, channel_username=channel_username)
         if not records:
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False}
+            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "provider_configuration_error": False, "disabled": False}
         stats = self._process_batch(records, progress=True, should_stop=should_stop)
         return {"found": len(records), **stats, "disabled": False}
 

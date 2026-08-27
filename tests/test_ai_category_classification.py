@@ -71,6 +71,48 @@ def test_category_classification_service_batches_and_marks_results(monkeypatch, 
     assert rows[102]["ai_status"] == "skipped"
 
 
+def test_classification_queue_status_and_manual_retry_are_database_backed(monkeypatch, tmp_path):
+    database, _ = _load_database(monkeypatch, tmp_path)
+
+    database.initialize_db()
+    for message_id in range(101, 105):
+        database.insert_message("chan", message_id, "message", "2026-08-27")
+
+    with database.get_connection() as conn:
+        conn.execute("UPDATE messages SET classification_status='pending' WHERE message_id=101")
+        conn.execute("UPDATE messages SET classification_status='processing' WHERE message_id=102")
+        conn.execute("UPDATE messages SET classification_status='processed' WHERE message_id=103")
+        conn.execute("""UPDATE messages
+            SET classification_status='failed', classification_error='provider unavailable',
+                classification_attempts=3, classification_processed_at='2026-08-27T00:00:00Z'
+            WHERE message_id=104""")
+        conn.commit()
+
+    assert database.get_classification_queue_status() == {
+        "pending": 1,
+        "processing": 1,
+        "classified": 1,
+        "failed": 1,
+    }
+    assert database.retry_failed_classifications() == 1
+    assert database.get_classification_queue_status() == {
+        "pending": 2,
+        "processing": 1,
+        "classified": 1,
+        "failed": 0,
+    }
+    with database.get_connection() as conn:
+        row = conn.execute(
+            "SELECT classification_error, classification_attempts, classification_processed_at "
+            "FROM messages WHERE message_id=104"
+        ).fetchone()
+    assert dict(row) == {
+        "classification_error": None,
+        "classification_attempts": 0,
+        "classification_processed_at": None,
+    }
+
+
 def test_validate_classification_result_rejects_unknown_category():
     from ai.category_classifier import validate_classification_result
 

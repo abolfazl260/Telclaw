@@ -103,6 +103,31 @@ def get_pipeline_status():
         return {"system":"RUNNING","total_messages":value("total_messages"),"collected":value("collected"),"processing_pending":value("processing_pending"),"processing_failed":value("processing_failed"),"classification_pending":value("classification_pending"),"classification_failed":value("classification_failed"),"ai_pending":value("ai_pending"),"ai_failed":value("ai_failed"),"advertio_pending":value("advertio_pending"),"advertio_failed":value("advertio_failed"),"channels":int(channels),"subscribers":int(subscribers)}
     finally: conn.close()
 
+def get_classification_queue_status():
+    """Return current AI classification counts directly from SQLite."""
+    conn=get_connection()
+    try:
+        row=conn.execute("""SELECT
+            SUM(CASE WHEN classification_status='pending' THEN 1 ELSE 0 END) pending,
+            SUM(CASE WHEN classification_status='processing' THEN 1 ELSE 0 END) processing,
+            SUM(CASE WHEN classification_status='processed' THEN 1 ELSE 0 END) classified,
+            SUM(CASE WHEN classification_status='failed' THEN 1 ELSE 0 END) failed
+            FROM messages""").fetchone()
+        return {name:int(row[name] or 0) for name in ("pending", "processing", "classified", "failed")}
+    finally: conn.close()
+
+def retry_failed_classifications():
+    """Put all failed classifications back into the queue for a manual retry."""
+    conn=get_connection()
+    try:
+        cursor=conn.execute("""UPDATE messages
+            SET classification_status='pending', classification_error=NULL,
+                classification_processed_at=NULL, classification_attempts=0
+            WHERE classification_status='failed'""")
+        conn.commit()
+        return cursor.rowcount
+    finally: conn.close()
+
 def _last_time(conn,where,params=()):
     row=conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}",params).fetchone(); return row["value"] if row and row["value"] else None
 

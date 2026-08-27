@@ -77,6 +77,19 @@ class MessageRepository:
             advertio_processed_at=processed_at,
         )
 
+    def clear_media_path(self, message_id, channel_username):
+        """Clear media_path for exactly one delivered message record."""
+        conn = database.get_connection()
+        try:
+            cursor = conn.execute(
+                "UPDATE messages SET media_path=NULL WHERE channel_username=? AND message_id=?",
+                (channel_username, message_id),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def set_target_date(self, channel_username, target_date):
         return database.set_channel_target_date(channel_username, target_date)
 

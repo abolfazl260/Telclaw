@@ -6,10 +6,8 @@ from datetime import date
 
 from colorama import Fore
 
-import config
-from ai.ai_service import AIProcessingService
+from ai.classification_service import CategoryClassificationService
 from collection.crawler import CRAWL_MODE_ALL
-from collection.media_downloader import download_photo_for_record
 from services.crawl_job_service import CrawlJobService
 from services.processing_service import ProcessingService
 from services.stage_control import get_stage_control
@@ -19,10 +17,10 @@ from monitoring.telegram_monitor import get_telegram_monitor
 class SchedulerService:
     """Run continuous channel cycles in the order crawl -> process -> AI."""
 
-    def __init__(self, crawl_job_service=None, processing_service=None, ai_service=None):
+    def __init__(self, crawl_job_service=None, processing_service=None, classification_service=None):
         self.crawl_job = crawl_job_service or CrawlJobService()
         self.processing = processing_service or ProcessingService()
-        self.ai = ai_service or AIProcessingService()
+        self.classification = classification_service or CategoryClassificationService()
         self.monitor = get_telegram_monitor()
         self.stage_control = get_stage_control()
         self._tasks = {}
@@ -41,16 +39,6 @@ class SchedulerService:
         session = getattr(client, "session", None)
         session_name = getattr(session, "filename", None) or str(session)
         return f"{session_name}:{channel_username.lower().lstrip('@')}:{from_date}:{to_date}:{crawl_mode}"
-
-    @staticmethod
-    def _make_sync_media_downloader(client):
-        loop = asyncio.get_running_loop()
-
-        def download(record):
-            future = asyncio.run_coroutine_threadsafe(download_photo_for_record(client, record), loop)
-            return future.result()
-
-        return download
 
     async def _run_post_crawl_pipeline(self, client, channel_username, crawl_result=None):
         async with self._pipeline_lock:
@@ -78,27 +66,21 @@ class SchedulerService:
             await self.monitor.report("processing", processing_stats)
             self.stage_control.consume_skip("processing")
 
-            self.ai.set_media_downloader(self._make_sync_media_downloader(client))
-            print(f"\n{Fore.CYAN}▸ Starting AI processing...")
-            ai_stats = await asyncio.to_thread(
-                self.ai.process_pending_with_stats,
+            print(f"\n{Fore.CYAN}▸ Starting AI category classification...")
+            classification_stats = await asyncio.to_thread(
+                self.classification.process_pending_with_stats,
                 should_stop=lambda: self.stage_control.is_skip_requested("ai"),
             )
-            if ai_stats.get("disabled"):
-                print(f"{Fore.YELLOW}⚠️ AI extraction is disabled in configuration.")
-            elif ai_stats.get("stopped"):
-                print(f"{Fore.YELLOW}⚠️ AI stage skipped by operator; remaining records stay pending.")
+            if classification_stats.get("disabled"):
+                print(f"{Fore.YELLOW}⚠️ AI category classification is disabled in configuration.")
+            elif classification_stats.get("stopped"):
+                print(f"{Fore.YELLOW}⚠️ AI category classification skipped by operator; remaining records stay pending.")
             else:
-                print(f"{Fore.GREEN}✅ AI processing completed | Found: {ai_stats['found']} | Processed: {ai_stats['processed']} | Skipped: {ai_stats['skipped']} | Failed: {ai_stats['failed']}")
-            await self.monitor.report("ai", {k: v for k, v in ai_stats.items() if k != "disabled"})
+                print(f"{Fore.GREEN}✅ AI category classification completed | Found: {classification_stats['found']} | Processed: {classification_stats['processed']} | Skipped: {classification_stats['skipped']} | Failed: {classification_stats['failed']}")
+            await self.monitor.report("classification", {k: v for k, v in classification_stats.items() if k != "disabled"})
             self.stage_control.consume_skip("ai")
 
-            advertio_stats = ai_stats.get("advertio")
-            if advertio_stats is not None:
-                await self.monitor.report("advertio", advertio_stats)
-                if self.stage_control.consume_skip("advertio"):
-                    print(f"{Fore.YELLOW}⚠️ Advertio stage skip request consumed; remaining deliveries stay pending.")
-            return processing_stats, ai_stats
+            return processing_stats, classification_stats
 
     @staticmethod
     def _normalize_crawl_stats(result):

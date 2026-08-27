@@ -32,13 +32,13 @@ Cleaning
    ↓
 Normalization
    ↓
-Rule / Category Engine
+AI Category Classification
    ↓
-AI Processing
+Category-specific AI Extraction
    ↓
 Validation
    ↓
-Processed Storage
+Category Table
    ↓
 Business Rules
    ↓
@@ -128,6 +128,7 @@ AI processing is configuration-driven. Each category can define:
 - required fields
 - optional fields
 - extraction parameters
+- batch classification instructions
 - prompt/instructions
 - output schema
 - validation rules

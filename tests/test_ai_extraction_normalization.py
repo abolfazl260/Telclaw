@@ -12,7 +12,14 @@ def test_singleton_category_list_is_unwrapped(category):
     normalized = _normalize_selected_category_data(result)
 
     assert normalized["data"][category] is item
-    assert validate_result(normalized) == (category, item)
+    validated_category, validated_data = validate_result(normalized)
+    assert validated_category == category
+    if category == "housinglist":
+        assert validated_data == {"title": "Example", "country_code": "CA"}
+    elif category == "joblist":
+        assert validated_data == {}
+    else:
+        assert validated_data == item
 
 
 def test_category_dict_is_unchanged():
@@ -22,7 +29,7 @@ def test_category_dict_is_unchanged():
     normalized = _normalize_selected_category_data(result)
 
     assert normalized["data"]["housinglist"] is item
-    assert validate_result(normalized) == ("housinglist", item)
+    assert validate_result(normalized) == ("housinglist", {"title": "Example", "country_code": "CA"})
 
 
 @pytest.mark.parametrize(

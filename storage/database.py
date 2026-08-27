@@ -20,7 +20,24 @@ def _migrate_messages_table(cursor):
         if column not in existing: cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
     cursor.execute("UPDATE messages SET collection_status=COALESCE(collection_status,'collected')")
     cursor.execute("UPDATE messages SET processing_status=CASE processing_status WHEN 'collected' THEN 'pending' WHEN 'processed' THEN 'processed' WHEN 'processing_failed' THEN 'failed' WHEN 'ai_processed' THEN 'processed' WHEN 'ai_failed' THEN 'processed' ELSE processing_status END")
-    cursor.execute("UPDATE messages SET ai_status=CASE WHEN processing_status='processed' AND ai_category IS NOT NULL THEN 'processed' WHEN ai_processed_at IS NOT NULL AND ai_error IS NOT NULL THEN 'failed' WHEN ai_processed_at IS NOT NULL THEN 'processed' WHEN processing_status='processed' THEN 'pending' ELSE COALESCE(ai_status,'waiting') END")
+    cursor.execute("UPDATE messages SET classification_status=CASE WHEN classification_category IS NOT NULL THEN 'processed' WHEN processing_status='processed' AND COALESCE(classification_status,'waiting')='waiting' THEN 'pending' ELSE COALESCE(classification_status,'waiting') END")
+    cursor.execute("UPDATE messages SET ai_status=CASE WHEN processing_status='processed' AND ai_category IS NOT NULL THEN 'processed' WHEN ai_processed_at IS NOT NULL AND ai_error IS NOT NULL THEN 'failed' WHEN ai_processed_at IS NOT NULL THEN 'processed' ELSE COALESCE(ai_status,'waiting') END")
+
+def _create_category_table(cursor,table,fields):
+    columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]
+    cursor.execute(f"CREATE TABLE {table} ({', '.join(columns)})")
+
+def _rebuild_category_table(cursor,table,fields,existing_columns):
+    temp_table=f"{table}_new"
+    cursor.execute(f"DROP TABLE IF EXISTS {temp_table}")
+    _create_category_table(cursor,temp_table,fields)
+    desired_columns=["id","processed_message_id",*fields.keys(),"created_at"]
+    copy_columns=[column for column in desired_columns if column in existing_columns]
+    if copy_columns:
+        column_sql=", ".join(copy_columns)
+        cursor.execute(f"INSERT INTO {temp_table} ({column_sql}) SELECT {column_sql} FROM {table}")
+    cursor.execute(f"DROP TABLE {table}")
+    cursor.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 
 def _create_category_table(cursor,table,fields):
     columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]
@@ -56,9 +73,9 @@ def _create_category_tables(cursor):
 def initialize_db():
     conn=get_connection()
     try:
-        cursor=conn.cursor(); cursor.execute("""CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_username TEXT NOT NULL, message_id INTEGER NOT NULL, text TEXT, raw_text TEXT, cleaned_text TEXT, date TEXT NOT NULL, media_path TEXT, message_link TEXT, media_reference TEXT, collection_status TEXT NOT NULL DEFAULT 'collected', processing_status TEXT NOT NULL DEFAULT 'pending', ai_status TEXT NOT NULL DEFAULT 'waiting', pipeline_version TEXT, cleaned_at TEXT, ai_category TEXT, ai_processed_at TEXT, ai_error TEXT, channel_id INTEGER, channel_name TEXT, sender_id INTEGER, sender_username TEXT, sender_type TEXT, has_media INTEGER NOT NULL DEFAULT 0, media_type TEXT, file_unique_id TEXT, advertio_status TEXT NOT NULL DEFAULT 'waiting', advertio_lead_id TEXT, advertio_error TEXT, advertio_processed_at TEXT, UNIQUE(channel_username,message_id))""")
+        cursor=conn.cursor(); cursor.execute("""CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_username TEXT NOT NULL, message_id INTEGER NOT NULL, text TEXT, raw_text TEXT, cleaned_text TEXT, date TEXT NOT NULL, media_path TEXT, message_link TEXT, media_reference TEXT, collection_status TEXT NOT NULL DEFAULT 'collected', processing_status TEXT NOT NULL DEFAULT 'pending', ai_status TEXT NOT NULL DEFAULT 'waiting', pipeline_version TEXT, cleaned_at TEXT, ai_category TEXT, ai_processed_at TEXT, ai_error TEXT, channel_id INTEGER, channel_name TEXT, sender_id INTEGER, sender_username TEXT, sender_type TEXT, has_media INTEGER NOT NULL DEFAULT 0, media_type TEXT, file_unique_id TEXT, advertio_status TEXT NOT NULL DEFAULT 'waiting', advertio_lead_id TEXT, advertio_error TEXT, advertio_processed_at TEXT, classification_status TEXT NOT NULL DEFAULT 'waiting', classification_category TEXT, classification_error TEXT, classification_processed_at TEXT, classification_attempts INTEGER NOT NULL DEFAULT 0, UNIQUE(channel_username,message_id))""")
         _migrate_messages_table(cursor)
-        for sql in ("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)","CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username,date)","CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)","CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)","CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)","CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)","CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)","CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)","CREATE INDEX IF NOT EXISTS idx_messages_advertio_status ON messages(advertio_status)"): cursor.execute(sql)
+        for sql in ("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)","CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username,date)","CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)","CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)","CREATE INDEX IF NOT EXISTS idx_messages_classification_status ON messages(classification_status)","CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)","CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)","CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)","CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)","CREATE INDEX IF NOT EXISTS idx_messages_advertio_status ON messages(advertio_status)"): cursor.execute(sql)
         cursor.execute("CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY,target_date TEXT NOT NULL,last_crawled_date TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS telegram_monitor_subscribers (chat_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, enabled INTEGER NOT NULL DEFAULT 1, first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
         _create_category_tables(cursor); conn.commit()
@@ -80,10 +97,10 @@ def get_monitor_subscribers():
 def get_pipeline_status():
     conn=get_connection()
     try:
-        row=conn.execute("""SELECT COUNT(*) total_messages,SUM(CASE WHEN collection_status='collected' THEN 1 ELSE 0 END) collected,SUM(CASE WHEN collection_status='collected' AND processing_status='pending' THEN 1 ELSE 0 END) processing_pending,SUM(CASE WHEN processing_status='failed' THEN 1 ELSE 0 END) processing_failed,SUM(CASE WHEN processing_status='processed' AND ai_status='pending' THEN 1 ELSE 0 END) ai_pending,SUM(CASE WHEN ai_status='failed' THEN 1 ELSE 0 END) ai_failed,SUM(CASE WHEN COALESCE(advertio_status,'waiting') IN ('waiting','retry') AND ai_status='processed' THEN 1 ELSE 0 END) advertio_pending,SUM(CASE WHEN advertio_status='failed' THEN 1 ELSE 0 END) advertio_failed FROM messages""").fetchone()
+        row=conn.execute("""SELECT COUNT(*) total_messages,SUM(CASE WHEN collection_status='collected' THEN 1 ELSE 0 END) collected,SUM(CASE WHEN collection_status='collected' AND processing_status='pending' THEN 1 ELSE 0 END) processing_pending,SUM(CASE WHEN processing_status='failed' THEN 1 ELSE 0 END) processing_failed,SUM(CASE WHEN processing_status='processed' AND classification_status='pending' THEN 1 ELSE 0 END) classification_pending,SUM(CASE WHEN classification_status='failed' THEN 1 ELSE 0 END) classification_failed,SUM(CASE WHEN processing_status='processed' AND ai_status='pending' THEN 1 ELSE 0 END) ai_pending,SUM(CASE WHEN ai_status='failed' THEN 1 ELSE 0 END) ai_failed,SUM(CASE WHEN COALESCE(advertio_status,'waiting') IN ('waiting','retry') AND ai_status='processed' THEN 1 ELSE 0 END) advertio_pending,SUM(CASE WHEN advertio_status='failed' THEN 1 ELSE 0 END) advertio_failed FROM messages""").fetchone()
         channels=conn.execute("SELECT COUNT(DISTINCT channel_username) n FROM messages").fetchone()["n"] or 0; subscribers=conn.execute("SELECT COUNT(*) n FROM telegram_monitor_subscribers WHERE enabled=1").fetchone()["n"] or 0
         def value(name): return int(row[name] or 0)
-        return {"system":"RUNNING","total_messages":value("total_messages"),"collected":value("collected"),"processing_pending":value("processing_pending"),"processing_failed":value("processing_failed"),"ai_pending":value("ai_pending"),"ai_failed":value("ai_failed"),"advertio_pending":value("advertio_pending"),"advertio_failed":value("advertio_failed"),"channels":int(channels),"subscribers":int(subscribers)}
+        return {"system":"RUNNING","total_messages":value("total_messages"),"collected":value("collected"),"processing_pending":value("processing_pending"),"processing_failed":value("processing_failed"),"classification_pending":value("classification_pending"),"classification_failed":value("classification_failed"),"ai_pending":value("ai_pending"),"ai_failed":value("ai_failed"),"advertio_pending":value("advertio_pending"),"advertio_failed":value("advertio_failed"),"channels":int(channels),"subscribers":int(subscribers)}
     finally: conn.close()
 
 def _last_time(conn,where,params=()):
@@ -98,8 +115,8 @@ def get_pipeline_health():
         last_processing=_last_time(conn,"processing_status='processed'")
         last_ai=_last_time(conn,"ai_status='processed'")
         last_advertio=_last_time(conn,"advertio_status='sent'")
-        pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE (collection_status='collected' AND processing_status='pending') OR (processing_status='processed' AND ai_status='pending') OR (ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry'))").fetchone()["n"] or 0
-        failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed' OR ai_status='failed' OR advertio_status='failed'").fetchone()["n"] or 0
+        pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE (collection_status='collected' AND processing_status='pending') OR (processing_status='processed' AND classification_status='pending') OR (processing_status='processed' AND ai_status='pending') OR (ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry'))").fetchone()["n"] or 0
+        failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed' OR classification_status='failed' OR ai_status='failed' OR advertio_status='failed'").fetchone()["n"] or 0
         total=conn.execute("SELECT COUNT(*) n FROM messages").fetchone()["n"] or 0
         if total==0: db_state="WARNING"; warning="Database has no collected messages yet."
         else: db_state="HEALTHY"; warning=""
@@ -108,12 +125,14 @@ def get_pipeline_health():
             if stage_pending>0: return "WARNING"
             return "HEALTHY" if last else "WARNING"
         processing_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE collection_status='collected' AND processing_status='pending'").fetchone()["n"] or 0
+        classification_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='processed' AND classification_status='pending'").fetchone()["n"] or 0
         ai_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='processed' AND ai_status='pending'").fetchone()["n"] or 0
         advertio_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry')").fetchone()["n"] or 0
         processing_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed'").fetchone()["n"] or 0
+        classification_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE classification_status='failed'").fetchone()["n"] or 0
         ai_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE ai_status='failed'").fetchone()["n"] or 0
         advertio_failed_count=conn.execute("SELECT COUNT(*) n FROM messages WHERE advertio_status='failed'").fetchone()["n"] or 0
-        return {"crawler":"HEALTHY" if last_crawl else "WARNING","processing":activity(last_processing,processing_pending,processing_failed),"ai":activity(last_ai,ai_pending,ai_failed),"advertio":activity(last_advertio,advertio_pending,advertio_failed_count),"database":db_state,"last_crawl":last_crawl or "No crawl recorded","last_processing":last_processing or "No processing recorded","last_ai":last_ai or "No AI processing recorded","last_advertio":last_advertio or "No Advertio delivery recorded","backlog":int(pending),"failed":int(failed),"warning":warning}
+        return {"crawler":"HEALTHY" if last_crawl else "WARNING","processing":activity(last_processing,processing_pending,processing_failed),"classification":activity(last_processing,classification_pending,classification_failed),"ai":activity(last_ai,ai_pending,ai_failed),"advertio":activity(last_advertio,advertio_pending,advertio_failed_count),"database":db_state,"last_crawl":last_crawl or "No crawl recorded","last_processing":last_processing or "No processing recorded","last_ai":last_ai or "No AI processing recorded","last_advertio":last_advertio or "No Advertio delivery recorded","backlog":int(pending),"failed":int(failed),"warning":warning}
     finally: conn.close()
 
 def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,has_media=False,media_type=None,file_unique_id=None,media_path=None,message_link=None,media_reference=None):
@@ -137,7 +156,8 @@ def _get_messages(where_sql,params,limit,channel_username):
     finally: conn.close()
 def get_messages_by_status(status,limit=500,channel_username=None): return _get_messages("processing_status=?",[status],limit,channel_username)
 def get_processing_pending_messages(limit=500,channel_username=None): return _get_messages("collection_status='collected' AND processing_status='pending'",[],limit,channel_username)
-def get_ai_pending_messages(limit=100,channel_username=None): return _get_messages("processing_status='processed' AND ai_status='pending'",[],limit,channel_username)
+def get_classification_pending_messages(limit=50,channel_username=None): return _get_messages("processing_status='processed' AND (classification_status='pending' OR (classification_status='failed' AND classification_attempts<?))",[config.AI_CLASSIFICATION_MAX_RETRIES],limit,channel_username)
+def get_ai_pending_messages(limit=100,channel_username=None): return _get_messages("processing_status='processed' AND classification_status='processed' AND ai_status='pending'",[],limit,channel_username)
 def get_advertio_pending_messages(limit=100,channel_username=None):
     conn=get_connection()
     try:
@@ -154,7 +174,7 @@ def get_previous_messages_by_sender(sender_id,before_id):
     try:return [dict(r) for r in conn.execute("SELECT id,message_id,channel_username,sender_id,raw_text,text FROM messages WHERE sender_id=? AND id<? AND COALESCE(raw_text,text,'')<>'' ORDER BY id",(sender_id,before_id)).fetchall()]
     finally: conn.close()
 def update_message(message_id,channel_username,**fields):
-    allowed={"cleaned_text","text","collection_status","processing_status","ai_status","pipeline_version","cleaned_at","ai_category","ai_processed_at","ai_error","advertio_status","advertio_lead_id","advertio_error","advertio_processed_at"}; updates={k:v for k,v in fields.items() if k in allowed}
+    allowed={"cleaned_text","text","collection_status","processing_status","classification_status","classification_category","classification_error","classification_processed_at","classification_attempts","ai_status","pipeline_version","cleaned_at","ai_category","ai_processed_at","ai_error","advertio_status","advertio_lead_id","advertio_error","advertio_processed_at"}; updates={k:v for k,v in fields.items() if k in allowed}
     if not updates:return False
     assignments=", ".join(f"{k}=?" for k in updates); values=list(updates.values())+[channel_username,message_id]; conn=get_connection()
     try: cursor=conn.execute(f"UPDATE messages SET {assignments} WHERE channel_username=? AND message_id=?",values); conn.commit(); return cursor.rowcount>0

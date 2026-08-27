@@ -24,6 +24,11 @@ class FakeBatchClassifier:
         return {int(item["message_id"]): "housinglist" if int(item["message_id"]) == 101 else "none" for item in messages}
 
 
+class FailingBatchClassifier:
+    def classify_batch(self, messages):
+        raise RuntimeError("classifier is unavailable")
+
+
 def test_processing_success_enqueues_classification(monkeypatch, tmp_path):
     database, _ = _load_database(monkeypatch, tmp_path)
     from storage.message_repository import MessageRepository
@@ -69,6 +74,47 @@ def test_category_classification_service_batches_and_marks_results(monkeypatch, 
     assert rows[102]["classification_category"] == "none"
     assert rows[102]["ai_category"] is None
     assert rows[102]["ai_status"] == "skipped"
+
+
+def test_category_classification_skips_messages_that_already_have_ai_category(monkeypatch, tmp_path):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from ai.classification_service import CategoryClassificationService
+    from storage.message_repository import MessageRepository
+
+    database.initialize_db()
+    database.insert_message("chan", 101, "Room for rent", "2026-08-27")
+    database.insert_message("chan", 102, "Job available", "2026-08-27")
+    repo = MessageRepository()
+    for message_id in (101, 102):
+        repo.mark_processing_result(message_id, "chan", success=True, text="listing", cleaned_text="listing")
+    repo.update_message(101, "chan", ai_category="housinglist")
+
+    classifier = FakeBatchClassifier()
+    stats = CategoryClassificationService(repository=repo, classifier=classifier, batch_size=config.AI_CLASSIFICATION_BATCH_SIZE).process_pending()
+
+    assert stats["found"] == 1
+    assert [[item["message_id"] for item in call] for call in classifier.calls] == [[102]]
+    with database.get_connection() as conn:
+        row = conn.execute("SELECT ai_category FROM messages WHERE message_id=101").fetchone()
+    assert row["ai_category"] == "housinglist"
+
+
+def test_category_classification_errors_are_logged_and_printed(monkeypatch, tmp_path, caplog, capsys):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from ai.classification_service import CategoryClassificationService
+    from storage.message_repository import MessageRepository
+
+    database.initialize_db()
+    database.insert_message("chan", 101, "Room for rent", "2026-08-27")
+    repo = MessageRepository()
+    repo.mark_processing_result(101, "chan", success=True, text="Room for rent", cleaned_text="Room for rent")
+
+    with caplog.at_level("ERROR", logger="telclaw.ai.classification"):
+        stats = CategoryClassificationService(repository=repo, classifier=FailingBatchClassifier(), batch_size=config.AI_CLASSIFICATION_BATCH_SIZE).process_pending()
+
+    assert stats["failed"] == 1
+    assert "failed whole batch: classifier is unavailable" in caplog.text
+    assert "[AI CLASSIFICATION ERROR] failed whole batch: classifier is unavailable" in capsys.readouterr().out
 
 
 def test_classification_queue_status_and_manual_retry_are_database_backed(monkeypatch, tmp_path):

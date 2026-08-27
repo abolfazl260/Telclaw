@@ -1,12 +1,16 @@
 """Advertio delivery orchestration for crawled housing listings."""
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
 from storage.message_repository import MessageRepository
+
+logger = logging.getLogger(__name__)
 
 
 class AdvertioMappingError(ValueError):
@@ -113,6 +117,36 @@ class AdvertioDeliveryService:
         if not path:
             return []
         return [path]
+
+    def _cleanup_delivered_media(self, record):
+        """Remove only the delivered record's local media after successful delivery.
+
+        Cleanup is deliberately best-effort: a cleanup failure must never turn a
+        successfully recorded Advertio delivery into a retry/failure.
+        """
+        path_value = record.get("media_path")
+        if not path_value:
+            return
+
+        path = Path(path_value)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            logger.warning("Advertio media cleanup skipped; file already missing: %s", path)
+        except OSError as exc:
+            logger.error("Advertio media cleanup failed for %s: %s", path, exc)
+            return
+
+        try:
+            self.repository.clear_media_path(
+                record["message_id"],
+                record["channel_username"],
+            )
+        except Exception as exc:
+            logger.error(
+                "Advertio media_path DB cleanup failed for message=%s channel=%s: %s",
+                record.get("message_id"), record.get("channel_username"), exc,
+            )
 
     @staticmethod
     def _date(value):
@@ -340,6 +374,7 @@ class AdvertioDeliveryService:
                     lead_id=result.get("lead_id"), error=None,
                     processed_at=datetime.now(timezone.utc).isoformat(),
                 )
+                self._cleanup_delivered_media(record)
                 if status == "already_existed":
                     already_existed += 1
                 else:

@@ -192,7 +192,8 @@ The extraction prompt is built by the AI extractor and receives the processed Te
 
 The prompt must require:
 
-- Exactly one category: `housinglist`, `transferlist`, or `joblist`.
+- Category classification returns exactly one of: `housinglist`, `transferlist`, `joblist`, or `none`.
+- Category-specific extraction remains limited to extractable categories: `housinglist`, `transferlist`, or `joblist`.
 - Extraction only from facts supported by the message.
 - No invented values.
 - Unknown scalar values as `null`.
@@ -229,6 +230,22 @@ The platform's canonical currency is **Canadian dollars (CAD)** for all requests
 - Never treat USD/EUR/GBP/TRY/IRR/etc. as the platform's canonical output currency.
 
 The extractor also normalizes returned currency fields to CAD where a monetary field is present. This is a business-rule normalization, not a currency conversion engine.
+
+
+## AI Category Classification Queue
+
+After deterministic cleaning/normalization succeeds, messages enter an independent AI category classification queue. Classification is intentionally separate from category-specific extraction so the project can batch lightweight category decisions before running more expensive structured extraction.
+
+Default classification batch size is configured with `TELCLAW_AI_CLASSIFICATION_BATCH_SIZE` and defaults to `50`. Each AI request receives an array of cleaned messages with `message_id` and `text`, and returns one category per message. Valid classification categories are:
+
+```text
+housinglist
+transferlist
+joblist
+none
+```
+
+Records classified as `none` are marked as skipped for extraction. Other records are moved to the future category-specific extraction queue by setting their AI status to pending.
 
 ## 9. AI Category Schema
 
@@ -270,22 +287,30 @@ features
 
 ### Transfer fields
 
+`transferlist` is for air-cargo / passenger-baggage shipping requests.
+
 ```text
-vehicle_type
-brand
-model
-trim
-year
-mileage
-mileage_unit
+title
+description
+origin_city
+origin_province
+origin_country
+destination_city
+destination_province
+destination_country
+airline
+flight_number
+departure_date
+departure_time
+arrival_date
+arrival_time
+transport_type
+cargo_type
+weight
+weight_unit
+quantity
 price
 currency
-location
-transmission
-fuel_type
-condition
-engine
-color
 contact
 features
 ```

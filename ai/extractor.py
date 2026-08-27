@@ -116,8 +116,14 @@ def _english_fallback_title(category, category_data):
         city = str(category_data.get("city") or "").strip()
         return f"{job_title} in {city}" if city else job_title
     if category == "transferlist":
-        city = str(category_data.get("city") or category_data.get("from_city") or "").strip()
-        return f"Property Transfer Opportunity in {city}" if city else "Property Transfer Opportunity"
+        origin = str(category_data.get("origin_city") or "").strip()
+        destination = str(category_data.get("destination_city") or "").strip()
+        if origin and destination:
+            return f"Air Cargo Request from {origin} to {destination}"
+        if origin or destination:
+            city = origin or destination
+            return f"Air Cargo Request for {city}"
+        return "Air Cargo Request"
     return "Marketplace Listing"
 
 

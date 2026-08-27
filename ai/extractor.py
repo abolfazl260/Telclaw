@@ -158,6 +158,22 @@ def _ensure_titles(result, source_text):
     return result
 
 
+def _normalize_selected_category_data(result):
+    """Unwrap only a singleton list for the AI-selected category."""
+    if not isinstance(result, dict):
+        return result
+    category = result.get("category")
+    if category not in CATEGORIES:
+        return result
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return result
+    category_data = data.get(category)
+    if isinstance(category_data, list) and len(category_data) == 1 and isinstance(category_data[0], dict):
+        data[category] = category_data[0]
+    return result
+
+
 def _normalize_defaults(result):
     if not isinstance(result, dict):
         return result
@@ -323,6 +339,7 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            result = _normalize_selected_category_data(result)
             result = _ensure_titles(result, processed_text)
             result = _normalize_defaults(result)
             result = _normalize_currencies(result)

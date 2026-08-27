@@ -262,7 +262,7 @@ class GroqExtractor:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _build_extraction_prompt()},
+                {"role": "system", "content": _build_extraction_prompt(compact=True)},
                 {"role": "user", "content": processed_text.strip()},
             ],
             "temperature": 0,

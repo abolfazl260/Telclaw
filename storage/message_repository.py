@@ -21,6 +21,12 @@ class MessageRepository:
     def get_classification_pending(self, limit=50, channel_username=None):
         return database.get_classification_pending_messages(limit=limit, channel_username=channel_username)
 
+    def get_classification_queue_status(self):
+        return database.get_classification_queue_status()
+
+    def retry_failed_classifications(self):
+        return database.retry_failed_classifications()
+
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 

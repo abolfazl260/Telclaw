@@ -28,7 +28,7 @@ class TelegramMonitor:
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"databese","description":"Download full SQLite database"},{"command":"database","description":"Download full SQLite database"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -87,15 +87,17 @@ class TelegramMonitor:
         message=update.get("message") or {}; chat=message.get("chat") or {}; chat_id=chat.get("id")
         if chat_id is None:return
         text=(message.get("text") or "").strip().lower()
-        if text.startswith("/start"):
+        command=text.split(maxsplit=1)[0].split("@",1)[0] if text else ""
+        if command == "/start":
             database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
-        elif text.startswith("/stop"):
+        elif command == "/stop":
             database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت گزارش‌های Telclaw متوقف شد.")
-        elif text.startswith("/status"): await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard())
-        elif text.startswith("/health"): await self._send(chat_id,await self._build_health_message())
-        elif text.startswith("/today"): await self._send(chat_id,await self._build_today_message())
-        elif text.startswith("/source"): await self._send_source_chunks(chat_id)
-        elif text.startswith("/down_errors"): await self._download_errors(chat_id)
+        elif command == "/status": await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard())
+        elif command == "/health": await self._send(chat_id,await self._build_health_message())
+        elif command == "/today": await self._send(chat_id,await self._build_today_message())
+        elif command == "/source": await self._send_source_chunks(chat_id)
+        elif command == "/down_errors": await self._download_errors(chat_id)
+        elif command in {"/databese","/database"}: await self._download_database(chat_id)
     def _tehran_timestamp(self,value):
         if not value:return "هنوز ثبت نشده"
         try:
@@ -117,6 +119,22 @@ class TelegramMonitor:
             await self._send_document(chat_id,log_path,"📝 Telclaw crawler error log\n" f"🕐 Generated: {timestamp} Tehran")
         except Exception:
             logger.exception("Failed to send crawler_errors.log to chat %s",chat_id); await self._send(chat_id,"❌ Failed to send crawler_errors.log.")
+
+    async def _download_database(self,chat_id):
+        if not self._is_subscribed(chat_id): await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
+        db_path=Path(config.DB_NAME)
+        try:
+            if not db_path.is_absolute(): db_path=PROJECT_ROOT / db_path
+            db_path=db_path.resolve()
+            if not db_path.exists() or not db_path.is_file(): await self._send(chat_id,"❌ Database file not found."); return
+            size=db_path.stat().st_size
+            if size==0: await self._send(chat_id,"⚠️ Database file is empty."); return
+            if size>TELEGRAM_MAX_DOCUMENT_BYTES:
+                await self._send(chat_id,"❌ <b>Database file is too large to send via Telegram.</b>\n\n" f"File size: {size/(1024*1024):.2f} MB"); return
+            timestamp=self._tehran_timestamp(datetime.now(ZoneInfo("UTC")).isoformat())
+            await self._send_document(chat_id,db_path,"🗄 Telclaw SQLite database\n" f"🕐 Generated: {timestamp} Tehran")
+        except Exception:
+            logger.exception("Failed to send database to chat %s",chat_id); await self._send(chat_id,"❌ Failed to send database file.")
     async def _build_status_message(self):
         status=database.get_pipeline_status(); last=status.get("last_crawl")
         return ("📊 <b>Telclaw Current Status</b>\n\n" f"🟢 <b>System:</b> {html.escape(str(status['system']))}\n" f"📥 <b>Collected:</b> {status['collected']}\n" f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n" f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n" f"🤖 <b>AI pending:</b> {status['ai_pending']}\n" f"🤖 <b>AI failed:</b> {status['ai_failed']}\n" f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n" f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n" f"📦 <b>Total messages:</b> {status['total_messages']}\n" f"📡 <b>Channels:</b> {status['channels']}\n" f"👥 <b>Active subscribers:</b> {status['subscribers']}\n" f"📥 <b>Last crawl:</b> {html.escape(self._tehran_timestamp(last))} Tehran")

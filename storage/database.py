@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import config
 
-MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","collection_status":"TEXT NOT NULL DEFAULT 'collected'","classification_status":"TEXT NOT NULL DEFAULT 'waiting'","classification_category":"TEXT","classification_error":"TEXT","classification_processed_at":"TEXT","classification_attempts":"INTEGER NOT NULL DEFAULT 0","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT"}
+MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","collection_status":"TEXT NOT NULL DEFAULT 'collected'","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT"}
 CATEGORY_TABLES = {"housinglist":{"property_type":"TEXT","listing_type":"TEXT","title":"TEXT","description":"TEXT","location":"TEXT","country_code":"TEXT","province":"TEXT","city":"TEXT","neighborhood":"TEXT","price":"REAL","currency":"TEXT","rent_period":"TEXT","bedrooms":"INTEGER","bathrooms":"REAL","area":"REAL","area_unit":"TEXT","furnished":"INTEGER","availability":"TEXT","property_condition":"TEXT","contact":"TEXT","features":"TEXT"},"transferlist":{"title":"TEXT","description":"TEXT","origin_city":"TEXT","origin_province":"TEXT","origin_country":"TEXT","destination_city":"TEXT","destination_province":"TEXT","destination_country":"TEXT","airline":"TEXT","flight_number":"TEXT","departure_date":"TEXT","departure_time":"TEXT","arrival_date":"TEXT","arrival_time":"TEXT","transport_type":"TEXT","cargo_type":"TEXT","weight":"REAL","weight_unit":"TEXT","quantity":"REAL","price":"REAL","currency":"TEXT","contact":"TEXT","features":"TEXT"},"joblist":{"job_title":"TEXT","company":"TEXT","location":"TEXT","employment_type":"TEXT","salary":"REAL","salary_currency":"TEXT","salary_period":"TEXT","experience":"TEXT","education":"TEXT","skills":"TEXT","remote":"INTEGER","job_type":"TEXT","description":"TEXT","application_method":"TEXT","contact":"TEXT"}}
 
 def get_connection():
@@ -22,6 +22,22 @@ def _migrate_messages_table(cursor):
     cursor.execute("UPDATE messages SET processing_status=CASE processing_status WHEN 'collected' THEN 'pending' WHEN 'processed' THEN 'processed' WHEN 'processing_failed' THEN 'failed' WHEN 'ai_processed' THEN 'processed' WHEN 'ai_failed' THEN 'processed' ELSE processing_status END")
     cursor.execute("UPDATE messages SET classification_status=CASE WHEN classification_category IS NOT NULL THEN 'processed' WHEN processing_status='processed' AND COALESCE(classification_status,'waiting')='waiting' THEN 'pending' ELSE COALESCE(classification_status,'waiting') END")
     cursor.execute("UPDATE messages SET ai_status=CASE WHEN processing_status='processed' AND ai_category IS NOT NULL THEN 'processed' WHEN ai_processed_at IS NOT NULL AND ai_error IS NOT NULL THEN 'failed' WHEN ai_processed_at IS NOT NULL THEN 'processed' ELSE COALESCE(ai_status,'waiting') END")
+
+def _create_category_table(cursor,table,fields):
+    columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]
+    cursor.execute(f"CREATE TABLE {table} ({', '.join(columns)})")
+
+def _rebuild_category_table(cursor,table,fields,existing_columns):
+    temp_table=f"{table}_new"
+    cursor.execute(f"DROP TABLE IF EXISTS {temp_table}")
+    _create_category_table(cursor,temp_table,fields)
+    desired_columns=["id","processed_message_id",*fields.keys(),"created_at"]
+    copy_columns=[column for column in desired_columns if column in existing_columns]
+    if copy_columns:
+        column_sql=", ".join(copy_columns)
+        cursor.execute(f"INSERT INTO {temp_table} ({column_sql}) SELECT {column_sql} FROM {table}")
+    cursor.execute(f"DROP TABLE {table}")
+    cursor.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 
 def _create_category_table(cursor,table,fields):
     columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]

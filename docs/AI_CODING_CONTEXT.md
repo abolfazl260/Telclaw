@@ -270,22 +270,30 @@ features
 
 ### Transfer fields
 
+`transferlist` is for air-cargo / passenger-baggage shipping requests.
+
 ```text
-vehicle_type
-brand
-model
-trim
-year
-mileage
-mileage_unit
+title
+description
+origin_city
+origin_province
+origin_country
+destination_city
+destination_province
+destination_country
+airline
+flight_number
+departure_date
+departure_time
+arrival_date
+arrival_time
+transport_type
+cargo_type
+weight
+weight_unit
+quantity
 price
 currency
-location
-transmission
-fuel_type
-condition
-engine
-color
 contact
 features
 ```

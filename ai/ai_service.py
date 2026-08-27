@@ -73,15 +73,35 @@ class AIProcessingService:
         time.sleep(wait)
 
     def _extract_with_retry(self, source_text, record, progress=False):
-        attempts = 0
+        rate_limit_attempts = 0
+        invalid_json_attempts = 0
         while True:
             try:
                 return self.extractor.extract(source_text)
             except AIExtractionError as exc:
-                if getattr(exc, "status", None) != 429 or attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
+                if getattr(exc, "reason", None) == "invalid_provider_output":
+                    if invalid_json_attempts >= config.GROQ_INVALID_JSON_MAX_RETRIES:
+                        raise
+                    invalid_json_attempts += 1
+                    logger.warning(
+                        "[GROQ INVALID JSON] provider=%s model=%s retry=%s/%s message_id=%s channel=%s",
+                        getattr(self.extractor, "provider", "groq-1"),
+                        getattr(self.extractor, "model", None),
+                        invalid_json_attempts,
+                        config.GROQ_INVALID_JSON_MAX_RETRIES,
+                        record.get("message_id"),
+                        record.get("channel_username"),
+                    )
+                    if progress:
+                        print(
+                            f"[AI] Groq invalid JSON: retry={invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES} "
+                            f"message={record.get('message_id')}"
+                        )
+                    continue
+                if getattr(exc, "status", None) != 429 or rate_limit_attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
                     raise
-                attempts += 1
-                self._rate_limit_wait(exc, attempts)
+                rate_limit_attempts += 1
+                self._rate_limit_wait(exc, rate_limit_attempts)
 
     def _prepare_media_for_advertio(self, record):
         if record.get("media_type") != "photo":

@@ -7,7 +7,7 @@ Extract ONLY housing/property information. Ignore job, transfer, cargo, employme
 
 Return ONLY one valid JSON object. No Markdown, comments, explanations, or <think> tags.
 Required top-level shape:
-{"category":"{category}","data":{"{category":{...}}}}
+{"category":"{category}","data":{"{category}":{...}}}
 Only populate the {category} object. Use only the allowed fields below. Do not invent facts. Use null for unknown values where needed by the existing validator. Do not add fields that are not listed.
 
 Allowed fields:

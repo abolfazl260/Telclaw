@@ -6,6 +6,8 @@ from datetime import date
 
 from colorama import Fore
 
+import config
+from ai.ai_service import AIProcessingService
 from ai.classification_service import CategoryClassificationService
 from collection.crawler import CRAWL_MODE_ALL
 from services.crawl_job_service import CrawlJobService
@@ -15,12 +17,13 @@ from monitoring.telegram_monitor import get_telegram_monitor
 
 
 class SchedulerService:
-    """Run continuous channel cycles in the order crawl -> process -> AI."""
+    """Run continuous channel cycles in the order crawl -> process -> classify -> extract -> deliver."""
 
-    def __init__(self, crawl_job_service=None, processing_service=None, classification_service=None):
+    def __init__(self, crawl_job_service=None, processing_service=None, classification_service=None, ai_processing_service=None):
         self.crawl_job = crawl_job_service or CrawlJobService()
         self.processing = processing_service or ProcessingService()
         self.classification = classification_service or CategoryClassificationService()
+        self.ai_processing = ai_processing_service or AIProcessingService()
         self.monitor = get_telegram_monitor()
         self.stage_control = get_stage_control()
         self._tasks = {}
@@ -80,7 +83,26 @@ class SchedulerService:
             await self.monitor.report("classification", {k: v for k, v in classification_stats.items() if k != "disabled"})
             self.stage_control.consume_skip("ai")
 
-            return processing_stats, classification_stats
+            extraction_stats = {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False, "advertio": None}
+            if not classification_stats.get("disabled") and not classification_stats.get("stopped"):
+                print(f"\n{Fore.CYAN}▸ Starting category-based AI data extraction...")
+                extraction_stats = await asyncio.to_thread(
+                    self.ai_processing.process_pending_with_stats,
+                    should_stop=lambda: self.stage_control.is_skip_requested("ai"),
+                )
+                if extraction_stats.get("disabled"):
+                    print(f"{Fore.YELLOW}⚠️ AI data extraction is disabled in configuration.")
+                elif extraction_stats.get("stopped"):
+                    print(f"{Fore.YELLOW}⚠️ AI data extraction skipped by operator; remaining records stay pending.")
+                else:
+                    print(f"{Fore.GREEN}✅ AI data extraction completed | Found: {extraction_stats['found']} | Processed: {extraction_stats['processed']} | Skipped: {extraction_stats['skipped']} | Failed: {extraction_stats['failed']}")
+                await self.monitor.report("ai", {k: v for k, v in extraction_stats.items() if k != "disabled"})
+                self.stage_control.consume_skip("ai")
+            else:
+                reason = "disabled" if classification_stats.get("disabled") else "stopped"
+                print(f"{Fore.YELLOW}⚠️ AI data extraction not started because classification stage is {reason}.")
+
+            return processing_stats, classification_stats, extraction_stats
 
     @staticmethod
     def _normalize_crawl_stats(result):

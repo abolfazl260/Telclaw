@@ -39,22 +39,6 @@ def _rebuild_category_table(cursor,table,fields,existing_columns):
     cursor.execute(f"DROP TABLE {table}")
     cursor.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 
-def _create_category_table(cursor,table,fields):
-    columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]
-    cursor.execute(f"CREATE TABLE {table} ({', '.join(columns)})")
-
-def _rebuild_category_table(cursor,table,fields,existing_columns):
-    temp_table=f"{table}_new"
-    cursor.execute(f"DROP TABLE IF EXISTS {temp_table}")
-    _create_category_table(cursor,temp_table,fields)
-    desired_columns=["id","processed_message_id",*fields.keys(),"created_at"]
-    copy_columns=[column for column in desired_columns if column in existing_columns]
-    if copy_columns:
-        column_sql=", ".join(copy_columns)
-        cursor.execute(f"INSERT INTO {temp_table} ({column_sql}) SELECT {column_sql} FROM {table}")
-    cursor.execute(f"DROP TABLE {table}")
-    cursor.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
-
 def _create_category_tables(cursor):
     for table,fields in CATEGORY_TABLES.items():
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(table,)); exists=cursor.fetchone() is not None
@@ -160,29 +144,18 @@ def get_pipeline_health():
         return {"crawler":"HEALTHY" if last_crawl else "WARNING","processing":activity(last_processing,processing_pending,processing_failed),"classification":activity(last_processing,classification_pending,classification_failed),"ai":activity(last_ai,ai_pending,ai_failed),"advertio":activity(last_advertio,advertio_pending,advertio_failed_count),"database":db_state,"last_crawl":last_crawl or "No crawl recorded","last_processing":last_processing or "No processing recorded","last_ai":last_ai or "No AI processing recorded","last_advertio":last_advertio or "No Advertio delivery recorded","backlog":int(pending),"failed":int(failed),"warning":warning}
     finally: conn.close()
 
-def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,has_media=False,media_type=None,file_unique_id=None,media_path=None,message_link=None,media_reference=None):
+def _get_messages(where,params,limit,channel_username=None):
     conn=get_connection()
     try:
-        cursor=conn.execute("INSERT OR IGNORE INTO messages(channel_username,message_id,text,raw_text,cleaned_text,date,media_path,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,has_media,media_type,file_unique_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(channel_username,message_id,text,raw_text,cleaned_text,date_str,media_path,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,int(bool(has_media)),media_type,str(file_unique_id) if file_unique_id is not None else None)); conn.commit(); return cursor.rowcount>0
-    finally: conn.close()
-
-def get_latest_message_id(channel_username):
-    conn=get_connection()
-    try:
-        row=conn.execute("SELECT MAX(message_id) max_message_id FROM messages WHERE channel_username=?",(channel_username,)).fetchone(); return int(row["max_message_id"]) if row and row["max_message_id"] is not None else 0
-    finally: conn.close()
-
-def _get_messages(where_sql,params,limit,channel_username):
-    conn=get_connection()
-    try:
-        sql=f"SELECT * FROM messages WHERE {where_sql}"; values=list(params)
+        sql="SELECT * FROM messages WHERE "+where; values=list(params)
         if channel_username: sql += " AND channel_username=?"; values.append(channel_username)
         sql += " ORDER BY id LIMIT ?"; values.append(int(limit)); return [dict(r) for r in conn.execute(sql,values).fetchall()]
     finally: conn.close()
 def get_messages_by_status(status,limit=500,channel_username=None): return _get_messages("processing_status=?",[status],limit,channel_username)
 def get_processing_pending_messages(limit=500,channel_username=None): return _get_messages("collection_status='collected' AND processing_status='pending'",[],limit,channel_username)
 def get_classification_pending_messages(limit=50,channel_username=None): return _get_messages("processing_status='processed' AND NULLIF(TRIM(ai_category), '') IS NULL AND (classification_status='pending' OR (classification_status='failed' AND classification_attempts<?))",[config.AI_CLASSIFICATION_MAX_RETRIES],limit,channel_username)
-def get_ai_pending_messages(limit=100,channel_username=None): return _get_messages("processing_status='processed' AND classification_status='processed' AND ai_status='pending'",[],limit,channel_username)
+def get_ai_pending_messages(limit=100,channel_username=None):
+    return _get_messages("processing_status='processed' AND classification_status='processed' AND classification_category IN ('housinglist','transferlist','joblist') AND ai_status='pending'",[],limit,channel_username)
 def get_advertio_pending_messages(limit=100,channel_username=None):
     conn=get_connection()
     try:

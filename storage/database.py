@@ -144,6 +144,18 @@ def get_pipeline_health():
         return {"crawler":"HEALTHY" if last_crawl else "WARNING","processing":activity(last_processing,processing_pending,processing_failed),"classification":activity(last_processing,classification_pending,classification_failed),"ai":activity(last_ai,ai_pending,ai_failed),"advertio":activity(last_advertio,advertio_pending,advertio_failed_count),"database":db_state,"last_crawl":last_crawl or "No crawl recorded","last_processing":last_processing or "No processing recorded","last_ai":last_ai or "No AI processing recorded","last_advertio":last_advertio or "No Advertio delivery recorded","backlog":int(pending),"failed":int(failed),"warning":warning}
     finally: conn.close()
 
+def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,has_media=False,media_type=None,file_unique_id=None,media_path=None,message_link=None,media_reference=None):
+    conn=get_connection()
+    try:
+        cursor=conn.execute("INSERT OR IGNORE INTO messages(channel_username,message_id,text,raw_text,cleaned_text,date,media_path,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,has_media,media_type,file_unique_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(channel_username,message_id,text,raw_text,cleaned_text,date_str,media_path,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,int(bool(has_media)),media_type,str(file_unique_id) if file_unique_id is not None else None)); conn.commit(); return cursor.rowcount>0
+    finally: conn.close()
+
+def get_latest_message_id(channel_username):
+    conn=get_connection()
+    try:
+        row=conn.execute("SELECT MAX(message_id) max_message_id FROM messages WHERE channel_username=?",(channel_username,)).fetchone(); return int(row["max_message_id"]) if row and row["max_message_id"] is not None else 0
+    finally: conn.close()
+
 def _get_messages(where,params,limit,channel_username=None):
     conn=get_connection()
     try:

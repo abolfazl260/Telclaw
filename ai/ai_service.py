@@ -161,16 +161,23 @@ class AIProcessingService:
                 break
             source_text = self._source_text(record)
             category = self._classification_category(record)
-            if not source_text:
-                self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="no_text", ai_processed_at=datetime.now(timezone.utc).isoformat())
-                skipped += 1
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: no_text")
-                continue
             if category not in {"housinglist", "transferlist", "joblist"}:
                 self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="invalid_classification_category", ai_processed_at=datetime.now(timezone.utc).isoformat())
                 skipped += 1
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: invalid classification category")
                 continue
+            if not config.is_ai_extraction_enabled(category):
+                self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason=f"category_disabled:{category}", ai_processed_at=datetime.now(timezone.utc).isoformat())
+                skipped += 1
+                logger.info("AI Classification: %s | AI Extraction: skipped (category disabled)", category)
+                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: {category} extraction disabled")
+                continue
+            if not source_text:
+                self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="no_text", ai_processed_at=datetime.now(timezone.utc).isoformat())
+                skipped += 1
+                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: no_text")
+                continue
+            logger.info("AI Classification: %s | AI Extraction: processing %s", category, category)
             self.repository.mark_ai_processing(record["message_id"], record["channel_username"])
             try:
                 result = self._extract_with_retry(source_text, record, category, progress=progress)

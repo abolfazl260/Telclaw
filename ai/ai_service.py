@@ -37,6 +37,10 @@ class AIProcessingService:
     def _source_text(record):
         return (record.get("cleaned_text") or record.get("text") or record.get("raw_text") or "").strip()
 
+    @staticmethod
+    def _classification_category(record):
+        return str(record.get("classification_category") or "").strip().lower()
+
     def _log_ai_error(self, record, exc):
         logger.error(
             "[AI ERROR] provider=%s status=%s model=%s reason=%s message_id=%s channel=%s detail=%s",
@@ -72,12 +76,12 @@ class AIProcessingService:
         print(f"[AI] Groq rate limit: provider={getattr(self.extractor, 'provider', 'groq-1')} model={getattr(self.extractor, 'model', None)} status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} wait={wait:.2f}s reason={reason}")
         time.sleep(wait)
 
-    def _extract_with_retry(self, source_text, record, progress=False):
+    def _extract_with_retry(self, source_text, record, category, progress=False):
         rate_limit_attempts = 0
         invalid_json_attempts = 0
         while True:
             try:
-                return self.extractor.extract(source_text)
+                return self.extractor.extract(source_text, category=category)
             except AIExtractionError as exc:
                 if getattr(exc, "reason", None) == "invalid_provider_output":
                     if invalid_json_attempts >= config.GROQ_INVALID_JSON_MAX_RETRIES:
@@ -93,10 +97,7 @@ class AIProcessingService:
                         record.get("channel_username"),
                     )
                     if progress:
-                        print(
-                            f"[AI] Groq invalid JSON: retry={invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES} "
-                            f"message={record.get('message_id')}"
-                        )
+                        print(f"[AI] Groq invalid JSON: retry={invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES} message={record.get('message_id')}")
                     continue
                 if getattr(exc, "status", None) != 429 or rate_limit_attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
                     raise
@@ -159,14 +160,25 @@ class AIProcessingService:
                 print(f"[AI] Stage skip requested; remaining {total - index + 1} records stay pending.")
                 break
             source_text = self._source_text(record)
+            category = self._classification_category(record)
             if not source_text:
                 self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="no_text", ai_processed_at=datetime.now(timezone.utc).isoformat())
                 skipped += 1
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: no_text")
                 continue
+            if category not in {"housinglist", "transferlist", "joblist"}:
+                self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="invalid_classification_category", ai_processed_at=datetime.now(timezone.utc).isoformat())
+                skipped += 1
+                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: invalid classification category")
+                continue
             self.repository.mark_ai_processing(record["message_id"], record["channel_username"])
             try:
-                category, data = self._extract_with_retry(source_text, record, progress=progress)
+                result = self._extract_with_retry(source_text, record, category, progress=progress)
+                if result.get("category") != category:
+                    raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
+                data = result.get("data", {}).get(category)
+                if not isinstance(data, dict):
+                    raise AIExtractionError(f"Missing extracted data for classified category: {category}", reason="invalid_provider_output")
                 self.repository.save_category_record(record["id"], category, data)
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=True, ai_category=category, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 delivery = self._deliver_to_advertio(record, category, data)

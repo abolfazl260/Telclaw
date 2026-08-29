@@ -25,11 +25,13 @@ class AIExtractionError(RuntimeError):
         self.retry_after = retry_after
 
 
-def _build_extraction_prompt(compact=False):
+def _build_extraction_prompt(category=None, compact=False):
     if compact:
-        return """Extract structured marketplace data from this Telegram message.
+        category_instruction = f"The authoritative category is {category}. Do NOT classify or change the category. Return category exactly as {category}." if category else ""
+        return f"""Extract structured marketplace data from this Telegram message.
 Return ONLY one valid JSON object, no Markdown, no explanation, no <think> tags.
-Top level: {\"category\":\"housinglist|transferlist|joblist\",\"data\":{\"selected_category\":{...}}}.
+{category_instruction}
+Top level: {{\"category\":\"{category or 'housinglist|transferlist|joblist'}\",\"data\":{{\"{category or 'selected_category'}\":{{...}}}}}}.
 Include ONLY fields you can determine plus the required fields below. Do not output empty optional fields.
 
 Universal rules:
@@ -48,16 +50,17 @@ Message follows:
 """
 
     category_fields = "\n".join(
-        f"- {category}: {', '.join(fields)}" for category, fields in CATEGORY_FIELDS.items()
+        f"- {item}: {', '.join(fields)}" for item, fields in CATEGORY_FIELDS.items()
     )
     return f"""You extract structured marketplace information from processed Telegram messages.
-Classify each message into exactly one category: {', '.join(CATEGORIES)}.
+The authoritative category is {category}. Do NOT classify the message and do NOT change this category.
+Return category exactly as {category}.
 Return ONLY valid JSON. No Markdown fences, explanations, comments, or <think> tags.
 Never invent facts. Omit optional fields when unknown. Use normalized English field names.
 
 Required output shape:
-{{"category":"housinglist|transferlist|joblist","data":{{"selected_category":{{...}}}}}}
-Only include the selected category and only fields with useful values.
+{{"category":"{category}","data":{{"{category}":{{...}}}}}}
+Only include {category} and only fields with useful values.
 
 TITLE: every returned title MUST be natural English. Translate non-English text into English; do not transliterate. Keep it concise and marketplace-ready. No URLs, hashtags, emojis, or explanations.
 
@@ -274,7 +277,9 @@ class GroqExtractor:
                 return float(match.group(1))
         return None
 
-    def extract(self, processed_text):
+    def extract(self, processed_text, category=None):
+        if category not in CATEGORIES:
+            raise AIExtractionError(f"Invalid authoritative extraction category: {category}", reason="invalid_category")
         if not self.api_key:
             raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
         if not isinstance(processed_text, str) or not processed_text.strip():
@@ -284,7 +289,7 @@ class GroqExtractor:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _build_extraction_prompt(compact=True)},
+                {"role": "system", "content": _build_extraction_prompt(category=category, compact=True)},
                 {"role": "user", "content": processed_text.strip()},
             ],
             "temperature": 0,
@@ -345,11 +350,15 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            if result.get("category") != category:
+                raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
             result = _normalize_selected_category_data(result)
             result = _ensure_titles(result, processed_text)
             result = _normalize_defaults(result)
             result = _normalize_currencies(result)
             result = _validate_english_title(result)
             return validate_result(result)
+        except AIExtractionError:
+            raise
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise AIExtractionError(f"Invalid Groq JSON output: {exc}", reason="invalid_provider_output") from exc

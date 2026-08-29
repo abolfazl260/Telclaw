@@ -29,9 +29,11 @@ def load_prompt(category: str) -> str:
 
 
 def render_prompt(category: str, message_text: str = "") -> str:
-    """Render only the explicitly supported placeholders in a prompt file."""
-    prompt = load_prompt(category)
-    return prompt.replace("{category}", category).replace("{message_text}", message_text)
+    """Render the category placeholder and append the existing message context."""
+    prompt = load_prompt(category).replace("{category}", category)
+    if message_text:
+        prompt = f"{prompt.rstrip()}\n\nMessage to extract:\n{message_text}"
+    return prompt
 
 
 __all__ = ["PROMPT_DIR", "PROMPT_FILES", "load_prompt", "render_prompt"]

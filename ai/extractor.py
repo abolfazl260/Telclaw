@@ -7,7 +7,8 @@ import re
 import requests
 
 import config
-from ai.category_schemas import CATEGORY_FIELDS, CATEGORIES, validate_result
+from ai.category_schemas import CATEGORIES, validate_result
+from ai.prompt_loader import render_prompt
 from ai.rate_limiter import RateLimiter
 
 logger = logging.getLogger("telclaw.ai")
@@ -23,55 +24,6 @@ class AIExtractionError(RuntimeError):
         self.provider = provider
         self.stop_queue = stop_queue
         self.retry_after = retry_after
-
-
-def _build_extraction_prompt(category=None, compact=False):
-    if compact:
-        category_instruction = f"The authoritative category is {category}. Do NOT classify or change the category. Return category exactly as {category}." if category else ""
-        return f"""Extract structured marketplace data from this Telegram message.
-Return ONLY one valid JSON object, no Markdown, no explanation, no <think> tags.
-{category_instruction}
-Top level: {{\"category\":\"{category or 'housinglist|transferlist|joblist'}\",\"data\":{{\"{category or 'selected_category'}\":{{...}}}}}}.
-Include ONLY fields you can determine plus the required fields below. Do not output empty optional fields.
-
-Universal rules:
-- title must be concise natural English. Translate it when necessary; never transliterate it.
-- Never invent price, bedrooms, property type, or other facts.
-- Canonical currency is CAD.
-- For housing, if country is not stated, country_code=CA. Infer province from the stated city/neighborhood when it is unambiguous.
-- For housing, output these required fields: listing_type, property_type, bedrooms, price, currency, country_code, province, city, title.
-- Housing currency must be CAD and country_code must be CA. If price/bedrooms/property type/city/province cannot be reliably determined, use null and the local validator will reject the record.
-- Housing bedrooms must be one of: 0, 1, 2, 3, 4+ (string).
-- Housing property_type: apartment, condo, basement, studio, room, house.
-- Housing listing_type: rent or roommate.
-- Housing price is a monthly CAD number from 100 to 10000.
-
-Message follows:
-"""
-
-    category_fields = "\n".join(
-        f"- {item}: {', '.join(fields)}" for item, fields in CATEGORY_FIELDS.items()
-    )
-    return f"""You extract structured marketplace information from processed Telegram messages.
-The authoritative category is {category}. Do NOT classify the message and do NOT change this category.
-Return category exactly as {category}.
-Return ONLY valid JSON. No Markdown fences, explanations, comments, or <think> tags.
-Never invent facts. Omit optional fields when unknown. Use normalized English field names.
-
-Required output shape:
-{{"category":"{category}","data":{{"{category}":{{...}}}}}}
-Only include {category} and only fields with useful values.
-
-TITLE: every returned title MUST be natural English. Translate non-English text into English; do not transliterate. Keep it concise and marketplace-ready. No URLs, hashtags, emojis, or explanations.
-
-CURRENCY: the platform canonical currency is CAD. For housing, transfer and job salary fields, use CAD. If a source explicitly gives a non-CAD currency, do not invent an exchange rate; leave the monetary value/currency unavailable so validation can reject it.
-
-HOUSING: when country is not stated, country_code defaults to CA. Infer province from the city/neighborhood when the location is unambiguous. Required for housing: listing_type, property_type, bedrooms, price, currency, country_code, province, city, title. Do not guess price, bedrooms, property type, city, or province.
-Housing listing_type = rent|roommate; property_type = apartment|condo|basement|studio|room|house; bedrooms = 0|1|2|3|4+ as a string; price = monthly CAD number 100-10000.
-
-Allowed fields:
-{category_fields}
-"""
 
 
 def _title_is_english(title):
@@ -168,7 +120,7 @@ def _ensure_titles(result, source_text):
 
 
 def _normalize_selected_category_data(result):
-    """Unwrap only a singleton list for the AI-selected category."""
+    """Unwrap only a singleton list for the authoritative category."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
@@ -289,8 +241,7 @@ class GroqExtractor:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _build_extraction_prompt(category=category, compact=True)},
-                {"role": "user", "content": processed_text.strip()},
+                {"role": "system", "content": render_prompt(category, processed_text.strip())},
             ],
             "temperature": 0,
             "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,

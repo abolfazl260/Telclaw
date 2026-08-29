@@ -19,6 +19,3 @@ Existing job normalization rules:
 - salary_currency is CAD when a salary is valid for the platform. Do not invent exchange rates.
 - Preserve remote, employment type, and job type only when supported by the source.
 - Extract only employment-related information present in the source.
-
-Message:
-{message_text}

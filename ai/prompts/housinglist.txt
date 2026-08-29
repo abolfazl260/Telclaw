@@ -24,6 +24,3 @@ Existing housing normalization rules:
 - bedrooms uses 0, 1, 2, 3, or 4+ as a string when supported.
 - price is a monthly CAD number when supported; do not convert currencies or invent exchange rates.
 - Extract only information actually present or safely normalized from the source.
-
-Message:
-{message_text}

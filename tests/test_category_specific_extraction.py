@@ -13,7 +13,7 @@ from ai.ai_service import AIProcessingService
 from ai.category_schemas import CATEGORIES
 from ai.classification_service import CategoryClassificationService
 from ai.extractor import GroqExtractor
-from ai.prompt_loader import PROMPT_FILES, PROMPT_DIR, load_prompt, render_prompt
+from ai.prompt_loader import PROMPT_FILES, load_prompt, render_prompt
 
 
 class FakeRateLimiter:
@@ -148,7 +148,6 @@ def test_classification_remains_independent_when_extraction_disabled(monkeypatch
 
     monkeypatch.setattr(config, "AI_CLASSIFICATION_ENABLED", True)
     monkeypatch.setattr(config, "AI_EXTRACTION_ENABLED", False)
-    monkeypatch.update = getattr(monkeypatch, "update", None)
     service = CategoryClassificationService(repository=repo, classifier=FakeClassifier())
     result = service._process_batch([{"message_id": 10, "channel_username": "test", "cleaned_text": "cargo from Toronto"}])
 

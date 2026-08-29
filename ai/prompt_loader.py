@@ -29,12 +29,9 @@ def load_prompt(category: str) -> str:
 
 
 def render_prompt(category: str, message_text: str = "") -> str:
-    """Render a category prompt with only the supported dynamic values."""
+    """Render only the explicitly supported placeholders in a prompt file."""
     prompt = load_prompt(category)
-    try:
-        return prompt.format(category=category, message_text=message_text)
-    except KeyError as exc:
-        raise RuntimeError(f"Unsupported placeholder in extraction prompt for '{category}': {exc}") from exc
+    return prompt.replace("{category}", category).replace("{message_text}", message_text)
 
 
 __all__ = ["PROMPT_DIR", "PROMPT_FILES", "load_prompt", "render_prompt"]

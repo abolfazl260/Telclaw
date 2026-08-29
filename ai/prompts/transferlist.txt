@@ -19,6 +19,3 @@ Existing transfer normalization rules:
 - currency is CAD when a monetary value is valid for the platform. Do not invent exchange rates.
 - Preserve origin/destination direction exactly as supported by the source.
 - Extract only transfer-related information present in the source.
-
-Message:
-{message_text}

@@ -10,6 +10,7 @@ import config
 from ai.ai_service import AIProcessingService
 from ai.classification_service import CategoryClassificationService
 from collection.crawler import CRAWL_MODE_ALL
+from collection.media_downloader import download_photo_for_record
 from services.crawl_job_service import CrawlJobService
 from services.processing_service import ProcessingService
 from services.stage_control import get_stage_control
@@ -42,6 +43,27 @@ class SchedulerService:
         session = getattr(client, "session", None)
         session_name = getattr(session, "filename", None) or str(session)
         return f"{session_name}:{channel_username.lower().lstrip('@')}:{from_date}:{to_date}:{crawl_mode}"
+
+    @staticmethod
+    def _bind_media_downloader(ai_processing_service, client, loop):
+        """Bind the current Telegram client to the synchronous AI media hook.
+
+        AI extraction is executed in a worker thread, while the Telethon client
+        belongs to the scheduler's event loop. The adapter submits the existing
+        async downloader back to that loop and waits for its result, avoiding
+        unsafe cross-loop access to the Telegram client.
+        """
+        if not hasattr(ai_processing_service, "set_media_downloader"):
+            return
+
+        def download_media(record):
+            future = asyncio.run_coroutine_threadsafe(
+                download_photo_for_record(client, record),
+                loop,
+            )
+            return future.result()
+
+        ai_processing_service.set_media_downloader(download_media)
 
     async def _run_post_crawl_pipeline(self, client, channel_username, crawl_result=None):
         async with self._pipeline_lock:
@@ -86,6 +108,11 @@ class SchedulerService:
             extraction_stats = {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False, "advertio": None}
             if not classification_stats.get("disabled") and not classification_stats.get("stopped"):
                 print(f"\n{Fore.CYAN}▸ Starting category-based AI data extraction...")
+                self._bind_media_downloader(
+                    self.ai_processing,
+                    client,
+                    asyncio.get_running_loop(),
+                )
                 extraction_stats = await asyncio.to_thread(
                     self.ai_processing.process_pending_with_stats,
                     should_stop=lambda: self.stage_control.is_skip_requested("ai"),

@@ -2,33 +2,18 @@
 
 from __future__ import annotations
 
-import config
-
-from ai.providers.cloudflare import CloudflareProvider
 from ai.providers.groq import GroqProvider
 
 
 class AIProviderManager:
     """Route AI operations to the configured provider.
 
-    Providers are selected from configuration without exposing their protocol
-    details to classification or extraction services.
+    Only Groq is registered today; the manager intentionally keeps business
+    services independent from the provider implementation.
     """
 
-    PROVIDERS = {
-        "groq": GroqProvider,
-        "cloudflare": CloudflareProvider,
-    }
-
-    def __init__(self, provider=None, provider_name=None):
-        if provider is not None:
-            self.provider_instance = provider
-            return
-        selected = (provider_name or (config.AI_PROVIDERS[0] if config.AI_PROVIDERS else "groq")).lower()
-        try:
-            self.provider_instance = self.PROVIDERS[selected]()
-        except KeyError as exc:
-            raise RuntimeError(f"Unsupported AI provider: {selected}") from exc
+    def __init__(self, provider=None):
+        self.provider_instance = provider or GroqProvider()
 
     @property
     def provider(self):

@@ -305,7 +305,7 @@ class GroqProvider(AIProvider):
     def __init__(self, providers=None):
         providers = list(providers if providers is not None else config.GROQ_PROVIDERS)[:3]
         if not providers:
-            raise RuntimeError("Groq provider is not configured; missing GROQ_API_KEY or TELCLAW_GROQ_MODEL")
+            raise RuntimeError("No Groq AI providers are configured")
         self.providers = [GroqClient(api_key=item["api_key"], model=item["model"]) for item in providers]
         self.classifiers = [
             _GroqBatchClassifier(api_key=item["api_key"], model=item["model"])

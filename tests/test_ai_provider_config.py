@@ -63,3 +63,78 @@ def test_backward_compatible_groq_only_configuration(monkeypatch):
     status = manager.get_status()
     assert "legacy-key" not in str(status)
     assert status["configured_credentials"] == [1]
+
+
+def test_single_cloudflare_credential(monkeypatch):
+    cfg = _reload(
+        monkeypatch,
+        AI_PROVIDER_1="cloudflare",
+        AI_PROVIDER_2=None,
+        CLOUDFLARE_ACCOUNT_ID="account-one",
+        CLOUDFLARE_API_TOKEN="token-one",
+        CLOUDFLARE_MODEL="model-one",
+        CLOUDFLARE_ACCOUNT_ID_2="",
+        CLOUDFLARE_API_TOKEN_2="",
+        CLOUDFLARE_MODEL_2="",
+        CLOUDFLARE_ACCOUNT_ID_3="",
+        CLOUDFLARE_API_TOKEN_3="",
+        CLOUDFLARE_MODEL_3="",
+    )
+    assert cfg.CLOUDFLARE_PROVIDERS == [{"account_id": "account-one", "api_token": "token-one", "model": "model-one"}]
+    assert len(create_provider("cloudflare").providers) == 1
+
+
+def test_multiple_cloudflare_credentials(monkeypatch):
+    cfg = _reload(
+        monkeypatch,
+        AI_PROVIDER_1="cloudflare",
+        AI_PROVIDER_2=None,
+        CLOUDFLARE_ACCOUNT_ID="account-one",
+        CLOUDFLARE_API_TOKEN="token-one",
+        CLOUDFLARE_MODEL="model-one",
+        CLOUDFLARE_ACCOUNT_ID_2="account-two",
+        CLOUDFLARE_API_TOKEN_2="token-two",
+        CLOUDFLARE_MODEL_2="model-two",
+    )
+    assert cfg.CLOUDFLARE_PROVIDERS == [
+        {"account_id": "account-one", "api_token": "token-one", "model": "model-one"},
+        {"account_id": "account-two", "api_token": "token-two", "model": "model-two"},
+    ]
+
+
+def test_empty_optional_cloudflare_slots_are_ignored_even_with_default_model(monkeypatch):
+    cfg = _reload(
+        monkeypatch,
+        AI_PROVIDER_1="cloudflare",
+        AI_PROVIDER_2=None,
+        CLOUDFLARE_ACCOUNT_ID="account-one",
+        CLOUDFLARE_API_TOKEN="token-one",
+        CLOUDFLARE_MODEL="model-one",
+        CLOUDFLARE_ACCOUNT_ID_2="",
+        CLOUDFLARE_API_TOKEN_2="",
+        CLOUDFLARE_MODEL_2="",
+        CLOUDFLARE_ACCOUNT_ID_3="",
+        CLOUDFLARE_API_TOKEN_3="",
+        CLOUDFLARE_MODEL_3="",
+    )
+    assert len(cfg.CLOUDFLARE_PROVIDERS) == 1
+
+
+@pytest.mark.parametrize(
+    "slot,values,expected_missing",
+    [
+        (2, {"CLOUDFLARE_ACCOUNT_ID_2": "account-two", "CLOUDFLARE_API_TOKEN_2": "", "CLOUDFLARE_MODEL_2": "model-two"}, "CLOUDFLARE_API_TOKEN_2"),
+        (3, {"CLOUDFLARE_ACCOUNT_ID_3": "", "CLOUDFLARE_API_TOKEN_3": "token-three", "CLOUDFLARE_MODEL_3": "model-three"}, "CLOUDFLARE_ACCOUNT_ID_3"),
+    ],
+)
+def test_partial_cloudflare_credential_configuration_fails(monkeypatch, slot, values, expected_missing):
+    with pytest.raises(RuntimeError, match=expected_missing):
+        _reload(
+            monkeypatch,
+            AI_PROVIDER_1="cloudflare",
+            AI_PROVIDER_2=None,
+            CLOUDFLARE_ACCOUNT_ID="account-one",
+            CLOUDFLARE_API_TOKEN="token-one",
+            CLOUDFLARE_MODEL="model-one",
+            **values,
+        )

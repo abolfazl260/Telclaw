@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 import requests
 
@@ -20,25 +21,43 @@ logger = logging.getLogger("telclaw.ai.cloudflare")
 
 
 class CloudflareProvider(AIProvider):
-    """Cloudflare Workers AI adapter with Telclaw-normalized results."""
+    """Cloudflare Workers AI adapter with prioritized credential failover."""
 
     name = "cloudflare"
     API_BASE = "https://api.cloudflare.com/client/v4/accounts"
 
-    def __init__(self, account_id=None, api_token=None, model=None, timeout=None, rate_limiter=None, categories=None):
-        self.account_id = account_id if account_id is not None else config.CLOUDFLARE_ACCOUNT_ID
-        self.api_token = api_token if api_token is not None else config.CLOUDFLARE_API_TOKEN
-        self.model = model if model is not None else config.CLOUDFLARE_MODEL
+    def __init__(self, account_id=None, api_token=None, model=None, timeout=None, rate_limiter=None, categories=None, providers=None):
+        if providers is None and any(value is not None for value in (account_id, api_token, model)):
+            providers = [{"account_id": account_id, "api_token": api_token, "model": model}]
+        providers = list(providers if providers is not None else config.CLOUDFLARE_PROVIDERS)[:3]
+        if not providers:
+            raise RuntimeError("No Cloudflare AI credentials are configured")
+        for index, item in enumerate(providers, start=1):
+            missing = [name for name, value in (("account_id", item.get("account_id")), ("api_token", item.get("api_token")), ("model", item.get("model"))) if not value]
+            if missing:
+                raise RuntimeError(f"Cloudflare credential #{index} is incomplete; missing {', '.join(missing)}")
+        self.providers = providers
+        self.active_index = 0
+        self._unavailable_until = [0.0] * len(providers)
         self.timeout = timeout if timeout is not None else config.CLOUDFLARE_TIMEOUT_SECONDS
         self.rate_limiter = rate_limiter or RateLimiter(config.CLOUDFLARE_REQUESTS_PER_MINUTE)
         self.categories = tuple(categories or CLASSIFICATION_CATEGORIES)
-        missing = [name for name, value in (
-            ("CLOUDFLARE_ACCOUNT_ID", self.account_id),
-            ("CLOUDFLARE_API_TOKEN", self.api_token),
-            ("CLOUDFLARE_MODEL", self.model),
-        ) if not value]
-        if missing:
-            raise RuntimeError(f"Cloudflare provider is not configured; missing {', '.join(missing)}")
+
+    @property
+    def _active_credentials(self):
+        return self.providers[self.active_index]
+
+    @property
+    def account_id(self):
+        return self._active_credentials["account_id"]
+
+    @property
+    def api_token(self):
+        return self._active_credentials["api_token"]
+
+    @property
+    def model(self):
+        return self._active_credentials["model"]
 
     @property
     def endpoint(self):
@@ -46,7 +65,9 @@ class CloudflareProvider(AIProvider):
 
     @staticmethod
     def _reason(status):
-        if status in (401, 403):
+        if status == 401:
+            return "invalid_api_key"
+        if status == 403:
             return "permissions_error"
         if status == 404:
             return "model_not_found"
@@ -67,59 +88,76 @@ class CloudflareProvider(AIProvider):
         match = re.search(r"retry(?:[- ]after)?[:=\s]+(\d+(?:\.\d+)?)\s*s?", detail or "", re.I)
         return float(match.group(1)) if match else None
 
-    def _request(self, messages):
-        payload = {
-            "messages": messages,
-            "temperature": 0,
-            # Workers AI models that support structured output honor this JSON mode.
-            "response_format": {"type": "json_object"},
-        }
-        try:
-            self.rate_limiter.wait()
-            with self.rate_limiter.slot():
-                response = requests.post(
-                    self.endpoint,
-                    headers={"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json"},
-                    json=payload,
-                    timeout=self.timeout,
-                )
-        except requests.RequestException as exc:
-            raise AIExtractionError("Cloudflare request failed: transport error", provider=self.name, reason="network_error") from exc
+    def _next_available(self):
+        now = time.monotonic()
+        for index in range(self.active_index + 1, len(self.providers)):
+            if self._unavailable_until[index] <= now:
+                return index
+        return None
 
-        if not response.ok:
-            detail = response.text.strip()
-            retry_after = self._retry_after(response.headers, detail) if response.status_code == 429 else None
-            logger.error("Cloudflare provider error: status=%s model=%s reason=%s", response.status_code, self.model, self._reason(response.status_code))
-            raise AIExtractionError(
-                f"Cloudflare request failed: status={response.status_code}; model={self.model}; reason={self._reason(response.status_code)}",
-                provider=self.name,
-                status=response.status_code,
-                reason=self._reason(response.status_code),
-                stop_queue=response.status_code == 403,
-                retry_after=retry_after,
-            )
-        try:
-            body = response.json()
-            if isinstance(body, dict) and body.get("success") is False:
-                raise ValueError("Cloudflare returned an unsuccessful response")
-            result = body.get("result") if isinstance(body, dict) else None
-            if isinstance(result, dict):
-                content = result.get("response") or result.get("content")
-            else:
-                content = result
-            if isinstance(content, dict):
-                return content
-            if not isinstance(content, str) or not content.strip():
-                raise ValueError("Cloudflare response contains no JSON output")
-            return json.loads(content)
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise AIExtractionError("Invalid Cloudflare JSON output", provider=self.name, reason="invalid_provider_output") from exc
+    def _request(self, messages):
+        attempts = 0
+        while attempts <= config.AI_RETRY_COUNT:
+            now = time.monotonic()
+            if self._unavailable_until[self.active_index] > now:
+                next_index = self._next_available()
+                if next_index is None:
+                    time.sleep(max(0.0, self._unavailable_until[self.active_index] - now))
+                else:
+                    self.active_index = next_index
+            payload = {"messages": messages, "temperature": 0, "response_format": {"type": "json_object"}}
+            try:
+                self.rate_limiter.wait()
+                with self.rate_limiter.slot():
+                    response = requests.post(self.endpoint, headers={"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json"}, json=payload, timeout=self.timeout)
+            except requests.RequestException as exc:
+                self._unavailable_until[self.active_index] = time.monotonic() + config.AI_COOLDOWN_SECONDS
+                next_index = self._next_available()
+                if next_index is not None:
+                    self.active_index = next_index
+                    attempts += 1
+                    continue
+                raise AIExtractionError("Cloudflare request failed: transport error", provider=self.name, reason="network_error") from exc
+
+            if not response.ok:
+                detail = response.text.strip()
+                status = response.status_code
+                reason = self._reason(status)
+                retry_after = self._retry_after(response.headers, detail) if status == 429 else None
+                logger.error("Cloudflare provider error: status=%s model=%s reason=%s", status, self.model, reason)
+                next_index = self._next_available() if status in {401, 403, 429, 500, 502, 503, 504} else None
+                if next_index is not None:
+                    cooldown = retry_after if retry_after is not None else config.AI_COOLDOWN_SECONDS
+                    self._unavailable_until[self.active_index] = time.monotonic() + cooldown
+                    self.active_index = next_index
+                    attempts += 1
+                    continue
+                raise AIExtractionError(
+                    f"Cloudflare request failed: status={status}; model={self.model}; reason={reason}",
+                    provider=self.name, status=status, reason=reason,
+                    stop_queue=status == 403, retry_after=retry_after,
+                )
+
+            try:
+                body = response.json()
+                if isinstance(body, dict) and body.get("success") is False:
+                    raise ValueError("Cloudflare returned an unsuccessful response")
+                result = body.get("result") if isinstance(body, dict) else None
+                if isinstance(result, dict):
+                    content = result.get("response") or result.get("content")
+                else:
+                    content = result
+                if isinstance(content, dict):
+                    return content
+                if not isinstance(content, str) or not content.strip():
+                    raise ValueError("Cloudflare response contains no JSON output")
+                return json.loads(content)
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise AIExtractionError("Invalid Cloudflare JSON output", provider=self.name, reason="invalid_provider_output") from exc
+        raise RuntimeError("Cloudflare provider retry budget exhausted")
 
     def classify_batch(self, messages):
-        payload_messages = [
-            {"message_id": int(item["message_id"]), "text": str(item.get("text") or "").strip()}
-            for item in messages if str(item.get("text") or "").strip()
-        ]
+        payload_messages = [{"message_id": int(item["message_id"]), "text": str(item.get("text") or "").strip()} for item in messages if str(item.get("text") or "").strip()]
         if not payload_messages:
             return {}
         requested_ids = [item["message_id"] for item in payload_messages]

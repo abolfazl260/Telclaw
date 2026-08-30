@@ -65,6 +65,19 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("AI Processing Queue")
         self.show_message("Checking the AI queue in the database...", Fore.CYAN)
         try:
+            # Media-backed Advertio delivery requires an active Telethon client.
+            # Reuse the UI's existing client when available; otherwise establish
+            # one before starting the queue so photo records are not retried just
+            # because the manual queue was opened without a Telegram session.
+            client = await self.connect_client()
+            if client is None:
+                self.show_message(
+                    "AI queue requires a connected Telegram account because housing media may need to be downloaded.",
+                    Fore.RED,
+                )
+                await self.pause()
+                return
+
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
             result = self.ai_service.process_pending_with_stats()
             if result.get("disabled"):
@@ -263,48 +276,3 @@ class SystemConsoleUI(ConsoleUI):
         except Exception as exc:
             self.show_message(f"Groq connection test failed: {exc}", Fore.RED)
         await self.pause()
-
-    async def run(self):
-        while True:
-            self.clear_screen()
-            self.show_banner()
-            self.show_section_header("Main Menu")
-            print(f"{Fore.GREEN}│  1. ▶️ Start scheduled crawler")
-            print(f"{Fore.GREEN}│  2. 🧹 Process information queue")
-            print(f"{Fore.GREEN}│  3. 🤖 Process AI queue")
-            print(f"{Fore.GREEN}│  4. 🏷️ AI Category Classification")
-            print(f"{Fore.GREEN}│  5. 📤 Send eligible ads to Advertio")
-            print(f"{Fore.GREEN}│  6. 🔬 Test Groq connection")
-            print(f"{Fore.GREEN}│  7. ⚙️ Change settings")
-            print(f"{Fore.GREEN}│  8. 📋 Manage channels")
-            print(f"{Fore.GREEN}│  9. 👤 Switch / add account")
-            print(f"{Fore.GREEN}│  10. 🚪 Exit")
-            self.show_section_footer()
-
-            choice = await self.prompt_choice(
-                "\nChoose an option [1-10]: ",
-                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
-            )
-            if choice == "1":
-                await self.start_crawler_flow()
-            elif choice == "2":
-                await self.run_processing_queue()
-            elif choice == "3":
-                await self.run_ai_queue()
-            elif choice == "4":
-                await self.classification_menu()
-            elif choice == "5":
-                await self.run_advertio_delivery()
-            elif choice == "6":
-                await self.run_groq_connection_test()
-            elif choice == "7":
-                await self.change_settings()
-            elif choice == "8":
-                await self.manage_channels()
-            elif choice == "9":
-                await self.account_menu()
-            else:
-                self.crawler.stop_all()
-                await self.accounts.disconnect(self.client)
-                self.client = None
-                break

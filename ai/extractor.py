@@ -301,6 +301,8 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            if not isinstance(result, dict):
+                raise ValueError("Groq JSON output must be an object")
             if result.get("category") != category:
                 raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
             result = _normalize_selected_category_data(result)
@@ -308,7 +310,14 @@ class GroqExtractor:
             result = _normalize_defaults(result)
             result = _normalize_currencies(result)
             result = _validate_english_title(result)
-            return validate_result(result)
+
+            # validate_result() returns (category, normalized_data). The service layer
+            # consumes the canonical dict shape, so normalize the validator output here.
+            validated_category, validated_data = validate_result(result)
+            return {
+                "category": validated_category,
+                "data": {validated_category: validated_data},
+            }
         except AIExtractionError:
             raise
         except (ValueError, TypeError, json.JSONDecodeError) as exc:

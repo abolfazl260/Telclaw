@@ -1,4 +1,4 @@
-"""Orchestrates Groq extraction from the independent AI queue."""
+"""Orchestrates provider-agnostic extraction from the independent AI queue."""
 
 from datetime import datetime, timezone
 import logging
@@ -8,7 +8,7 @@ import time
 
 import config
 from ai.extractor import AIExtractionError
-from ai.provider_failover import GroqProviderFailover
+from ai.provider_manager import AIProviderManager
 from storage.message_repository import MessageRepository
 from services.stage_control import get_stage_control
 
@@ -16,18 +16,18 @@ logger = logging.getLogger("telclaw.ai")
 
 
 class AIProcessingService:
-    def __init__(self, repository=None, extractor=None, advertio_service=None, media_downloader=None):
+    def __init__(self, repository=None, provider_manager=None, extractor=None, advertio_service=None, media_downloader=None):
         self.repository = repository or MessageRepository()
-        self.extractor = extractor or GroqProviderFailover()
+        # extractor remains an injection alias for backwards-compatible callers.
+        self.provider_manager = provider_manager or AIProviderManager(provider=extractor)
         self.advertio_service = advertio_service
         self.media_downloader = media_downloader
         if self.advertio_service is None and config.ADVERTIO_INGEST_ENABLED:
             from delivery.advertio_service import AdvertioDeliveryService
             self.advertio_service = AdvertioDeliveryService()
         print(
-            f"[AI] Providers configured: {len(config.GROQ_PROVIDERS)} | "
-            f"active={getattr(self.extractor, 'provider', 'groq-1')} | "
-            f"model={getattr(self.extractor, 'model', config.GROQ_MODEL)}"
+            f"[AI] Provider configured: {getattr(self.provider_manager, 'provider', 'unknown')} | "
+            f"model={getattr(self.provider_manager, 'model', None)}"
         )
 
     def set_media_downloader(self, media_downloader):
@@ -44,9 +44,9 @@ class AIProcessingService:
     def _log_ai_error(self, record, exc):
         logger.error(
             "[AI ERROR] provider=%s status=%s model=%s reason=%s message_id=%s channel=%s detail=%s",
-            getattr(exc, "provider", getattr(self.extractor, "provider", "groq-1")),
+            getattr(exc, "provider", getattr(self.provider_manager, "provider", "groq-1")),
             getattr(exc, "status", None),
-            getattr(self.extractor, "model", None),
+            getattr(self.provider_manager, "model", None),
             getattr(exc, "reason", None),
             record.get("message_id"),
             record.get("channel_username"),
@@ -72,8 +72,8 @@ class AIProcessingService:
             base = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
             wait = max(config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS, min(base + random.uniform(0, min(1.0, base * 0.25)), config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
             reason = "exponential_backoff_jitter"
-        logger.warning("[GROQ RATE LIMIT] provider=%s model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.extractor, "provider", "groq-1"), getattr(self.extractor, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
-        print(f"[AI] Groq rate limit: provider={getattr(self.extractor, 'provider', 'groq-1')} model={getattr(self.extractor, 'model', None)} status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} wait={wait:.2f}s reason={reason}")
+        logger.warning("[AI RATE LIMIT] provider=%s model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.provider_manager, "provider", "groq-1"), getattr(self.provider_manager, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
+        print(f"[AI] AI rate limit: provider={getattr(self.provider_manager, 'provider', 'groq-1')} model={getattr(self.provider_manager, 'model', None)} status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} wait={wait:.2f}s reason={reason}")
         time.sleep(wait)
 
     def _extract_with_retry(self, source_text, record, category, progress=False):
@@ -81,23 +81,23 @@ class AIProcessingService:
         invalid_json_attempts = 0
         while True:
             try:
-                return self.extractor.extract(source_text, category=category)
+                return self.provider_manager.extract(source_text, category)
             except AIExtractionError as exc:
                 if getattr(exc, "reason", None) == "invalid_provider_output":
                     if invalid_json_attempts >= config.GROQ_INVALID_JSON_MAX_RETRIES:
                         raise
                     invalid_json_attempts += 1
                     logger.warning(
-                        "[GROQ INVALID JSON] provider=%s model=%s retry=%s/%s message_id=%s channel=%s",
-                        getattr(self.extractor, "provider", "groq-1"),
-                        getattr(self.extractor, "model", None),
+                        "[AI INVALID PROVIDER OUTPUT] provider=%s model=%s retry=%s/%s message_id=%s channel=%s",
+                        getattr(self.provider_manager, "provider", "groq-1"),
+                        getattr(self.provider_manager, "model", None),
                         invalid_json_attempts,
                         config.GROQ_INVALID_JSON_MAX_RETRIES,
                         record.get("message_id"),
                         record.get("channel_username"),
                     )
                     if progress:
-                        print(f"[AI] Groq invalid JSON: retry={invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES} message={record.get('message_id')}")
+                        print(f"[AI] AI invalid provider output: retry={invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES} message={record.get('message_id')}")
                     continue
                 if getattr(exc, "status", None) != 429 or rate_limit_attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
                     raise
@@ -199,10 +199,10 @@ class AIProcessingService:
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: {getattr(exc, 'reason', 'ai_error')}")
                 if exc.stop_queue:
                     stopped = True
-                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 model=%s reason=%s; remaining messages stay pending", getattr(self.extractor, "provider", "groq-1"), self.extractor.model, getattr(exc, "reason", "permissions_error"))
+                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 model=%s reason=%s; remaining messages stay pending", getattr(self.provider_manager, "provider", "groq-1"), self.provider_manager.model, getattr(exc, "reason", "permissions_error"))
                     break
             except Exception:
-                logger.exception("[AI ERROR] provider=%s model=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.extractor, "provider", "groq-1"), self.extractor.model, record.get("message_id"), record.get("channel_username"))
+                logger.exception("[AI ERROR] provider=%s model=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.provider_manager, "provider", "groq-1"), self.provider_manager.model, record.get("message_id"), record.get("channel_username"))
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=False, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 failed += 1
                 if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: unexpected_error")

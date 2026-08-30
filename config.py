@@ -37,13 +37,31 @@ TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "false"
 TELEGRAM_BOT_TOKEN = os.getenv("TELCLAW_TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = float(os.getenv("TELCLAW_TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", "30"))
 
-# AI extraction via Groq. GROQ_API_KEY remains the primary/backward-compatible key.
-GROQ_API_KEY = _required_env("GROQ_API_KEY").strip()
-GROQ_MODEL = _required_env("TELCLAW_GROQ_MODEL").strip()
+# AI providers. Groq remains the default to preserve existing deployments.
+AI_PROVIDERS = tuple(
+    value.strip().lower()
+    for value in (os.getenv("AI_PROVIDER_1", "groq"), os.getenv("AI_PROVIDER_2", ""), os.getenv("AI_PROVIDER_3", ""))
+    if value.strip()
+)
+
+# Existing Groq variables remain supported without migration. They are optional
+# at config-load time so a Cloudflare-only deployment can start.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("TELCLAW_GROQ_MODEL", "").strip()
+
+# Cloudflare Workers AI credentials are validated only if Cloudflare is selected.
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "").strip()
+CLOUDFLARE_REQUESTS_PER_MINUTE = max(1, int(os.getenv("TELCLAW_CLOUDFLARE_REQUESTS_PER_MINUTE", "30")))
+CLOUDFLARE_TIMEOUT_SECONDS = max(1, float(os.getenv("TELCLAW_CLOUDFLARE_TIMEOUT_SECONDS", "60")))
+AI_FAILOVER_BASE_COOLDOWN_SECONDS = max(1.0, float(os.getenv("TELCLAW_AI_FAILOVER_BASE_COOLDOWN_SECONDS", "30")))
+AI_FAILOVER_MAX_COOLDOWN_SECONDS = max(AI_FAILOVER_BASE_COOLDOWN_SECONDS, float(os.getenv("TELCLAW_AI_FAILOVER_MAX_COOLDOWN_SECONDS", "300")))
+AI_FAILOVER_PERMANENT_COOLDOWN_SECONDS = max(AI_FAILOVER_MAX_COOLDOWN_SECONDS, float(os.getenv("TELCLAW_AI_FAILOVER_PERMANENT_COOLDOWN_SECONDS", "3600")))
 
 # At most three Groq credentials are used, in priority order.
 def _build_groq_providers():
-    providers = [{"api_key": GROQ_API_KEY, "model": GROQ_MODEL}]
+    providers = [{"api_key": GROQ_API_KEY, "model": GROQ_MODEL}] if GROQ_API_KEY and GROQ_MODEL else []
     for index in (2, 3):
         key = os.getenv(f"GROQ_API_KEY_{index}", "").strip()
         if key:
@@ -53,6 +71,21 @@ def _build_groq_providers():
 
 
 GROQ_PROVIDERS = _build_groq_providers()
+
+
+def _build_cloudflare_providers():
+    providers = []
+    for index in (1, 2, 3):
+        suffix = "" if index == 1 else f"_{index}"
+        account_id = os.getenv(f"CLOUDFLARE_ACCOUNT_ID{suffix}", "").strip()
+        api_token = os.getenv(f"CLOUDFLARE_API_TOKEN{suffix}", "").strip()
+        model = os.getenv(f"CLOUDFLARE_MODEL{suffix}", CLOUDFLARE_MODEL).strip()
+        if account_id or api_token or model:
+            providers.append({"account_id": account_id, "api_token": api_token, "model": model})
+    return providers
+
+
+CLOUDFLARE_PROVIDERS = _build_cloudflare_providers()
 GROQ_FAILOVER_THRESHOLD_SECONDS = 200.0
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", "5")))

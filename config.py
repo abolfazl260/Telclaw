@@ -68,6 +68,21 @@ def _build_groq_providers():
 
 
 GROQ_PROVIDERS = _build_groq_providers()
+
+
+def _build_cloudflare_providers():
+    providers = []
+    for index in (1, 2, 3):
+        suffix = "" if index == 1 else f"_{index}"
+        account_id = os.getenv(f"CLOUDFLARE_ACCOUNT_ID{suffix}", "").strip()
+        api_token = os.getenv(f"CLOUDFLARE_API_TOKEN{suffix}", "").strip()
+        model = os.getenv(f"CLOUDFLARE_MODEL{suffix}", CLOUDFLARE_MODEL).strip()
+        if account_id or api_token or model:
+            providers.append({"account_id": account_id, "api_token": api_token, "model": model})
+    return providers
+
+
+CLOUDFLARE_PROVIDERS = _build_cloudflare_providers()
 GROQ_FAILOVER_THRESHOLD_SECONDS = 200.0
 GROQ_REQUESTS_PER_MINUTE = int(os.getenv("TELCLAW_GROQ_REQUESTS_PER_MINUTE", "30"))
 GROQ_RATE_LIMIT_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", "5")))

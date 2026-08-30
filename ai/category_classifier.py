@@ -26,7 +26,9 @@ def build_classification_prompt(categories=None):
         "- none: irrelevant, unclear, spam, news, discussion, or not a marketplace listing.\n\n"
         "Return ONLY JSON with this shape:\n"
         '{"classifications":[{"message_id":101,"category":"housinglist|transferlist|joblist|none"}]}\n'
-        "Do not include explanations. Keep every input message_id exactly as provided."
+        "You MUST return exactly one classification for EVERY input message_id.\n"
+        "Keep every input message_id exactly as provided. Do not omit or merge messages.\n"
+        "Do not include explanations."
     )
 
 
@@ -68,17 +70,8 @@ class GroqBatchCategoryClassifier:
         self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE)
         self.categories = tuple(categories or CLASSIFICATION_CATEGORIES)
 
-    def classify_batch(self, messages):
-        if not self.api_key:
-            raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
-        payload_messages = [
-            {"message_id": int(item["message_id"]), "text": str(item.get("text") or "").strip()}
-            for item in messages
-            if str(item.get("text") or "").strip()
-        ]
-        if not payload_messages:
-            return {}
-
+    def _request_batch(self, payload_messages):
+        """Send one provider request and return the raw parsed JSON result."""
         self.rate_limiter.wait()
         payload = {
             "model": self.model,
@@ -108,7 +101,10 @@ class GroqBatchCategoryClassifier:
             detail = response.text.strip()
             reason = GroqExtractor._provider_reason(response.status_code, detail)
             retry_after = GroqExtractor._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            logger.error("Groq classification error: status=%s model=%s reason=%s response=%s", response.status_code, self.model, reason, detail[:4000])
+            logger.error(
+                "Groq classification error: status=%s model=%s reason=%s response=%s",
+                response.status_code, self.model, reason, detail[:4000],
+            )
             raise AIExtractionError(
                 f"Groq classification failed: status={response.status_code}; model={self.model}; reason={reason}; response={detail[:4000] or '<empty>'}",
                 status=response.status_code,
@@ -128,11 +124,66 @@ class GroqBatchCategoryClassifier:
             output_text = message.get("content")
             if not output_text:
                 raise ValueError("No JSON output returned")
-            result = json.loads(output_text)
-            requested_ids = [item["message_id"] for item in payload_messages]
-            return validate_classification_result(result, requested_ids, self.categories)
+            return json.loads(output_text)
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise AIExtractionError(f"Invalid Groq classification JSON output: {exc}", reason="invalid_provider_output") from exc
+
+    def classify_batch(self, messages):
+        if not self.api_key:
+            raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
+
+        payload_messages = [
+            {"message_id": int(item["message_id"]), "text": str(item.get("text") or "").strip()}
+            for item in messages
+            if str(item.get("text") or "").strip()
+        ]
+        if not payload_messages:
+            return {}
+
+        requested_ids = [item["message_id"] for item in payload_messages]
+        result = self._request_batch(payload_messages)
+
+        try:
+            return validate_classification_result(result, requested_ids, self.categories)
+        except ValueError as exc:
+            # Groq can occasionally return a valid JSON object but omit one or
+            # more IDs. Do not discard the valid classifications. Reclassify
+            # only the missing messages in smaller batches, which also reduces
+            # the chance of another truncated/partial provider response.
+            if not str(exc).startswith("missing classification for message_id(s):"):
+                raise AIExtractionError(f"Invalid Groq classification JSON output: {exc}", reason="invalid_provider_output") from exc
+
+            categories = set(self.categories)
+            items = result.get("classifications") if isinstance(result, dict) else None
+            recovered = {}
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        message_id = int(item.get("message_id"))
+                        category = str(item.get("category") or "").strip().lower()
+                    except (TypeError, ValueError):
+                        continue
+                    if message_id in set(requested_ids) and category in categories:
+                        recovered[message_id] = category
+
+            missing_ids = [message_id for message_id in requested_ids if message_id not in recovered]
+            if not missing_ids:
+                return recovered
+
+            by_id = {item["message_id"]: item for item in payload_messages}
+            logger.warning(
+                "[AI CLASSIFICATION PARTIAL OUTPUT] provider omitted message_id(s)=%s; retrying missing items individually",
+                missing_ids,
+            )
+
+            for message_id in missing_ids:
+                single_result = self._request_batch([by_id[message_id]])
+                single = validate_classification_result(single_result, [message_id], self.categories)
+                recovered.update(single)
+
+            return recovered
 
 
 __all__ = ["GroqBatchCategoryClassifier", "build_classification_prompt", "validate_classification_result"]

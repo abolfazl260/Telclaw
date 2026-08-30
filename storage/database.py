@@ -166,8 +166,7 @@ def _get_messages(where,params,limit,channel_username=None):
 def get_messages_by_status(status,limit=500,channel_username=None): return _get_messages("processing_status=?",[status],limit,channel_username)
 def get_processing_pending_messages(limit=500,channel_username=None): return _get_messages("collection_status='collected' AND processing_status='pending'",[],limit,channel_username)
 def get_classification_pending_messages(limit=50,channel_username=None): return _get_messages("processing_status='processed' AND NULLIF(TRIM(ai_category), '') IS NULL AND (classification_status='pending' OR (classification_status='failed' AND classification_attempts<?))",[config.AI_CLASSIFICATION_MAX_RETRIES],limit,channel_username)
-def get_ai_pending_messages(limit=100,channel_username=None):
-    return _get_messages("processing_status='processed' AND classification_status='processed' AND classification_category IN ('housinglist','transferlist','joblist') AND ai_status='pending'",[],limit,channel_username)
+def get_ai_pending_messages(limit=100,channel_username=None): return _get_messages("processing_status='processed' AND classification_status='processed' AND classification_category IN ('housinglist','transferlist','joblist') AND ai_status='pending'",[],limit,channel_username)
 def get_advertio_pending_messages(limit=100,channel_username=None):
     conn=get_connection()
     try:
@@ -181,7 +180,7 @@ def get_advertio_pending_messages(limit=100,channel_username=None):
 def get_previous_messages_by_sender(sender_id,before_id):
     if sender_id is None:return []
     conn=get_connection()
-    try:return [dict(r) for r in conn.execute("SELECT id,message_id,channel_username,sender_id,raw_text,text FROM messages WHERE sender_id=? AND id<? AND COALESCE(raw_text,text,'')<>'' ORDER BY id",(sender_id,before_id)).fetchall()]
+    try:return [dict(r) for r in conn.execute("SELECT id,message_id,channel_username,sender_id,sender_username,raw_text,text FROM messages WHERE sender_id=? AND id<? AND COALESCE(raw_text,text,'')<>'' ORDER BY id",(sender_id,before_id)).fetchall()]
     finally: conn.close()
 def update_message(message_id,channel_username,**fields):
     allowed={"cleaned_text","text","collection_status","processing_status","classification_status","classification_category","classification_error","classification_processed_at","classification_attempts","ai_status","pipeline_version","cleaned_at","ai_category","ai_processed_at","ai_error","advertio_status","advertio_lead_id","advertio_error","advertio_processed_at"}; updates={k:v for k,v in fields.items() if k in allowed}
@@ -194,13 +193,23 @@ def delete_message(message_id,channel_username):
     try: cursor=conn.execute("DELETE FROM messages WHERE channel_username=? AND message_id=?",(channel_username,message_id)); conn.commit(); return cursor.rowcount>0
     finally: conn.close()
 def update_processed_message(message_id,channel_username,**fields): return update_message(message_id,channel_username,**fields)
+def _serialize_category_value(field,value):
+    """Convert structured AI values to SQLite-safe representations without changing the schema."""
+    if value is None:
+        return None
+    if field in {"furnished","remote"}:
+        if isinstance(value, bool):
+            return int(value)
+        return value
+    if isinstance(value,(dict,list,tuple)):
+        return json.dumps(value,ensure_ascii=False,separators=(",",":"))
+    return value
+
 def save_category_record(processed_message_id,category,data):
     if category not in CATEGORY_TABLES: raise ValueError(f"Unsupported category: {category}")
     fields=CATEGORY_TABLES[category]; columns=["processed_message_id"]+list(fields); values=[processed_message_id]
     for field in fields:
-        value=data.get(field)
-        if field in {"features","skills"} and value is not None and not isinstance(value,str):value=json.dumps(value,ensure_ascii=False)
-        if field in {"furnished","remote"} and value is not None:value=int(bool(value))
+        value=_serialize_category_value(field,data.get(field))
         values.append(value)
     placeholders=", ".join("?" for _ in columns); assignments=", ".join(f"{f}=excluded.{f}" for f in fields); conn=get_connection()
     try: conn.execute(f"INSERT INTO {category}({', '.join(columns)}) VALUES({placeholders}) ON CONFLICT(processed_message_id) DO UPDATE SET {assignments}",values); conn.commit()

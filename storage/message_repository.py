@@ -18,6 +18,15 @@ class MessageRepository:
     def get_processing_pending(self, limit=500, channel_username=None):
         return database.get_processing_pending_messages(limit=limit, channel_username=channel_username)
 
+    def get_classification_pending(self, limit=50, channel_username=None):
+        return database.get_classification_pending_messages(limit=limit, channel_username=channel_username)
+
+    def get_classification_queue_status(self):
+        return database.get_classification_queue_status()
+
+    def retry_failed_classifications(self):
+        return database.retry_failed_classifications()
+
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 
@@ -41,9 +50,22 @@ class MessageRepository:
 
     def mark_processing_result(self, message_id, channel_username, *, success, **fields):
         if success:
-            fields.update(processing_status="processed", ai_status="pending")
+            fields.update(processing_status="processed", classification_status="pending", ai_status="waiting")
         else:
             fields.update(processing_status="failed")
+        return self.update_message(message_id, channel_username, **fields)
+
+    def mark_classification_processing(self, message_id, channel_username):
+        return self.update_message(message_id, channel_username, classification_status="processing", classification_error=None)
+
+    def mark_classification_result(self, message_id, channel_username, *, category=None, success=True, error=None, processed_at=None, attempts=None):
+        fields = {"classification_processed_at": processed_at}
+        if attempts is not None:
+            fields["classification_attempts"] = attempts
+        if success:
+            fields.update(classification_status="processed", classification_category=category, classification_error=None, ai_category=category if category != "none" else None, ai_status="pending" if category != "none" else "skipped")
+        else:
+            fields.update(classification_status="failed", classification_error=error, ai_status="waiting")
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_processing(self, message_id, channel_username):

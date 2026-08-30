@@ -87,7 +87,9 @@ class GroqProviderFailover:
                 return True
         return False
 
-    def extract(self, processed_text):
+    def extract(self, processed_text, category=None):
+        if category is None:
+            raise AIExtractionError("An authoritative extraction category is required", reason="invalid_category")
         while True:
             # Recovery is checked before every request. The highest-priority
             # recovered key becomes active again, so API #1 always regains
@@ -95,7 +97,7 @@ class GroqProviderFailover:
             self._select_highest_priority_available(reason="recovery")
             extractor = self.providers[self.active_index]
             try:
-                return extractor.extract(processed_text)
+                return extractor.extract(processed_text, category=category)
             except AIExtractionError as exc:
                 if exc.status != 429:
                     raise

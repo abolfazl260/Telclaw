@@ -60,7 +60,26 @@ GROQ_RATE_LIMIT_MIN_WAIT_SECONDS = max(1, float(os.getenv("TELCLAW_GROQ_RATE_LIM
 GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = max(GROQ_RATE_LIMIT_MIN_WAIT_SECONDS, float(os.getenv("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", "180")))
 GROQ_MAX_COMPLETION_TOKENS = max(256, int(os.getenv("TELCLAW_GROQ_MAX_COMPLETION_TOKENS", "1200")))
 GROQ_INVALID_JSON_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_GROQ_INVALID_JSON_MAX_RETRIES", "1")))
+AI_CLASSIFICATION_ENABLED = os.getenv("TELCLAW_AI_CLASSIFICATION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+AI_CLASSIFICATION_BATCH_SIZE = max(1, int(os.getenv("TELCLAW_AI_CLASSIFICATION_BATCH_SIZE", "50")))
+AI_CLASSIFICATION_MAX_RETRIES = max(0, int(os.getenv("TELCLAW_AI_CLASSIFICATION_MAX_RETRIES", "3")))
+
+# Global extraction flag is retained for backward compatibility. When it is
+# false, no category extraction runs. When true, the category flags below
+# independently control each extraction queue.
 AI_EXTRACTION_ENABLED = os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+AI_EXTRACTION_CATEGORY_ENABLED = {
+    "housinglist": os.getenv("TELCLAW_AI_EXTRACTION_HOUSINGLIST_ENABLED", str(AI_EXTRACTION_ENABLED)).lower() in {"1", "true", "yes", "on"},
+    "transferlist": os.getenv("TELCLAW_AI_EXTRACTION_TRANSFERLIST_ENABLED", str(AI_EXTRACTION_ENABLED)).lower() in {"1", "true", "yes", "on"},
+    "joblist": os.getenv("TELCLAW_AI_EXTRACTION_JOBLIST_ENABLED", str(AI_EXTRACTION_ENABLED)).lower() in {"1", "true", "yes", "on"},
+}
+
+
+def is_ai_extraction_enabled(category):
+    """Return whether extraction is enabled for a classified category."""
+    return AI_EXTRACTION_ENABLED and AI_EXTRACTION_CATEGORY_ENABLED.get(category, False)
+
+
 ADVERTIO_INGEST_ENABLED = os.getenv("TELCLAW_ADVERTIO_INGEST_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 ADVERTIO_BASE_URL = os.getenv("TELCLAW_ADVERTIO_BASE_URL", "https://api.advertio.ir").rstrip("/")
 ADVERTIO_INGEST_KEY = os.getenv("TELCLAW_ADVERTIO_INGEST_KEY", "").strip()

@@ -7,7 +7,8 @@ import re
 import requests
 
 import config
-from ai.category_schemas import CATEGORY_FIELDS, CATEGORIES, validate_result
+from ai.category_schemas import CATEGORIES, validate_result
+from ai.prompt_loader import render_prompt
 from ai.rate_limiter import RateLimiter
 
 logger = logging.getLogger("telclaw.ai")
@@ -23,52 +24,6 @@ class AIExtractionError(RuntimeError):
         self.provider = provider
         self.stop_queue = stop_queue
         self.retry_after = retry_after
-
-
-def _build_extraction_prompt(compact=False):
-    if compact:
-        return """Extract structured marketplace data from this Telegram message.
-Return ONLY one valid JSON object, no Markdown, no explanation, no <think> tags.
-Top level: {\"category\":\"housinglist|transferlist|joblist\",\"data\":{\"selected_category\":{...}}}.
-Include ONLY fields you can determine plus the required fields below. Do not output empty optional fields.
-
-Universal rules:
-- title must be concise natural English. Translate it when necessary; never transliterate it.
-- Never invent price, bedrooms, property type, or other facts.
-- Canonical currency is CAD.
-- For housing, if country is not stated, country_code=CA. Infer province from the stated city/neighborhood when it is unambiguous.
-- For housing, output these required fields: listing_type, property_type, bedrooms, price, currency, country_code, province, city, title.
-- Housing currency must be CAD and country_code must be CA. If price/bedrooms/property type/city/province cannot be reliably determined, use null and the local validator will reject the record.
-- Housing bedrooms must be one of: 0, 1, 2, 3, 4+ (string).
-- Housing property_type: apartment, condo, basement, studio, room, house.
-- Housing listing_type: rent or roommate.
-- Housing price is a monthly CAD number from 100 to 10000.
-
-Message follows:
-"""
-
-    category_fields = "\n".join(
-        f"- {category}: {', '.join(fields)}" for category, fields in CATEGORY_FIELDS.items()
-    )
-    return f"""You extract structured marketplace information from processed Telegram messages.
-Classify each message into exactly one category: {', '.join(CATEGORIES)}.
-Return ONLY valid JSON. No Markdown fences, explanations, comments, or <think> tags.
-Never invent facts. Omit optional fields when unknown. Use normalized English field names.
-
-Required output shape:
-{{"category":"housinglist|transferlist|joblist","data":{{"selected_category":{{...}}}}}}
-Only include the selected category and only fields with useful values.
-
-TITLE: every returned title MUST be natural English. Translate non-English text into English; do not transliterate. Keep it concise and marketplace-ready. No URLs, hashtags, emojis, or explanations.
-
-CURRENCY: the platform canonical currency is CAD. For housing, transfer and job salary fields, use CAD. If a source explicitly gives a non-CAD currency, do not invent an exchange rate; leave the monetary value/currency unavailable so validation can reject it.
-
-HOUSING: when country is not stated, country_code defaults to CA. Infer province from the city/neighborhood when the location is unambiguous. Required for housing: listing_type, property_type, bedrooms, price, currency, country_code, province, city, title. Do not guess price, bedrooms, property type, city, or province.
-Housing listing_type = rent|roommate; property_type = apartment|condo|basement|studio|room|house; bedrooms = 0|1|2|3|4+ as a string; price = monthly CAD number 100-10000.
-
-Allowed fields:
-{category_fields}
-"""
 
 
 def _title_is_english(title):
@@ -116,8 +71,14 @@ def _english_fallback_title(category, category_data):
         city = str(category_data.get("city") or "").strip()
         return f"{job_title} in {city}" if city else job_title
     if category == "transferlist":
-        city = str(category_data.get("city") or category_data.get("from_city") or "").strip()
-        return f"Property Transfer Opportunity in {city}" if city else "Property Transfer Opportunity"
+        origin = str(category_data.get("origin_city") or "").strip()
+        destination = str(category_data.get("destination_city") or "").strip()
+        if origin and destination:
+            return f"Air Cargo Request from {origin} to {destination}"
+        if origin or destination:
+            city = origin or destination
+            return f"Air Cargo Request for {city}"
+        return "Air Cargo Request"
     return "Marketplace Listing"
 
 
@@ -159,7 +120,7 @@ def _ensure_titles(result, source_text):
 
 
 def _normalize_selected_category_data(result):
-    """Unwrap only a singleton list for the AI-selected category."""
+    """Unwrap only a singleton list for the authoritative category."""
     if not isinstance(result, dict):
         return result
     category = result.get("category")
@@ -268,7 +229,9 @@ class GroqExtractor:
                 return float(match.group(1))
         return None
 
-    def extract(self, processed_text):
+    def extract(self, processed_text, category=None):
+        if category not in CATEGORIES:
+            raise AIExtractionError(f"Invalid authoritative extraction category: {category}", reason="invalid_category")
         if not self.api_key:
             raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
         if not isinstance(processed_text, str) or not processed_text.strip():
@@ -278,8 +241,7 @@ class GroqExtractor:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": _build_extraction_prompt(compact=True)},
-                {"role": "user", "content": processed_text.strip()},
+                {"role": "system", "content": render_prompt(category, processed_text.strip())},
             ],
             "temperature": 0,
             "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
@@ -339,11 +301,24 @@ class GroqExtractor:
             if not output_text:
                 raise ValueError("No JSON output returned")
             result = json.loads(output_text)
+            if not isinstance(result, dict):
+                raise ValueError("Groq JSON output must be an object")
+            if result.get("category") != category:
+                raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
             result = _normalize_selected_category_data(result)
             result = _ensure_titles(result, processed_text)
             result = _normalize_defaults(result)
             result = _normalize_currencies(result)
             result = _validate_english_title(result)
-            return validate_result(result)
+
+            # validate_result() returns (category, normalized_data). The service layer
+            # consumes the canonical dict shape, so normalize the validator output here.
+            validated_category, validated_data = validate_result(result)
+            return {
+                "category": validated_category,
+                "data": {validated_category: validated_data},
+            }
+        except AIExtractionError:
+            raise
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             raise AIExtractionError(f"Invalid Groq JSON output: {exc}", reason="invalid_provider_output") from exc

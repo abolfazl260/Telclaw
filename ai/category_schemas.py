@@ -1,6 +1,7 @@
 """Schemas and field allow-lists for AI category extraction."""
 
 CATEGORIES = ("housinglist", "transferlist", "joblist")
+CLASSIFICATION_CATEGORIES = (*CATEGORIES, "none")
 
 CATEGORY_FIELDS = {
     "housinglist": (

@@ -114,10 +114,23 @@ def _build_cloudflare_providers():
         suffix = "" if index == 1 else f"_{index}"
         account_id = os.getenv(f"CLOUDFLARE_ACCOUNT_ID{suffix}", "").strip()
         api_token = os.getenv(f"CLOUDFLARE_API_TOKEN{suffix}", "").strip()
-        model = os.getenv(f"CLOUDFLARE_MODEL{suffix}", CLOUDFLARE_MODEL).strip()
-        if not any((account_id, api_token, model)):
+        configured_model = os.getenv(f"CLOUDFLARE_MODEL{suffix}", "").strip()
+
+        # An additional slot is optional. Do not let the default model from
+        # credential #1 make an otherwise empty slot look configured.
+        if not any((account_id, api_token, configured_model)):
             continue
-        missing = [name for name, value in ((f"CLOUDFLARE_ACCOUNT_ID{suffix}", account_id), (f"CLOUDFLARE_API_TOKEN{suffix}", api_token), (f"CLOUDFLARE_MODEL{suffix}", model)) if not value]
+
+        model = configured_model or CLOUDFLARE_MODEL
+        missing = [
+            name
+            for name, value in (
+                (f"CLOUDFLARE_ACCOUNT_ID{suffix}", account_id),
+                (f"CLOUDFLARE_API_TOKEN{suffix}", api_token),
+                (f"CLOUDFLARE_MODEL{suffix}", model),
+            )
+            if not value
+        ]
         if missing:
             raise RuntimeError(f"Incomplete Cloudflare credential set: missing {', '.join(missing)}")
         providers.append({"account_id": account_id, "api_token": api_token, "model": model})

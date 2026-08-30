@@ -40,7 +40,7 @@ TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = float(os.getenv("TELCLAW_TELEGRAM_MON
 # AI providers. Groq remains the default to preserve existing deployments.
 AI_PROVIDERS = tuple(
     value.strip().lower()
-    for value in (os.getenv("AI_PROVIDER_1", "groq"), os.getenv("AI_PROVIDER_2", ""), os.getenv("AI_PROVIDER_3", ""))
+    for value in (os.getenv("AI_PROVIDER_1", "groq"), os.getenv("AI_PROVIDER_2", ""))
     if value.strip()
 )
 
@@ -55,9 +55,6 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "").strip()
 CLOUDFLARE_REQUESTS_PER_MINUTE = max(1, int(os.getenv("TELCLAW_CLOUDFLARE_REQUESTS_PER_MINUTE", "30")))
 CLOUDFLARE_TIMEOUT_SECONDS = max(1, float(os.getenv("TELCLAW_CLOUDFLARE_TIMEOUT_SECONDS", "60")))
-AI_FAILOVER_BASE_COOLDOWN_SECONDS = max(1.0, float(os.getenv("TELCLAW_AI_FAILOVER_BASE_COOLDOWN_SECONDS", "30")))
-AI_FAILOVER_MAX_COOLDOWN_SECONDS = max(AI_FAILOVER_BASE_COOLDOWN_SECONDS, float(os.getenv("TELCLAW_AI_FAILOVER_MAX_COOLDOWN_SECONDS", "300")))
-AI_FAILOVER_PERMANENT_COOLDOWN_SECONDS = max(AI_FAILOVER_MAX_COOLDOWN_SECONDS, float(os.getenv("TELCLAW_AI_FAILOVER_PERMANENT_COOLDOWN_SECONDS", "3600")))
 
 # At most three Groq credentials are used, in priority order.
 def _build_groq_providers():

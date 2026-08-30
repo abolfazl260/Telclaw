@@ -97,15 +97,19 @@ def get_classification_queue_status():
             SUM(CASE WHEN classification_status='processed' THEN 1 ELSE 0 END) classified,
             SUM(CASE WHEN classification_status='failed' THEN 1 ELSE 0 END) failed
             FROM messages""").fetchone()
-        return {name:int(row[name] or 0) for name in ("pending", "processing", "processed", "failed")}
+        return {name:int(row[name] or 0) for name in ("pending", "processing", "classified", "failed")}
     finally: conn.close()
 
 def retry_failed_classifications():
     """Put all failed classifications back into the queue for a manual retry."""
     conn=get_connection()
     try:
-        cursor=conn.execute("""UPDATE messages SET classification_status='pending', classification_error=NULL, classification_processed_at=NULL, classification_attempts=0 WHERE classification_status='failed'""")
-        conn.commit(); return cursor.rowcount
+        cursor=conn.execute("""UPDATE messages
+            SET classification_status='pending', classification_error=NULL,
+                classification_processed_at=NULL, classification_attempts=0
+            WHERE classification_status='failed'""")
+        conn.commit()
+        return cursor.rowcount
     finally: conn.close()
 
 def _last_time(conn,where,params=()):
@@ -115,30 +119,98 @@ def get_pipeline_health():
     """Return a DB-backed health snapshot. It never claims a worker is alive unless its DB activity is recent."""
     conn=get_connection()
     try:
-        row=conn.execute("SELECT 1").fetchone(); return {"database":"healthy" if row else "unhealthy"}
+        now=datetime.now(timezone.utc)
+        last_crawl=_last_time(conn,"collection_status='collected'")
+        last_processing=_last_time(conn,"processing_status='processed'")
+        last_ai=_last_time(conn,"ai_status='processed'")
+        last_advertio=_last_time(conn,"advertio_status='sent'")
+        pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE (collection_status='collected' AND processing_status='pending') OR (processing_status='processed' AND classification_status='pending') OR (processing_status='processed' AND ai_status='pending') OR (ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry'))").fetchone()["n"] or 0
+        failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed' OR classification_status='failed' OR ai_status='failed' OR advertio_status='failed'").fetchone()["n"] or 0
+        total=conn.execute("SELECT COUNT(*) n FROM messages").fetchone()["n"] or 0
+        if total==0: db_state="WARNING"; warning="Database has no collected messages yet."
+        else: db_state="HEALTHY"; warning=""
+        def activity(last,stage_pending,stage_failed):
+            if stage_failed>0 and stage_pending==0: return "WARNING"
+            if stage_pending>0: return "WARNING"
+            return "HEALTHY" if last else "WARNING"
+        processing_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE collection_status='collected' AND processing_status='pending'").fetchone()["n"] or 0
+        classification_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='processed' AND classification_status='pending'").fetchone()["n"] or 0
+        ai_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='processed' AND ai_status='pending'").fetchone()["n"] or 0
+        advertio_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry')").fetchone()["n"] or 0
+        processing_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed'").fetchone()["n"] or 0
+        classification_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE classification_status='failed'").fetchone()["n"] or 0
+        ai_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE ai_status='failed'").fetchone()["n"] or 0
+        advertio_failed_count=conn.execute("SELECT COUNT(*) n FROM messages WHERE advertio_status='failed'").fetchone()["n"] or 0
+        return {"crawler":"HEALTHY" if last_crawl else "WARNING","processing":activity(last_processing,processing_pending,processing_failed),"classification":activity(last_processing,classification_pending,classification_failed),"ai":activity(last_ai,ai_pending,ai_failed),"advertio":activity(last_advertio,advertio_pending,advertio_failed_count),"database":db_state,"last_crawl":last_crawl or "No crawl recorded","last_processing":last_processing or "No processing recorded","last_ai":last_ai or "No AI processing recorded","last_advertio":last_advertio or "No Advertio delivery recorded","backlog":int(pending),"failed":int(failed),"warning":warning}
     finally: conn.close()
 
+def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,has_media=False,media_type=None,file_unique_id=None,media_path=None,message_link=None,media_reference=None):
+    conn=get_connection()
+    try:
+        cursor=conn.execute("INSERT OR IGNORE INTO messages(channel_username,message_id,text,raw_text,cleaned_text,date,media_path,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,has_media,media_type,file_unique_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(channel_username,message_id,text,raw_text,cleaned_text,date_str,media_path,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,int(bool(has_media)),media_type,str(file_unique_id) if file_unique_id is not None else None)); conn.commit(); return cursor.rowcount>0
+    finally: conn.close()
+
+def get_latest_message_id(channel_username):
+    conn=get_connection()
+    try:
+        row=conn.execute("SELECT MAX(message_id) max_message_id FROM messages WHERE channel_username=?",(channel_username,)).fetchone(); return int(row["max_message_id"]) if row and row["max_message_id"] is not None else 0
+    finally: conn.close()
+
+def _get_messages(where,params,limit,channel_username=None):
+    conn=get_connection()
+    try:
+        sql="SELECT * FROM messages WHERE "+where; values=list(params)
+        if channel_username: sql += " AND channel_username=?"; values.append(channel_username)
+        sql += " ORDER BY id LIMIT ?"; values.append(int(limit)); return [dict(r) for r in conn.execute(sql,values).fetchall()]
+    finally: conn.close()
+def get_messages_by_status(status,limit=500,channel_username=None): return _get_messages("processing_status=?",[status],limit,channel_username)
+def get_processing_pending_messages(limit=500,channel_username=None): return _get_messages("collection_status='collected' AND processing_status='pending'",[],limit,channel_username)
+def get_classification_pending_messages(limit=50,channel_username=None): return _get_messages("processing_status='processed' AND NULLIF(TRIM(ai_category), '') IS NULL AND (classification_status='pending' OR (classification_status='failed' AND classification_attempts<?))",[config.AI_CLASSIFICATION_MAX_RETRIES],limit,channel_username)
+def get_ai_pending_messages(limit=100,channel_username=None):
+    return _get_messages("processing_status='processed' AND classification_status='processed' AND classification_category IN ('housinglist','transferlist','joblist') AND ai_status='pending'",[],limit,channel_username)
+def get_advertio_pending_messages(limit=100,channel_username=None):
+    conn=get_connection()
+    try:
+        sql="SELECT m.*,h.* FROM messages m INNER JOIN housinglist h ON h.processed_message_id=m.id WHERE m.processing_status='processed' AND m.ai_status='processed' AND m.ai_category='housinglist' AND COALESCE(m.advertio_status,'waiting') IN ('waiting','retry')"; values=[]
+        if channel_username: sql += " AND m.channel_username=?"; values.append(channel_username)
+        sql += " ORDER BY m.id LIMIT ?"; values.append(int(limit)); rows=conn.execute(sql,values).fetchall(); results=[]
+        for row in rows:
+            item=dict(row); item["housing_data"]={field:item.get(field) for field in CATEGORY_TABLES["housinglist"]}; results.append(item)
+        return results
+    finally: conn.close()
+def get_previous_messages_by_sender(sender_id,before_id):
+    if sender_id is None:return []
+    conn=get_connection()
+    try:return [dict(r) for r in conn.execute("SELECT id,message_id,channel_username,sender_id,raw_text,text FROM messages WHERE sender_id=? AND id<? AND COALESCE(raw_text,text,'')<>'' ORDER BY id",(sender_id,before_id)).fetchall()]
+    finally: conn.close()
+def update_message(message_id,channel_username,**fields):
+    allowed={"cleaned_text","text","collection_status","processing_status","classification_status","classification_category","classification_error","classification_processed_at","classification_attempts","ai_status","pipeline_version","cleaned_at","ai_category","ai_processed_at","ai_error","advertio_status","advertio_lead_id","advertio_error","advertio_processed_at"}; updates={k:v for k,v in fields.items() if k in allowed}
+    if not updates:return False
+    assignments=", ".join(f"{k}=?" for k in updates); values=list(updates.values())+[channel_username,message_id]; conn=get_connection()
+    try: cursor=conn.execute(f"UPDATE messages SET {assignments} WHERE channel_username=? AND message_id=?",values); conn.commit(); return cursor.rowcount>0
+    finally: conn.close()
+def delete_message(message_id,channel_username):
+    conn=get_connection()
+    try: cursor=conn.execute("DELETE FROM messages WHERE channel_username=? AND message_id=?",(channel_username,message_id)); conn.commit(); return cursor.rowcount>0
+    finally: conn.close()
+def update_processed_message(message_id,channel_username,**fields): return update_message(message_id,channel_username,**fields)
 def save_category_record(processed_message_id,category,data):
     if category not in CATEGORY_TABLES: raise ValueError(f"Unsupported category: {category}")
-    if not isinstance(data, dict): raise ValueError("Category record data must be an object")
     fields=CATEGORY_TABLES[category]; columns=["processed_message_id"]+list(fields); values=[processed_message_id]
     for field in fields:
         value=data.get(field)
-        if isinstance(value, (dict, list)):
-            value=json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        if field in {"furnished","remote"} and value is not None and not isinstance(value, str):value=int(bool(value))
+        if field in {"features","skills"} and value is not None and not isinstance(value,str):value=json.dumps(value,ensure_ascii=False)
+        if field in {"furnished","remote"} and value is not None:value=int(bool(value))
         values.append(value)
     placeholders=", ".join("?" for _ in columns); assignments=", ".join(f"{f}=excluded.{f}" for f in fields); conn=get_connection()
     try: conn.execute(f"INSERT INTO {category}({', '.join(columns)}) VALUES({placeholders}) ON CONFLICT(processed_message_id) DO UPDATE SET {assignments}",values); conn.commit()
     finally: conn.close()
-
 def get_category_record(processed_message_id,category):
     if category not in CATEGORY_TABLES: raise ValueError(f"Unsupported category: {category}")
     conn=get_connection()
     try:
         row=conn.execute(f"SELECT * FROM {category} WHERE processed_message_id=?",(processed_message_id,)).fetchone(); return dict(row) if row else None
     finally: conn.close()
-
 def set_channel_target_date(channel_username,target_date_str):
     conn=get_connection()
     try: conn.execute("INSERT INTO crawler_settings(channel_username,target_date) VALUES(?,?) ON CONFLICT(channel_username) DO UPDATE SET target_date=excluded.target_date",(channel_username,target_date_str)); conn.commit()

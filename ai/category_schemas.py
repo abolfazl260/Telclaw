@@ -25,9 +25,6 @@ CATEGORY_FIELDS = {
     ),
 }
 
-# Canada is the platform default. These mappings cover common cities and
-# neighborhoods so an omitted country/province can still be canonicalized
-# without inventing a location from arbitrary text.
 _CANADIAN_CITY_PROVINCE = {
     "toronto": "Ontario", "mississauga": "Ontario", "brampton": "Ontario",
     "markham": "Ontario", "vaughan": "Ontario", "richmond hill": "Ontario",
@@ -67,8 +64,8 @@ def _infer_housing_location(data):
     province = str(data.get("province") or "").strip()
     country = str(data.get("country_code") or "").strip().upper()
     neighborhood = str(data.get("neighborhood") or "").strip().lower()
+    location = str(data.get("location") or "").strip()
 
-    # Housing on this platform is Canada-only. Never emit another canonical country.
     if not country:
         country = "CA"
     elif country != "CA":
@@ -77,10 +74,33 @@ def _infer_housing_location(data):
     city_key = city.lower()
     if city_key in _CANADIAN_CITY_PROVINCE:
         province = province or _CANADIAN_CITY_PROVINCE[city_key]
-        city = city or city_key.title()
+
+    if location:
+        location_lower = location.lower()
+        if not city:
+            for known_city in sorted(_CANADIAN_CITY_PROVINCE, key=len, reverse=True):
+                if known_city in location_lower:
+                    city = known_city.title()
+                    province = province or _CANADIAN_CITY_PROVINCE[known_city]
+                    break
+        if not province:
+            province_aliases = {
+                "on": "Ontario", "ontario": "Ontario", "bc": "British Columbia",
+                "british columbia": "British Columbia", "ab": "Alberta", "alberta": "Alberta",
+                "qc": "Quebec", "quebec": "Quebec", "mb": "Manitoba", "manitoba": "Manitoba",
+                "ns": "Nova Scotia", "nova scotia": "Nova Scotia", "sk": "Saskatchewan",
+                "saskatchewan": "Saskatchewan", "nb": "New Brunswick", "new brunswick": "New Brunswick",
+                "nl": "Newfoundland and Labrador", "newfoundland and labrador": "Newfoundland and Labrador",
+                "pei": "Prince Edward Island", "prince edward island": "Prince Edward Island",
+                "nt": "Northwest Territories", "northwest territories": "Northwest Territories",
+                "yt": "Yukon", "yukon": "Yukon", "nu": "Nunavut", "nunavut": "Nunavut",
+            }
+            for alias, canonical in sorted(province_aliases.items(), key=lambda item: len(item[0]), reverse=True):
+                if alias in location_lower:
+                    province = canonical
+                    break
 
     if (not city or not province) and neighborhood:
-        # Exact/substring matching is intentionally conservative.
         for name, (mapped_city, mapped_province) in _CANADIAN_NEIGHBORHOODS.items():
             if name == neighborhood or name in neighborhood:
                 city = city or mapped_city

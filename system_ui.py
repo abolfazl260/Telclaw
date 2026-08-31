@@ -49,7 +49,7 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("Information Processing Queue")
         self.show_message("Checking the processing queue in the database...", Fore.CYAN)
         try:
-            result = self.processing_service.process_pending_with_stats()
+            result = await asyncio.to_thread(self.processing_service.process_pending_with_stats)
             self.show_message(
                 f"Completed. Found: {result['found']} | "
                 f"Processed: {result['processed']} | Failed: {result['failed']}",
@@ -65,16 +65,34 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("AI Processing Queue")
         self.show_message("Checking the AI queue in the database...", Fore.CYAN)
         try:
+            client = await self.connect_client()
+            if client is None:
+                self.show_message(
+                    "AI queue requires a connected Telegram account because housing media may need to be downloaded.",
+                    Fore.RED,
+                )
+                await self.pause()
+                return
+
+            # AI processing is synchronous and may wait on network/rate limits.
+            # Run it in a worker thread so the asyncio/Telethon event loop remains
+            # responsive. This is also required by _make_sync_media_downloader(),
+            # which schedules Telethon downloads back onto the main event loop.
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
-            result = self.ai_service.process_pending_with_stats()
+            result = await asyncio.to_thread(self.ai_service.process_pending_with_stats)
             if result.get("disabled"):
                 self.show_message("AI extraction is disabled in configuration.", Fore.YELLOW)
             else:
+                remaining = result.get("remaining", 0)
+                if result.get("stopped"):
+                    status = f"Stopped. Remaining pending: {remaining}"
+                else:
+                    status = f"Completed. Remaining pending: {remaining}"
                 self.show_message(
-                    f"Completed. Found: {result['found']} | "
+                    f"{status} | Found: {result['found']} | "
                     f"Processed: {result['processed']} | Failed: {result['failed']} | "
                     f"Skipped: {result['skipped']}",
-                    Fore.GREEN if result["failed"] == 0 else Fore.YELLOW,
+                    Fore.GREEN if result["failed"] == 0 and not result.get("stopped") else Fore.YELLOW,
                 )
         except Exception as exc:
             self.show_message(f"AI queue failed: {exc}", Fore.RED)
@@ -113,7 +131,7 @@ class SystemConsoleUI(ConsoleUI):
             return
         self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
         try:
-            result = self.classification_service.process_pending_with_stats(limit=batch_size)
+            result = await asyncio.to_thread(self.classification_service.process_pending_with_stats, batch_size)
             if result.get("disabled"):
                 self.show_message("AI category classification is disabled in configuration.", Fore.YELLOW)
                 self.show_message("Set TELCLAW_AI_CLASSIFICATION_ENABLED=true to enable it.", Fore.YELLOW)
@@ -237,7 +255,7 @@ class SystemConsoleUI(ConsoleUI):
                 "Starting Advertio delivery. No Telegram crawl and no AI extraction will run.",
                 Fore.CYAN,
             )
-            result = self.advertio_service.deliver_pending(limit=limit, progress=True)
+            result = await asyncio.to_thread(self.advertio_service.deliver_pending, limit=limit, progress=True)
             color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
             self.show_message(
                 f"Completed. Found: {result['found']} | Sent: {result['sent']} | "
@@ -253,7 +271,7 @@ class SystemConsoleUI(ConsoleUI):
         self.show_banner()
         self.show_section_header("Groq Connection Test")
         try:
-            success = test_groq_connection()
+            success = await asyncio.to_thread(test_groq_connection)
             self.show_message(
                 "Groq minimal connection test succeeded."
                 if success

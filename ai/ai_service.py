@@ -1,4 +1,4 @@
-"""Orchestrates Groq extraction from the independent AI queue."""
+"""Orchestrates provider-agnostic extraction from the independent AI queue."""
 
 from datetime import datetime, timezone
 import logging
@@ -8,7 +8,7 @@ import time
 
 import config
 from ai.extractor import AIExtractionError
-from ai.provider_failover import GroqProviderFailover
+from ai.provider_manager import AIProviderManager
 from storage.message_repository import MessageRepository
 from services.stage_control import get_stage_control
 
@@ -16,18 +16,31 @@ logger = logging.getLogger("telclaw.ai")
 
 
 class AIProcessingService:
-    def __init__(self, repository=None, extractor=None, advertio_service=None, media_downloader=None):
+    def __init__(self, repository=None, provider_manager=None, extractor=None, advertio_service=None, media_downloader=None):
         self.repository = repository or MessageRepository()
-        self.extractor = extractor or GroqProviderFailover()
+        self.provider_manager = provider_manager or AIProviderManager(provider=extractor)
         self.advertio_service = advertio_service
         self.media_downloader = media_downloader
         if self.advertio_service is None and config.ADVERTIO_INGEST_ENABLED:
             from delivery.advertio_service import AdvertioDeliveryService
             self.advertio_service = AdvertioDeliveryService()
+        self._print_provider_status(prefix="[AI QUEUE]")
+
+    def _print_provider_status(self, prefix="[AI]"):
         print(
-            f"[AI] Providers configured: {len(config.GROQ_PROVIDERS)} | "
-            f"active={getattr(self.extractor, 'provider', 'groq-1')} | "
-            f"model={getattr(self.extractor, 'model', config.GROQ_MODEL)}"
+            f"{prefix} provider={getattr(self.provider_manager, 'provider', 'unknown')} | "
+            f"model={getattr(self.provider_manager, 'model', None)}"
+        )
+
+    def _print_message_status(self, index, total, record, category, status, **extra):
+        provider = getattr(self.provider_manager, "provider", "unknown")
+        model = getattr(self.provider_manager, "model", None)
+        details = " | ".join(f"{key}={value}" for key, value in extra.items())
+        suffix = f" | {details}" if details else ""
+        print(
+            f"[AI] {index}/{total} | message={record.get('message_id')} | "
+            f"provider={provider} | model={model} | category={category or '-'} | "
+            f"status={status}{suffix}"
         )
 
     def set_media_downloader(self, media_downloader):
@@ -44,9 +57,9 @@ class AIProcessingService:
     def _log_ai_error(self, record, exc):
         logger.error(
             "[AI ERROR] provider=%s status=%s model=%s reason=%s message_id=%s channel=%s detail=%s",
-            getattr(exc, "provider", getattr(self.extractor, "provider", "groq-1")),
+            getattr(exc, "provider", getattr(self.provider_manager, "provider", "groq-1")),
             getattr(exc, "status", None),
-            getattr(self.extractor, "model", None),
+            getattr(self.provider_manager, "model", None),
             getattr(exc, "reason", None),
             record.get("message_id"),
             record.get("channel_username"),
@@ -72,8 +85,8 @@ class AIProcessingService:
             base = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
             wait = max(config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS, min(base + random.uniform(0, min(1.0, base * 0.25)), config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
             reason = "exponential_backoff_jitter"
-        logger.warning("[GROQ RATE LIMIT] provider=%s model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.extractor, "provider", "groq-1"), getattr(self.extractor, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
-        print(f"[AI] Groq rate limit: provider={getattr(self.extractor, 'provider', 'groq-1')} model={getattr(self.extractor, 'model', None)} status=429 retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} wait={wait:.2f}s reason={reason}")
+        logger.warning("[AI RATE LIMIT] provider=%s model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.provider_manager, "provider", "groq-1"), getattr(self.provider_manager, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
+        print(f"[AI] rate_limit_wait | provider={getattr(self.provider_manager, 'provider', 'groq-1')} | model={getattr(self.provider_manager, 'model', None)} | retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} | wait={wait:.2f}s | reason={reason}")
         time.sleep(wait)
 
     def _extract_with_retry(self, source_text, record, category, progress=False):
@@ -81,27 +94,33 @@ class AIProcessingService:
         invalid_json_attempts = 0
         while True:
             try:
-                return self.extractor.extract(source_text, category=category)
+                self._print_message_status(0, 0, record, category, "request_started") if progress else None
+                result = self.provider_manager.extract(source_text, category)
+                if progress:
+                    self._print_message_status(0, 0, record, category, "request_completed")
+                return result
             except AIExtractionError as exc:
                 if getattr(exc, "reason", None) == "invalid_provider_output":
                     if invalid_json_attempts >= config.GROQ_INVALID_JSON_MAX_RETRIES:
                         raise
                     invalid_json_attempts += 1
                     logger.warning(
-                        "[GROQ INVALID JSON] provider=%s model=%s retry=%s/%s message_id=%s channel=%s",
-                        getattr(self.extractor, "provider", "groq-1"),
-                        getattr(self.extractor, "model", None),
+                        "[AI INVALID PROVIDER OUTPUT] provider=%s model=%s retry=%s/%s message_id=%s channel=%s",
+                        getattr(self.provider_manager, "provider", "groq-1"),
+                        getattr(self.provider_manager, "model", None),
                         invalid_json_attempts,
                         config.GROQ_INVALID_JSON_MAX_RETRIES,
                         record.get("message_id"),
                         record.get("channel_username"),
                     )
                     if progress:
-                        print(f"[AI] Groq invalid JSON: retry={invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES} message={record.get('message_id')}")
+                        self._print_message_status(0, 0, record, category, "invalid_provider_output_retry", retry=f"{invalid_json_attempts}/{config.GROQ_INVALID_JSON_MAX_RETRIES}")
                     continue
                 if getattr(exc, "status", None) != 429 or rate_limit_attempts >= config.GROQ_RATE_LIMIT_MAX_RETRIES:
                     raise
                 rate_limit_attempts += 1
+                if progress:
+                    self._print_message_status(0, 0, record, category, "rate_limit_retry", retry=f"{rate_limit_attempts}/{config.GROQ_RATE_LIMIT_MAX_RETRIES}")
                 self._rate_limit_wait(exc, rate_limit_attempts)
 
     def _prepare_media_for_advertio(self, record):
@@ -128,6 +147,7 @@ class AIProcessingService:
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         now = datetime.now(timezone.utc).isoformat()
         try:
+            print(f"[MEDIA] message={record['message_id']} status=preparing")
             self._prepare_media_for_advertio(record)
         except Exception as exc:
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status="retry", lead_id=None, error=str(exc)[:4000], processed_at=now)
@@ -135,6 +155,7 @@ class AIProcessingService:
             print(f"[MEDIA] retry: message={record['message_id']} reason={str(exc)[:300]}")
             return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
         try:
+            print(f"[ADVERTIO] message={record['message_id']} status=request_started")
             result = self.advertio_service.deliver(record, data)
             status = "already_existed" if result.get("already_existed") else "sent"
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)
@@ -149,38 +170,39 @@ class AIProcessingService:
             print(f"[ADVERTIO] {status}: message={record['message_id']} reason={str(exc)[:300]}")
             return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
 
-    def _process(self, records, *, progress=False, should_stop=None):
+    def _process(self, records, *, progress=False, should_stop=None, offset=0):
         total = len(records)
         processed = failed = skipped = 0
         advertio = {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}
         stopped = False
-        for index, record in enumerate(records, start=1):
+        for local_index, record in enumerate(records, start=1):
+            index = offset + local_index
+            category = self._classification_category(record)
             if should_stop and should_stop():
                 stopped = True
-                print(f"[AI] Stage skip requested; remaining {total - index + 1} records stay pending.")
+                print(f"[AI] Stage skip requested; remaining messages stay pending. next_message={record.get('message_id')}")
                 break
+            self._print_message_status(index, offset + total, record, category, "processing") if progress else None
             source_text = self._source_text(record)
-            category = self._classification_category(record)
             if category not in {"housinglist", "transferlist", "joblist"}:
                 self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="invalid_classification_category", ai_processed_at=datetime.now(timezone.utc).isoformat())
                 skipped += 1
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: invalid classification category")
+                if progress: self._print_message_status(index, offset + total, record, category, "skipped", reason="invalid_classification_category")
                 continue
             if not config.is_ai_extraction_enabled(category):
                 self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason=f"category_disabled:{category}", ai_processed_at=datetime.now(timezone.utc).isoformat())
                 skipped += 1
-                logger.info("AI Classification: %s | AI Extraction: skipped (category disabled)", category)
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: {category} extraction disabled")
+                if progress: self._print_message_status(index, offset + total, record, category, "skipped", reason="category_disabled")
                 continue
             if not source_text:
                 self.repository.mark_ai_skipped(record["message_id"], record["channel_username"], reason="no_text", ai_processed_at=datetime.now(timezone.utc).isoformat())
                 skipped += 1
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) skipped: no_text")
+                if progress: self._print_message_status(index, offset + total, record, category, "skipped", reason="no_text")
                 continue
             logger.info("AI Classification: %s | AI Extraction: processing %s", category, category)
             self.repository.mark_ai_processing(record["message_id"], record["channel_username"])
             try:
-                result = self._extract_with_retry(source_text, record, category, progress=progress)
+                result = self._extract_with_retry(source_text, record, category, progress=False)
                 if result.get("category") != category:
                     raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
                 data = result.get("data", {}).get(category)
@@ -191,36 +213,87 @@ class AIProcessingService:
                 delivery = self._deliver_to_advertio(record, category, data)
                 for key in advertio: advertio[key] += delivery.get(key, 0)
                 processed += 1
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) processed -> {category}")
+                if progress: self._print_message_status(index, offset + total, record, category, "processed", advertio="ok" if not delivery.get("failed") else "failed")
             except AIExtractionError as exc:
                 self._log_ai_error(record, exc)
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=False, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 failed += 1
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: {getattr(exc, 'reason', 'ai_error')}")
+                if progress: self._print_message_status(index, offset + total, record, category, "failed", reason=getattr(exc, "reason", "ai_error"))
                 if exc.stop_queue:
                     stopped = True
-                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 model=%s reason=%s; remaining messages stay pending", getattr(self.extractor, "provider", "groq-1"), self.extractor.model, getattr(exc, "reason", "permissions_error"))
+                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 model=%s reason=%s; remaining messages stay pending", getattr(self.provider_manager, "provider", "groq-1"), self.provider_manager.model, getattr(exc, "reason", "permissions_error"))
+                    if progress: print(f"[AI] QUEUE STOPPED | message={record.get('message_id')} | provider={getattr(self.provider_manager, 'provider', 'unknown')} | model={getattr(self.provider_manager, 'model', None)} | reason={getattr(exc, 'reason', 'permissions_error')}")
                     break
-            except Exception:
-                logger.exception("[AI ERROR] provider=%s model=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.extractor, "provider", "groq-1"), self.extractor.model, record.get("message_id"), record.get("channel_username"))
+            except Exception as exc:
+                logger.exception("[AI ERROR] provider=%s model=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.provider_manager, "provider", "groq-1"), self.provider_manager.model, record.get("message_id"), record.get("channel_username"))
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=False, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 failed += 1
-                if progress: print(f"[AI] {index}/{total} ({index * 100 / total:6.2f}%) failed: unexpected_error")
+                if progress: self._print_message_status(index, offset + total, record, category, "failed", reason="unexpected_error", detail=str(exc)[:200])
         return processed, failed, skipped, stopped, advertio
 
     def process_pending(self, limit=100, channel_username=None, should_stop=None):
         if not config.AI_EXTRACTION_ENABLED:
             return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None}
-        records = self.repository.get_ai_pending(limit=limit, channel_username=channel_username)
-        processed, failed, skipped, stopped, advertio = self._process(records, should_stop=should_stop)
-        return {"found": len(records), "processed": processed, "failed": failed, "skipped": skipped, "stopped": stopped, "disabled": False, "advertio": advertio}
+        return self._process_all_pending(limit=limit, channel_username=channel_username, should_stop=should_stop, progress=False)
 
     def process_pending_with_stats(self, limit=100, channel_username=None, should_stop=None):
         if not config.AI_EXTRACTION_ENABLED:
             print("[AI] Extraction disabled; skipping AI queue.")
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None}
-        records = self.repository.get_ai_pending(limit=limit, channel_username=channel_username)
-        if not records:
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False, "advertio": {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}}
-        processed, failed, skipped, stopped, advertio = self._process(records, progress=True, should_stop=should_stop)
-        return {"found": len(records), "processed": processed, "failed": failed, "skipped": skipped, "stopped": stopped, "disabled": False, "advertio": advertio}
+            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None, "remaining": 0}
+        return self._process_all_pending(limit=limit, channel_username=channel_username, should_stop=should_stop, progress=True)
+
+    def _process_all_pending(self, limit, channel_username, should_stop, progress):
+        total_found = processed = failed = skipped = 0
+        stopped = False
+        advertio = {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}
+        batch_number = 0
+        while True:
+            if should_stop and should_stop():
+                stopped = True
+                break
+            records = self.repository.get_ai_pending(limit=limit, channel_username=channel_username)
+            if not records:
+                break
+            batch_number += 1
+            if progress:
+                if batch_number > 1:
+                    print(f"[AI QUEUE] fetching next batch={batch_number} | batch_size={len(records)}")
+                else:
+                    print(f"[AI QUEUE] started | pending_snapshot={len(records)} | batch_size={limit}")
+                self._print_provider_status()
+            batch_processed, batch_failed, batch_skipped, batch_stopped, batch_advertio = self._process(
+                records,
+                progress=progress,
+                should_stop=should_stop,
+                offset=total_found,
+            )
+            processed += batch_processed
+            failed += batch_failed
+            skipped += batch_skipped
+            total_found += len(records)
+            for key in advertio:
+                advertio[key] += batch_advertio.get(key, 0)
+            if batch_stopped:
+                stopped = True
+                break
+            if len(records) < limit:
+                # This is only an optimization; the database is still queried once more
+                # so newly-visible pending records are not missed.
+                continue
+        remaining = len(self.repository.get_ai_pending(limit=limit, channel_username=channel_username))
+        if progress:
+            print(
+                f"[AI QUEUE] finished | found={total_found} | processed={processed} | "
+                f"failed={failed} | skipped={skipped} | remaining={remaining} | stopped={stopped}"
+            )
+            self._print_provider_status(prefix="[AI QUEUE] final_provider")
+        return {
+            "found": total_found,
+            "processed": processed,
+            "failed": failed,
+            "skipped": skipped,
+            "stopped": stopped,
+            "disabled": False,
+            "advertio": advertio,
+            "remaining": remaining,
+        }

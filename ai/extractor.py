@@ -174,151 +174,17 @@ def _normalize_currencies(result):
     return result
 
 
-class GroqExtractor:
-    """Groq client using the OpenAI-compatible HTTP API."""
+def __getattr__(name):
+    # Keep the former public import available without coupling this shared
+    # validation module to a concrete provider at import time.
+    if name == "GroqExtractor":
+        from ai.providers.groq import GroqClient
+        return GroqClient
+    raise AttributeError(name)
 
-    ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
-    def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None):
-        self.api_key = api_key or config.GROQ_API_KEY
-        self.model = model or config.GROQ_MODEL
-        self.timeout = timeout
-        self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE)
-
-    @staticmethod
-    def _provider_reason(status, detail):
-        text = (detail or "").lower()
-        if status == 401:
-            return "invalid_api_key"
-        if status == 403:
-            if "model" in text and any(x in text for x in ("block", "permission", "access")):
-                return "model_blocked"
-            return "permissions_error"
-        if status == 404:
-            return "model_not_found"
-        if status == 429:
-            return "rate_limit"
-        if status >= 500:
-            return "server_error"
-        return "provider_error"
-
-    @staticmethod
-    def _parse_retry_after(headers, detail):
-        for name in ("retry-after", "Retry-After"):
-            value = headers.get(name)
-            if value:
-                try:
-                    return max(0.0, float(value))
-                except (TypeError, ValueError):
-                    pass
-        for name in ("x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
-            value = headers.get(name)
-            if value:
-                match = re.search(r"([0-9]+(?:\.[0-9]+)?)", str(value))
-                if match:
-                    return max(0.0, float(match.group(1)))
-        patterns = (
-            r"try again in\s*(?:(\d+(?:\.\d+)?)m)?\s*(?:(\d+(?:\.\d+)?)s)?",
-            r"retry[- ]after[:=\s]+(\d+(?:\.\d+)?)\s*s?",
-        )
-        for pattern in patterns:
-            match = re.search(pattern, detail or "", re.IGNORECASE)
-            if match:
-                if len(match.groups()) == 2:
-                    return float(match.group(1) or 0) * 60 + float(match.group(2) or 0)
-                return float(match.group(1))
-        return None
-
-    def extract(self, processed_text, category=None):
-        if category not in CATEGORIES:
-            raise AIExtractionError(f"Invalid authoritative extraction category: {category}", reason="invalid_category")
-        if not self.api_key:
-            raise AIExtractionError("GROQ_API_KEY is not configured", reason="missing_api_key")
-        if not isinstance(processed_text, str) or not processed_text.strip():
-            raise AIExtractionError("Cannot call Groq with empty text", reason="invalid_input")
-
-        self.rate_limiter.wait()
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": render_prompt(category, processed_text.strip())},
-            ],
-            "temperature": 0,
-            "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
-            "response_format": {"type": "json_object"},
-        }
-        if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
-            payload["include_reasoning"] = False
-
-        try:
-            with self.rate_limiter.slot():
-                response = requests.post(
-                    self.ENDPOINT,
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-                    json=payload,
-                    timeout=self.timeout,
-                )
-        except requests.RequestException as exc:
-            raise AIExtractionError(
-                f"Groq request failed: provider=groq; model={self.model}; transport={exc}",
-                reason="network_error",
-            ) from exc
-
-        if not response.ok:
-            detail = response.text.strip()
-            request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
-            reason = self._provider_reason(response.status_code, detail)
-            retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            logger.error(
-                "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
-                response.status_code, self.model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", detail[:4000] or "<empty>",
-            )
-            diagnostic = [
-                "provider=groq", f"status={response.status_code}", f"model={self.model}",
-                f"reason={reason}", f"response={detail[:4000] or '<empty>'}",
-            ]
-            if request_id:
-                diagnostic.append(f"request_id={request_id}")
-            if retry_after is not None:
-                diagnostic.append(f"retry_after={retry_after:.3f}")
-            raise AIExtractionError(
-                "Groq request failed: " + "; ".join(diagnostic),
-                status=response.status_code,
-                reason=reason,
-                stop_queue=response.status_code == 403,
-                retry_after=retry_after,
-            )
-
-        try:
-            response_data = response.json()
-            choices = response_data.get("choices", [])
-            if not choices:
-                raise ValueError("No choices returned")
-            message = choices[0].get("message", {})
-            if message.get("refusal"):
-                raise ValueError(f"Model refused extraction: {message['refusal']}")
-            output_text = message.get("content")
-            if not output_text:
-                raise ValueError("No JSON output returned")
-            result = json.loads(output_text)
-            if not isinstance(result, dict):
-                raise ValueError("Groq JSON output must be an object")
-            if result.get("category") != category:
-                raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
-            result = _normalize_selected_category_data(result)
-            result = _ensure_titles(result, processed_text)
-            result = _normalize_defaults(result)
-            result = _normalize_currencies(result)
-            result = _validate_english_title(result)
-
-            # validate_result() returns (category, normalized_data). The service layer
-            # consumes the canonical dict shape, so normalize the validator output here.
-            validated_category, validated_data = validate_result(result)
-            return {
-                "category": validated_category,
-                "data": {validated_category: validated_data},
-            }
-        except AIExtractionError:
-            raise
-        except (ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise AIExtractionError(f"Invalid Groq JSON output: {exc}", reason="invalid_provider_output") from exc
+__all__ = [
+    "AIExtractionError",
+    "GroqExtractor",
+    "_normalize_selected_category_data",
+]

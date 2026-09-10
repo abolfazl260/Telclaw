@@ -157,6 +157,15 @@ class TelegramTransferPublisher:
         transport = cls._transport_type(data.get("transport_type"))
         if transport:
             lines.append(f"🚛 نوع حمل: {transport}")
+        transfer_role = cls._value(data, "transfer_role")
+        if transfer_role:
+            role_labels = {"passenger": "مسافر", "shipper": "ارسال‌کننده بار"}
+            lines.append(f"👤 نوع درخواست: {role_labels.get(transfer_role.strip().lower(), transfer_role)}")
+
+        description = cls._value(data, "description")
+        if description:
+            lines.append(f"📝 توضیحات: {description}")
+
         price = cls._number(data.get("price"))
         if price is not None:
             currency = cls._value(data, "currency") or "CAD"
@@ -193,8 +202,8 @@ class TelegramTransferPublisher:
                           t.title, t.description, t.origin_city, t.origin_province, t.origin_country,
                           t.destination_city, t.destination_province, t.destination_country, t.airline,
                           t.flight_number, t.departure_date, t.departure_time, t.arrival_date, t.arrival_time,
-                          t.transport_type, t.cargo_type, t.weight, t.weight_unit, t.quantity,
-                          t.price, t.currency, t.contact, t.features
+                          t.transport_type, t.transfer_role, t.cargo_type, t.weight, t.weight_unit, t.quantity,
+                          t.volume, t.volume_unit, t.price, t.currency, t.contact, t.features
                    FROM transferlist t
                    JOIN messages m ON m.id=t.processed_message_id
                    LEFT JOIN telegram_transfer_publications p ON p.message_row_id=m.id
@@ -247,8 +256,8 @@ class TelegramTransferPublisher:
                 "title", "description", "origin_city", "origin_province", "origin_country",
                 "destination_city", "destination_province", "destination_country", "airline",
                 "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
-                "transport_type", "cargo_type", "weight", "weight_unit", "quantity", "price",
-                "currency", "contact", "features",
+                "transport_type", "transfer_role", "cargo_type", "weight", "weight_unit", "quantity",
+                "volume", "volume_unit", "price", "currency", "contact", "features",
             )}
             try:
                 text = self.format_ad(record, data)

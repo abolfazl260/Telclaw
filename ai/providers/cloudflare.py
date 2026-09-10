@@ -95,6 +95,40 @@ class CloudflareProvider(AIProvider):
                 return index
         return None
 
+    @staticmethod
+    def _extract_json_candidate(body):
+        """Extract JSON-capable model output from known Workers AI response shapes."""
+        if not isinstance(body, dict):
+            return body
+        result = body.get("result")
+        if result is None:
+            return body
+        if isinstance(result, dict):
+            for key in ("response", "content", "text", "output"):
+                value = result.get(key)
+                if value is not None:
+                    return value
+            # Some Workers AI models return the structured JSON directly in result.
+            return result
+        return result
+
+    @staticmethod
+    def _parse_json_candidate(value):
+        if isinstance(value, (dict, list)):
+            return value
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("Cloudflare response contains no JSON output")
+        text = value.strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # Be tolerant of models that wrap JSON in a markdown code fence.
+            if text.startswith("```") and text.endswith("```"):
+                lines = text.splitlines()
+                if len(lines) >= 3:
+                    return json.loads("\n".join(lines[1:-1]).strip())
+            raise
+
     def _request(self, messages):
         attempts = 0
         while attempts <= config.AI_RETRY_COUNT:
@@ -142,16 +176,7 @@ class CloudflareProvider(AIProvider):
                 body = response.json()
                 if isinstance(body, dict) and body.get("success") is False:
                     raise ValueError("Cloudflare returned an unsuccessful response")
-                result = body.get("result") if isinstance(body, dict) else None
-                if isinstance(result, dict):
-                    content = result.get("response") or result.get("content")
-                else:
-                    content = result
-                if isinstance(content, dict):
-                    return content
-                if not isinstance(content, str) or not content.strip():
-                    raise ValueError("Cloudflare response contains no JSON output")
-                return json.loads(content)
+                return self._parse_json_candidate(self._extract_json_candidate(body))
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 raise AIExtractionError("Invalid Cloudflare JSON output", provider=self.name, reason="invalid_provider_output") from exc
         raise RuntimeError("Cloudflare provider retry budget exhausted")

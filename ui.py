@@ -149,13 +149,27 @@ class ConsoleUI:
             return
 
         self._print_options("Available Categories", categories)
-        choice = await self.prompt_text("Select category number", default="1")
-        try:
-            category = categories[int(choice) - 1]
-        except (ValueError, IndexError):
-            self.show_message("Invalid category selection.", Fore.RED)
-            await self.pause()
-            return
+        while True:
+            selection = await self.prompt_text(
+                "Select category numbers (comma-separated, e.g. 1,3,4)",
+                default="1",
+                allow_empty=False,
+            )
+            try:
+                indexes = [int(value.strip()) for value in selection.split(",") if value.strip()]
+                if not indexes or len(set(indexes)) != len(indexes):
+                    raise ValueError
+                if any(index < 1 or index > len(categories) for index in indexes):
+                    raise ValueError
+                selected_categories = [categories[index - 1] for index in indexes]
+                break
+            except ValueError:
+                self.show_message(
+                    "Invalid selection. Enter one or more category numbers separated by commas.",
+                    Fore.RED,
+                )
+
+        self.show_message(f"Selected categories: {', '.join(selected_categories)}", Fore.GREEN)
 
         self._print_options("Crawl Mode", ["All messages", "Only messages containing photos"])
         mode_choice = await self.prompt_choice("Select crawl mode [1-2]: ", {"1", "2"})
@@ -189,9 +203,9 @@ class ConsoleUI:
             return
 
         try:
-            jobs = self.crawler.schedule_category(
+            jobs = self.crawler.schedule_categories(
                 client,
-                category,
+                selected_categories,
                 from_date,
                 to_date,
                 interval_minutes=interval_minutes,
@@ -204,8 +218,8 @@ class ConsoleUI:
 
         mode_label = "all messages" if crawl_mode == CRAWL_MODE_ALL else "photos only"
         self.show_message(
-            f"Category '{category}' scheduled: {len(jobs)} channel(s), mode={mode_label}, "
-            f"range={from_date}..{to_date}, every {interval_minutes:g} minute(s).",
+            f"Categories '{', '.join(selected_categories)}' scheduled: {len(jobs)} channel(s), "
+            f"mode={mode_label}, range={from_date}..{to_date}, every {interval_minutes:g} minute(s).",
             Fore.GREEN,
         )
         await self.pause("Press Enter to return to the menu. Jobs continue in background...")

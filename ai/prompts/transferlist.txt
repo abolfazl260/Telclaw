@@ -11,23 +11,30 @@ Required top-level shape:
 Only populate the {category} object. Use only the allowed fields below. Do not invent facts. Use null for unknown values where needed by the existing validator. Do not add fields that are not listed.
 
 Allowed fields:
-title, description, origin_city, origin_province, origin_country, destination_city, destination_province, destination_country, airline, flight_number, departure_date, departure_time, arrival_date, arrival_time, transport_type, cargo_type, weight, weight_unit, quantity, price, currency, contact, features
+title, description, origin_city, origin_province, origin_country, destination_city, destination_province, destination_country, airline, flight_number, departure_date, departure_time, arrival_date, arrival_time, transport_type, cargo_type, weight, weight_unit, quantity, volume, volume_unit, price, currency, contact, features
 
 Transfer route extraction is critical:
 - origin_city is the explicit departure/loading/source city.
 - destination_city is the explicit arrival/unloading/target city.
 - Preserve direction exactly. "from A to B", "A to B", "از A به B", "A به B", "A → B", and equivalent wording mean origin=A and destination=B.
 - Never reverse origin and destination.
+- If the source contains a route in the title or first lines, extract it; do not require the route to appear in a dedicated field.
 - Do not use a city merely because it appears in a phone number, address, airline name, description, or unrelated text.
 - If only one endpoint is explicitly known, populate only that endpoint and set the other endpoint to null.
 - If the route is ambiguous, do not guess.
 - Extract province/state and country only when explicitly stated or unambiguous from the same route location. Do not invent geographic details.
 
 Cargo/measurement extraction:
-- Extract cargo_type only when the type of goods is stated.
-- Extract weight and weight_unit when present.
-- Extract quantity when present.
+- Extract cargo_type only when the type of goods is stated, such as Personal belongings.
+- Extract weight and weight_unit when present, preserving the source unit.
+- Extract volume and volume_unit when a volume/cubic measurement is explicitly stated, such as 3 m³ or 3 cbm. Do not put volume into quantity.
+- Extract quantity only when a separate quantity/count is explicitly present.
 - Never convert or invent measurements unless the source explicitly provides the converted value.
+
+Date and transport extraction:
+- Extract departure_date exactly when explicitly stated. Preserve ISO dates when present.
+- If a date is given in another calendar and the corresponding Gregorian date is explicitly available, keep the explicit Gregorian date in departure_date; do not calculate conversions yourself.
+- Translate transport_type into concise Persian for the outbound Telegram message only through the delivery formatter; the stored extracted value should reflect the source meaning.
 
 Existing transfer normalization rules:
 - title must be concise, natural English. Translate non-English text; never transliterate. No URLs, hashtags, emojis, or explanations.

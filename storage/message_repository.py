@@ -2,6 +2,7 @@
 
 from storage import database
 from storage.location_normalizer import normalize_location
+from storage.unlocode_repository import initialize as initialize_unlocode, lookup as lookup_unlocode
 
 
 class MessageRepository:
@@ -15,6 +16,7 @@ class MessageRepository:
     def _initialize_transfer_locations():
         conn = database.get_connection()
         try:
+            initialize_unlocode(conn)
             conn.execute("""CREATE TABLE IF NOT EXISTS transfer_locations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 processed_message_id INTEGER NOT NULL UNIQUE,
@@ -44,6 +46,8 @@ class MessageRepository:
     def _save_transfer_location_conn(conn, data):
         origin = normalize_location(data.get("origin_city"), data.get("origin_country"))
         destination = normalize_location(data.get("destination_city"), data.get("destination_country"))
+        origin["unlocode"] = lookup_unlocode(conn, origin["city"], origin["country_iso2"])
+        destination["unlocode"] = lookup_unlocode(conn, destination["city"], destination["country_iso2"])
         conn.execute("""INSERT INTO transfer_locations(
             processed_message_id,
             origin_city_canonical, origin_city_key, origin_country_iso2, origin_unlocode,

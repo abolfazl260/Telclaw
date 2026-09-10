@@ -6,6 +6,7 @@ publishing can evolve without coupling to the Advertio integration.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime
 
 import aiohttp
@@ -48,17 +49,13 @@ class TelegramTransferPublisher:
                     FOREIGN KEY(message_row_id) REFERENCES messages(id) ON DELETE CASCADE
                 )"""
             )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_transfer_publication_status "
-                "ON telegram_transfer_publications(status)"
-            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_publication_status ON telegram_transfer_publications(status)")
             conn.commit()
         finally:
             conn.close()
 
     @staticmethod
     def _jalali(gregorian_date: date) -> str:
-        """Convert Gregorian date to Persian/Jalali date without a new dependency."""
         gy, gm, gd = gregorian_date.year, gregorian_date.month, gregorian_date.day
         gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
         gy2 = gy + 1 if gm > 2 else gy
@@ -112,6 +109,15 @@ class TelegramTransferPublisher:
         unit = cls._value(data, "volume_unit") or "m³"
         return f"{volume:g} {unit}"
 
+    @classmethod
+    def _infer_volume_from_text(cls, data):
+        """Fallback for existing transfer rows whose DB schema predates volume fields."""
+        text = " ".join(str(data.get(key) or "") for key in ("description", "title", "features"))
+        match = re.search(r"(?<!\d)(\d+(?:[.,]\d+)?)\s*(m3|m³|cbm|cubic\s*meters?|متر\s*مکعب)(?!\w)", text, re.IGNORECASE)
+        if not match:
+            return None
+        return f"{float(match.group(1).replace(',', '.')):g} m³"
+
     @staticmethod
     def _transport_type(value):
         text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -136,7 +142,7 @@ class TelegramTransferPublisher:
         weight = cls._format_weight(data)
         if weight:
             lines.append(f"⚖️ وزن: {weight}")
-        volume = cls._format_volume(data)
+        volume = cls._format_volume(data) or cls._infer_volume_from_text(data)
         if volume:
             lines.append(f"📏 حجم: {volume}")
 
@@ -167,20 +173,14 @@ class TelegramTransferPublisher:
 
     async def _send_message(self, text):
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        payload = {
-            "chat_id": self.channel,
-            "text": text,
-            "disable_web_page_preview": True,
-        }
+        payload = {"chat_id": self.channel, "text": text, "disable_web_page_preview": True}
         timeout = aiohttp.ClientTimeout(total=config.TRANSFER_TELEGRAM_TIMEOUT_SECONDS)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=payload) as response:
                 data = await response.json(content_type=None)
                 if not response.ok or not data.get("ok"):
                     description = data.get("description") if isinstance(data, dict) else None
-                    raise TransferTelegramPublishError(
-                        f"Telegram sendMessage failed: HTTP {response.status} {description or ''}".strip()
-                    )
+                    raise TransferTelegramPublishError(f"Telegram sendMessage failed: HTTP {response.status} {description or ''}".strip())
                 return data["result"]
 
     @staticmethod
@@ -188,7 +188,13 @@ class TelegramTransferPublisher:
         conn = database.get_connection()
         try:
             rows = conn.execute(
-                """SELECT m.*, t.*
+                """SELECT m.id AS message_row_id, m.channel_username, m.message_id, m.sender_username,
+                          m.ai_status, m.ai_category, m.raw_text, m.text,
+                          t.title, t.description, t.origin_city, t.origin_province, t.origin_country,
+                          t.destination_city, t.destination_province, t.destination_country, t.airline,
+                          t.flight_number, t.departure_date, t.departure_time, t.arrival_date, t.arrival_time,
+                          t.transport_type, t.cargo_type, t.weight, t.weight_unit, t.quantity,
+                          t.price, t.currency, t.contact, t.features
                    FROM transferlist t
                    JOIN messages m ON m.id=t.processed_message_id
                    LEFT JOIN telegram_transfer_publications p ON p.message_row_id=m.id
@@ -199,11 +205,7 @@ class TelegramTransferPublisher:
                    LIMIT ?""",
                 (int(limit),),
             ).fetchall()
-            records = []
-            for row in rows:
-                record = dict(row)
-                records.append(record)
-            return records
+            return [dict(row) for row in rows]
         finally:
             conn.close()
 
@@ -215,8 +217,7 @@ class TelegramTransferPublisher:
                 """INSERT INTO telegram_transfer_publications(message_row_id,channel_username,status)
                    VALUES(?,?, 'processing')
                    ON CONFLICT(message_row_id) DO UPDATE SET
-                     channel_username=excluded.channel_username,
-                     status='processing', error=NULL""",
+                     channel_username=excluded.channel_username, status='processing', error=NULL""",
                 (message_row_id, channel_username),
             )
             conn.commit()
@@ -241,28 +242,27 @@ class TelegramTransferPublisher:
         records = self._pending_records(limit)
         result = {"found": len(records), "sent": 0, "failed": 0, "rejected": 0}
         for record in records:
-            self._claim(record["id"], record["channel_username"])
+            self._claim(record["message_row_id"], record["channel_username"])
             data = {key: record.get(key) for key in (
                 "title", "description", "origin_city", "origin_province", "origin_country",
                 "destination_city", "destination_province", "destination_country", "airline",
                 "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
-                "transport_type", "cargo_type", "weight", "weight_unit", "volume", "volume_unit",
-                "quantity", "price", "currency", "contact", "features",
+                "transport_type", "cargo_type", "weight", "weight_unit", "quantity", "price",
+                "currency", "contact", "features",
             )}
             try:
                 text = self.format_ad(record, data)
-            except TransferTelegramPublishError as exc:
-                self._result(record["id"], "rejected", error=str(exc))
-                result["rejected"] += 1
-                logger.warning("[TRANSFER TELEGRAM] rejected message=%s reason=%s", record.get("message_id"), exc)
-                continue
-            try:
                 sent = await self._send_message(text)
-                self._result(record["id"], "sent", telegram_message_id=sent.get("message_id"))
+                self._result(record["message_row_id"], "sent", telegram_message_id=sent.get("message_id"))
                 result["sent"] += 1
                 logger.info("[TRANSFER TELEGRAM] sent message=%s telegram_message_id=%s", record.get("message_id"), sent.get("message_id"))
+            except TransferTelegramPublishError as exc:
+                status = "rejected" if "requires both origin_city" in str(exc) else "retry"
+                self._result(record["message_row_id"], status, error=str(exc)[:4000])
+                result["rejected" if status == "rejected" else "failed"] += 1
+                logger.warning("[TRANSFER TELEGRAM] %s message=%s reason=%s", status, record.get("message_id"), exc)
             except Exception as exc:
-                self._result(record["id"], "retry", error=str(exc)[:4000])
+                self._result(record["message_row_id"], "retry", error=str(exc)[:4000])
                 result["failed"] += 1
                 logger.exception("[TRANSFER TELEGRAM] failed message=%s", record.get("message_id"))
         return result

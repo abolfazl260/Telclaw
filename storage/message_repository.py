@@ -1,6 +1,7 @@
 """Persistence abstraction for the independent Telclaw pipeline queues."""
 
 from storage import database
+from storage.location_normalizer import normalize_location
 
 
 class MessageRepository:
@@ -8,6 +9,59 @@ class MessageRepository:
 
     def initialize(self):
         database.initialize_db()
+        self._initialize_transfer_locations()
+
+    @staticmethod
+    def _initialize_transfer_locations():
+        conn = database.get_connection()
+        try:
+            conn.execute("""CREATE TABLE IF NOT EXISTS transfer_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                processed_message_id INTEGER NOT NULL UNIQUE,
+                origin_city_canonical TEXT,
+                origin_city_key TEXT,
+                origin_country_iso2 TEXT,
+                origin_unlocode TEXT,
+                destination_city_canonical TEXT,
+                destination_city_key TEXT,
+                destination_country_iso2 TEXT,
+                destination_unlocode TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_locations_origin ON transfer_locations(origin_country_iso2, origin_city_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_locations_destination ON transfer_locations(destination_country_iso2, destination_city_key)")
+            rows = conn.execute("""SELECT t.processed_message_id, t.origin_city, t.origin_country,
+                                      t.destination_city, t.destination_country
+                                 FROM transferlist t""").fetchall()
+            for row in rows:
+                MessageRepository._save_transfer_location_conn(conn, dict(row))
+            conn.commit()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _save_transfer_location_conn(conn, data):
+        origin = normalize_location(data.get("origin_city"), data.get("origin_country"))
+        destination = normalize_location(data.get("destination_city"), data.get("destination_country"))
+        conn.execute("""INSERT INTO transfer_locations(
+            processed_message_id,
+            origin_city_canonical, origin_city_key, origin_country_iso2, origin_unlocode,
+            destination_city_canonical, destination_city_key, destination_country_iso2, destination_unlocode
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(processed_message_id) DO UPDATE SET
+            origin_city_canonical=excluded.origin_city_canonical,
+            origin_city_key=excluded.origin_city_key,
+            origin_country_iso2=excluded.origin_country_iso2,
+            origin_unlocode=excluded.origin_unlocode,
+            destination_city_canonical=excluded.destination_city_canonical,
+            destination_city_key=excluded.destination_city_key,
+            destination_country_iso2=excluded.destination_country_iso2,
+            destination_unlocode=excluded.destination_unlocode""", (
+            data.get("processed_message_id"),
+            origin["city"], origin["city_key"], origin["country_iso2"], origin["unlocode"],
+            destination["city"], destination["city_key"], destination["country_iso2"], destination["unlocode"],
+        ))
 
     def insert(self, **message):
         return database.insert_message(**message)
@@ -84,7 +138,20 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def save_category_record(self, processed_message_id, category, data):
-        return database.save_category_record(processed_message_id, category, data)
+        result = database.save_category_record(processed_message_id, category, data)
+        if category == "transferlist":
+            conn = database.get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT processed_message_id, origin_city, origin_country, destination_city, destination_country FROM transferlist WHERE processed_message_id=?",
+                    (processed_message_id,),
+                ).fetchone()
+                if row:
+                    self._save_transfer_location_conn(conn, dict(row))
+                    conn.commit()
+            finally:
+                conn.close()
+        return result
 
     def get_category_record(self, processed_message_id, category):
         return database.get_category_record(processed_message_id, category)

@@ -9,7 +9,12 @@ from ai.classification_service import CategoryClassificationService
 from ai.groq_connection_test import test_groq_connection
 from collection.media_downloader import download_photo_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
-from delivery.telegram_transfer import get_ready_transfer_ads, get_transfer_queue_status
+from delivery.telegram_transfer import (
+    get_latest_transfer_ads,
+    get_ready_transfer_ads,
+    get_transfer_queue_status,
+    send_transfer_ads,
+)
 from services.processing_service import ProcessingService
 import config
 from ui import ConsoleUI
@@ -194,8 +199,119 @@ class SystemConsoleUI(ConsoleUI):
             else:
                 return
 
+    @staticmethod
+    def _transfer_status_label(status):
+        return {
+            "sent": "SENT",
+            "failed": "FAILED",
+            "waiting": "NOT SENT",
+        }.get(status, "NOT SENT")
+
+    @staticmethod
+    def _format_transfer_record(record, index):
+        origin = record.get("origin_city") or record.get("origin_country") or "?"
+        destination = record.get("destination_city") or record.get("destination_country") or "?"
+        title = record.get("title") or f"{origin} → {destination}"
+        price = record.get("price")
+        currency = record.get("currency") or ""
+        price_text = f"{price} {currency}".strip() if price is not None else "-"
+        departure = " ".join(
+            value for value in (record.get("departure_date"), record.get("departure_time")) if value
+        ) or "-"
+        return (
+            f"{Fore.GREEN}│  {index:>2}. {title}\n"
+            f"{Fore.GREEN}│      Route: {origin} → {destination} | "
+            f"Departure: {departure} | Price: {price_text}\n"
+            f"{Fore.GREEN}│      Contact: {record.get('contact') or '-'} | "
+            f"Status: {SystemConsoleUI._transfer_status_label(record.get('delivery_status'))} | "
+            f"Source: @{record.get('channel_username') or 'unknown'}"
+        )
+
+    async def view_transfer_ads(self):
+        """Show the latest 20 transfer-list records, including delivery status."""
+        self.clear_screen()
+        self.show_banner()
+        self.show_section_header("Latest 20 Transfer Ads")
+        try:
+            records = get_latest_transfer_ads(limit=20)
+            if not records:
+                self.show_message("No transfer ads exist in the database.", Fore.YELLOW)
+            else:
+                for index, record in enumerate(records, start=1):
+                    print(self._format_transfer_record(record, index))
+        except Exception as exc:
+            self.show_message(f"Unable to read transfer ads: {exc}", Fore.RED)
+        self.show_section_footer()
+        await self.pause()
+
+    async def send_transfer_ads(self):
+        """Send ready transfer ads to a manually selected Telegram channel."""
+        self.clear_screen()
+        self.show_banner()
+        self.show_section_header("Send Transfer Ads")
+        try:
+            status = get_transfer_queue_status()
+            if status["waiting"] == 0:
+                self.show_message("No transfer ads are waiting for their first send attempt.", Fore.YELLOW)
+                if status["failed"]:
+                    self.show_message(
+                        f"{status['failed']} transfer ad(s) previously failed and remain unsent.",
+                        Fore.YELLOW,
+                    )
+                await self.pause()
+                return
+
+            self.show_message(
+                f"Not sent: {status['waiting']} | Failed: {status['failed']} | Already sent: {status['sent']}",
+                Fore.CYAN,
+            )
+            target_channel = await self.prompt_text(
+                "Target Telegram channel (e.g. @my_channel)",
+                allow_empty=False,
+            )
+            if not target_channel.startswith("@"):
+                target_channel = f"@{target_channel}"
+
+            count_text = await self.prompt_text(
+                "How many ads should be sent",
+                default=str(min(status["waiting"], 20)),
+                allow_empty=False,
+            )
+            try:
+                limit = int(count_text)
+                if limit <= 0:
+                    raise ValueError
+            except ValueError:
+                self.show_message("Number of ads must be a positive integer.", Fore.RED)
+                await self.pause()
+                return
+
+            confirm = await self.prompt_choice(
+                f"Send up to {limit} transfer ad(s) to {target_channel}? [y/n]: ",
+                {"y", "n"},
+            )
+            if confirm == "n":
+                self.show_message("Transfer delivery cancelled.", Fore.YELLOW)
+                await self.pause()
+                return
+
+            client = await self.connect_client()
+            if client is None:
+                await self.pause()
+                return
+
+            result = await send_transfer_ads(client, target_channel, limit=limit)
+            color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
+            self.show_message(
+                f"Completed. Found: {result['found']} | Sent: {result['sent']} | Failed: {result['failed']}",
+                color,
+            )
+        except Exception as exc:
+            self.show_message(f"Transfer delivery failed: {exc}", Fore.RED)
+        await self.pause()
+
     async def transfer_ads_menu(self):
-        """Show the Telegram transfer-list delivery dashboard without crawling or AI work."""
+        """Manage transfer-list delivery without crawling or AI processing."""
         while True:
             self.clear_screen()
             self.show_banner()
@@ -204,38 +320,26 @@ class SystemConsoleUI(ConsoleUI):
                 status = get_transfer_queue_status()
                 print(f"{Fore.GREEN}│  📦 Total transfer ads: {status['total']}")
                 print(f"{Fore.GREEN}│  ✅ Already sent:      {status['sent']}")
-                print(f"{Fore.GREEN}│  📤 Ready to send:     {status['ready']}")
+                print(f"{Fore.GREEN}│  📤 Not sent:          {status['waiting']}")
+                print(f"{Fore.GREEN}│  ❌ Failed / not sent: {status['failed']}")
             except Exception as exc:
                 self.show_message(f"Unable to read transfer queue: {exc}", Fore.RED)
                 await self.pause()
                 return
+
             self.show_section_footer()
-            print(f"{Fore.GREEN}│  1. View ready transfer ads")
-            print(f"{Fore.GREEN}│  2. Refresh status")
-            print(f"{Fore.GREEN}│  3. ⬅ Back")
+            print(f"{Fore.GREEN}│  1. 📤 Send in channel")
+            print(f"{Fore.GREEN}│  2. 📋 View latest 20 transfer ads")
+            print(f"{Fore.GREEN}│  3. 🔄 Refresh status")
+            print(f"{Fore.GREEN}│  4. ⬅ Back")
             self.show_section_footer()
 
-            choice = await self.prompt_choice("\nChoose an option [1-3]: ", {"1", "2", "3"})
+            choice = await self.prompt_choice("\nChoose an option [1-4]: ", {"1", "2", "3", "4"})
             if choice == "1":
-                ready = get_ready_transfer_ads(limit=100)
-                self.clear_screen()
-                self.show_banner()
-                self.show_section_header("Ready Transfer Ads")
-                if not ready:
-                    self.show_message("No processed transfer ads are waiting to be sent.", Fore.YELLOW)
-                else:
-                    for index, record in enumerate(ready, start=1):
-                        origin = record.get("origin_city") or "Unknown origin"
-                        destination = record.get("destination_city") or "Unknown destination"
-                        title = record.get("title") or f"{origin} → {destination}"
-                        print(
-                            f"{Fore.GREEN}│  {index}. {title} | "
-                            f"{origin} → {destination} | "
-                            f"source=@{record.get('channel_username') or 'unknown'}"
-                        )
-                self.show_section_footer()
-                await self.pause()
+                await self.send_transfer_ads()
             elif choice == "2":
+                await self.view_transfer_ads()
+            elif choice == "3":
                 continue
             else:
                 return

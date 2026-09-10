@@ -13,6 +13,18 @@ Only populate the {category} object. Use only the allowed fields below. Do not i
 Allowed fields:
 title, description, origin_city, origin_province, origin_country, destination_city, destination_province, destination_country, airline, flight_number, departure_date, departure_time, arrival_date, arrival_time, transport_type, transfer_role, cargo_type, weight, weight_unit, quantity, volume, volume_unit, price, currency, contact, features
 
+Human-readable description:
+- description is NOT a copy of the source message and must NOT be a technical list of extracted fields.
+- Write a short, natural, human-sounding Persian summary of the user's actual transfer/shipping need.
+- Focus on the user's main request and useful details that are not already represented by the structured fields.
+- Mention distinctive details when they matter, for example what the item is for, why it is being sent, urgency, special handling needs, who it is intended for, or what the user is looking for from a passenger/sender.
+- Do not unnecessarily repeat origin, destination, weight, date, price, transport type, contact, or other structured fields that are already clearly shown separately.
+- Do not use robotic wording such as "کاربر اعلام کرده"، "طبق پیام"، "این فرد نیاز دارد" or similar meta-language.
+- Make the result read like a concise explanation in a real marketplace advertisement.
+- Preserve the meaning and important nuance of the source. Do not add assumptions or facts that are not supported by the message.
+- If the message contains no meaningful information beyond the structured fields, return description as null rather than repeating those fields.
+- Keep the description concise, normally one or two natural sentences.
+
 Transfer route extraction is critical:
 - origin_city is the explicit departure/loading/source city.
 - destination_city is the explicit arrival/unloading/target city.

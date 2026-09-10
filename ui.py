@@ -73,6 +73,13 @@ class ConsoleUI:
             print(f"{Fore.GREEN}│  {Fore.YELLOW}[{index}]{Fore.WHITE} {item}")
         self.show_section_footer()
 
+    def _print_back_option(self, number):
+        print(f"{Fore.GREEN}│  {Fore.YELLOW}[{number}]{Fore.WHITE} ⬅ Back")
+
+    async def _prompt_back(self, number=1):
+        choice = await self.prompt_choice(f"\nChoose an option [1]: ", {str(number)})
+        return choice == str(number)
+
     async def connect_client(self, account_name=None):
         if self.client is not None:
             return self.client
@@ -107,7 +114,7 @@ class ConsoleUI:
             self.show_section_header("Account Management")
             print(f"{Fore.GREEN}│  1. Select an existing account")
             print(f"{Fore.GREEN}│  2. Add a new account")
-            print(f"{Fore.GREEN}│  3. Go back")
+            print(f"{Fore.GREEN}│  3. ⬅ Back")
             self.show_section_footer()
 
             choice = await self.prompt_choice("\nChoose an option [1-3]: ", {"1", "2", "3"})
@@ -231,8 +238,9 @@ class ConsoleUI:
         print(f"{Fore.GREEN}│  Base Delay: {config.BASE_DELAY} seconds")
         print(f"{Fore.GREEN}│  Random Delay Max: {config.RANDOM_DELAY_MAX} seconds")
         print(f"{Fore.GREEN}│  Crawl Interval: {getattr(config, 'CRAWL_INTERVAL_MINUTES', 5)} minutes")
+        self._print_back_option(1)
         self.show_section_footer()
-        await self.pause()
+        await self._prompt_back()
 
     async def manage_channels(self):
         self.clear_screen()
@@ -249,8 +257,9 @@ class ConsoleUI:
             for channel in channels:
                 print(f"{Fore.GREEN}│    ├─ @{channel.get('username', 'unknown')}")
                 print(f"{Fore.GREEN}│    └─ {Fore.WHITE}{channel.get('description', 'No description')}")
+        self._print_back_option(1)
         self.show_section_footer()
-        await self.pause()
+        await self._prompt_back()
 
     async def run(self):
         while True:

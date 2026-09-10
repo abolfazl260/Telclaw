@@ -1,8 +1,4 @@
-"""Dedicated Telegram publisher for AI-processed transfer advertisements.
-
-This module is intentionally independent from Advertio delivery so transfer-channel
-publishing can evolve without coupling to the Advertio integration.
-"""
+"""Dedicated Telegram publisher for AI-processed transfer advertisements."""
 from __future__ import annotations
 
 import logging
@@ -36,19 +32,12 @@ class TelegramTransferPublisher:
     def _ensure_publication_table():
         conn = database.get_connection()
         try:
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS telegram_transfer_publications (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_row_id INTEGER NOT NULL UNIQUE,
-                    channel_username TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'waiting',
-                    telegram_message_id INTEGER,
-                    error TEXT,
-                    processed_at TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(message_row_id) REFERENCES messages(id) ON DELETE CASCADE
-                )"""
-            )
+            conn.execute("""CREATE TABLE IF NOT EXISTS telegram_transfer_publications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, message_row_id INTEGER NOT NULL UNIQUE,
+                channel_username TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'waiting',
+                telegram_message_id INTEGER, error TEXT, processed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(message_row_id) REFERENCES messages(id) ON DELETE CASCADE)""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_publication_status ON telegram_transfer_publications(status)")
             conn.commit()
         finally:
@@ -84,6 +73,37 @@ class TelegramTransferPublisher:
         return text or None
 
     @staticmethod
+    def _country_flag(value):
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        if re.fullmatch(r"[a-z]{2}", text):
+            return "".join(chr(127397 + ord(c)) for c in text.upper())
+        flags = {
+            "iran":"🇮🇷", "ایران":"🇮🇷", "germany":"🇩🇪", "deutschland":"🇩🇪", "آلمان":"🇩🇪",
+            "turkey":"🇹🇷", "türkiye":"🇹🇷", "turkiye":"🇹🇷", "ترکیه":"🇹🇷",
+            "canada":"🇨🇦", "کانادا":"🇨🇦", "usa":"🇺🇸", "united states":"🇺🇸", "america":"🇺🇸", "آمریکا":"🇺🇸",
+            "uk":"🇬🇧", "united kingdom":"🇬🇧", "england":"🇬🇧", "انگلستان":"🇬🇧", "بریتانیا":"🇬🇧",
+            "france":"🇫🇷", "فرانسه":"🇫🇷", "italy":"🇮🇹", "ایتالیا":"🇮🇹", "spain":"🇪🇸", "اسپانیا":"🇪🇸",
+            "netherlands":"🇳🇱", "the netherlands":"🇳🇱", "هلند":"🇳🇱", "belgium":"🇧🇪", "بلژیک":"🇧🇪",
+            "austria":"🇦🇹", "اتریش":"🇦🇹", "switzerland":"🇨🇭", "سوئیس":"🇨🇭", "sweden":"🇸🇪", "سوئد":"🇸🇪",
+            "norway":"🇳🇴", "نروژ":"🇳🇴", "denmark":"🇩🇰", "دانمارک":"🇩🇰", "finland":"🇫🇮", "فنلاند":"🇫🇮",
+            "poland":"🇵🇱", "لهستان":"🇵🇱", "greece":"🇬🇷", "یونان":"🇬🇷", "russia":"🇷🇺", "روسیه":"🇷🇺",
+            "ukraine":"🇺🇦", "اوکراین":"🇺🇦", "uae":"🇦🇪", "united arab emirates":"🇦🇪", "امارات":"🇦🇪",
+            "qatar":"🇶🇦", "قطر":"🇶🇦", "saudi arabia":"🇸🇦", "عربستان":"🇸🇦", "kuwait":"🇰🇼", "کویت":"🇰🇼",
+            "oman":"🇴🇲", "عمان":"🇴🇲", "iraq":"🇮🇶", "عراق":"🇮🇶", "azerbaijan":"🇦🇿", "آذربایجان":"🇦🇿",
+            "georgia":"🇬🇪", "گرجستان":"🇬🇪", "armenia":"🇦🇲", "ارمنستان":"🇦🇲", "china":"🇨🇳", "چین":"🇨🇳",
+            "japan":"🇯🇵", "ژاپن":"🇯🇵", "south korea":"🇰🇷", "کره جنوبی":"🇰🇷", "india":"🇮🇳", "هند":"🇮🇳",
+            "pakistan":"🇵🇰", "پاکستان":"🇵🇰", "afghanistan":"🇦🇫", "افغانستان":"🇦🇫",
+        }
+        return flags.get(text, "")
+
+    @classmethod
+    def _location_line(cls, label, city, country):
+        flag = cls._country_flag(country)
+        return f"{label}: {flag + ' ' if flag else ''}{city}"
+
+    @staticmethod
     def _number(value):
         if value is None or isinstance(value, bool):
             return None
@@ -111,7 +131,6 @@ class TelegramTransferPublisher:
 
     @classmethod
     def _infer_volume_from_text(cls, data):
-        """Fallback for existing transfer rows whose DB schema predates volume fields."""
         text = " ".join(str(data.get(key) or "") for key in ("description", "title", "features"))
         match = re.search(r"(?<!\d)(\d+(?:[.,]\d+)?)\s*(m3|m³|cbm|cubic\s*meters?|متر\s*مکعب)(?!\w)", text, re.IGNORECASE)
         if not match:
@@ -121,11 +140,9 @@ class TelegramTransferPublisher:
     @staticmethod
     def _transport_type(value):
         text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-        aliases = {
-            "ground": "زمینی", "land": "زمینی", "road": "زمینی", "truck": "زمینی", "زمینی": "زمینی",
-            "air": "هوایی", "air_freight": "هوایی", "flight": "هوایی", "هوایی": "هوایی",
-            "sea": "دریایی", "marine": "دریایی", "ocean": "دریایی", "دریایی": "دریایی",
-        }
+        aliases = {"ground":"زمینی", "land":"زمینی", "road":"زمینی", "truck":"زمینی", "زمینی":"زمینی",
+                   "air":"هوایی", "air_freight":"هوایی", "flight":"هوایی", "هوایی":"هوایی",
+                   "sea":"دریایی", "marine":"دریایی", "ocean":"دریایی", "دریایی":"دریایی"}
         return aliases.get(text, value)
 
     @classmethod
@@ -135,7 +152,10 @@ class TelegramTransferPublisher:
         if not origin or not destination:
             raise TransferTelegramPublishError("Transfer advertisement requires both origin_city and destination_city")
 
-        lines = [f"🚚 ارسال بار از {origin} به {destination}"]
+        lines = [
+            cls._location_line("📍 مبدا", origin, cls._value(data, "origin_country")),
+            cls._location_line("📍 مقصد", destination, cls._value(data, "destination_country")),
+        ]
         cargo = cls._value(data, "cargo_type")
         if cargo:
             lines.append(f"📦 نوع بار: {cargo}")
@@ -145,7 +165,6 @@ class TelegramTransferPublisher:
         volume = cls._format_volume(data) or cls._infer_volume_from_text(data)
         if volume:
             lines.append(f"📏 حجم: {volume}")
-
         departure_date = cls._value(data, "departure_date")
         if departure_date:
             try:
@@ -153,19 +172,16 @@ class TelegramTransferPublisher:
                 lines.append(f"📅 تاریخ ارسال: {gregorian.isoformat()} ({cls._jalali(gregorian)})")
             except ValueError:
                 lines.append(f"📅 تاریخ ارسال: {departure_date}")
-
         transport = cls._transport_type(data.get("transport_type"))
         if transport:
             lines.append(f"🚛 نوع حمل: {transport}")
         transfer_role = cls._value(data, "transfer_role")
         if transfer_role:
-            role_labels = {"passenger": "مسافر", "shipper": "ارسال‌کننده بار"}
+            role_labels = {"passenger":"مسافر", "shipper":"ارسال‌کننده بار"}
             lines.append(f"👤 نوع درخواست: {role_labels.get(transfer_role.strip().lower(), transfer_role)}")
-
         description = cls._value(data, "description")
         if description:
             lines.append(f"📝 توضیحات: {description}")
-
         price = cls._number(data.get("price"))
         if price is not None:
             currency = cls._value(data, "currency") or "CAD"
@@ -173,7 +189,6 @@ class TelegramTransferPublisher:
         contact = cls._value(data, "contact")
         if contact:
             lines.append(f"📞 تماس: {contact}")
-
         username = cls._value(record, "sender_username")
         if username:
             username = username if username.startswith("@") else f"@{username}"
@@ -196,24 +211,17 @@ class TelegramTransferPublisher:
     def _pending_records(limit=100):
         conn = database.get_connection()
         try:
-            rows = conn.execute(
-                """SELECT m.id AS message_row_id, m.channel_username, m.message_id, m.sender_username,
+            rows = conn.execute("""SELECT m.id AS message_row_id, m.channel_username, m.message_id, m.sender_username,
                           m.ai_status, m.ai_category, m.raw_text, m.text,
                           t.title, t.description, t.origin_city, t.origin_province, t.origin_country,
                           t.destination_city, t.destination_province, t.destination_country, t.airline,
                           t.flight_number, t.departure_date, t.departure_time, t.arrival_date, t.arrival_time,
                           t.transport_type, t.transfer_role, t.cargo_type, t.weight, t.weight_unit, t.quantity,
                           t.volume, t.volume_unit, t.price, t.currency, t.contact, t.features
-                   FROM transferlist t
-                   JOIN messages m ON m.id=t.processed_message_id
+                   FROM transferlist t JOIN messages m ON m.id=t.processed_message_id
                    LEFT JOIN telegram_transfer_publications p ON p.message_row_id=m.id
-                   WHERE m.ai_status='processed'
-                     AND m.ai_category='transferlist'
-                     AND (p.id IS NULL OR p.status='retry')
-                   ORDER BY m.date ASC, m.id ASC
-                   LIMIT ?""",
-                (int(limit),),
-            ).fetchall()
+                   WHERE m.ai_status='processed' AND m.ai_category='transferlist'
+                     AND (p.id IS NULL OR p.status='retry') ORDER BY m.date ASC, m.id ASC LIMIT ?""", (int(limit),)).fetchall()
             return [dict(row) for row in rows]
         finally:
             conn.close()
@@ -222,13 +230,9 @@ class TelegramTransferPublisher:
     def _claim(message_row_id, channel_username):
         conn = database.get_connection()
         try:
-            conn.execute(
-                """INSERT INTO telegram_transfer_publications(message_row_id,channel_username,status)
-                   VALUES(?,?, 'processing')
-                   ON CONFLICT(message_row_id) DO UPDATE SET
-                     channel_username=excluded.channel_username, status='processing', error=NULL""",
-                (message_row_id, channel_username),
-            )
+            conn.execute("""INSERT INTO telegram_transfer_publications(message_row_id,channel_username,status)
+                   VALUES(?,?, 'processing') ON CONFLICT(message_row_id) DO UPDATE SET
+                   channel_username=excluded.channel_username, status='processing', error=NULL""", (message_row_id, channel_username))
             conn.commit()
         finally:
             conn.close()
@@ -237,12 +241,8 @@ class TelegramTransferPublisher:
     def _result(message_row_id, status, telegram_message_id=None, error=None):
         conn = database.get_connection()
         try:
-            conn.execute(
-                """UPDATE telegram_transfer_publications
-                   SET status=?, telegram_message_id=?, error=?, processed_at=?
-                   WHERE message_row_id=?""",
-                (status, telegram_message_id, error, datetime.utcnow().isoformat() + "Z", message_row_id),
-            )
+            conn.execute("""UPDATE telegram_transfer_publications SET status=?, telegram_message_id=?, error=?, processed_at=?
+                   WHERE message_row_id=?""", (status, telegram_message_id, error, datetime.utcnow().isoformat() + "Z", message_row_id))
             conn.commit()
         finally:
             conn.close()
@@ -257,8 +257,7 @@ class TelegramTransferPublisher:
                 "destination_city", "destination_province", "destination_country", "airline",
                 "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
                 "transport_type", "transfer_role", "cargo_type", "weight", "weight_unit", "quantity",
-                "volume", "volume_unit", "price", "currency", "contact", "features",
-            )}
+                "volume", "volume_unit", "price", "currency", "contact", "features")}
             try:
                 text = self.format_ad(record, data)
                 sent = await self._send_message(text)

@@ -280,45 +280,100 @@ def _format_transport(value):
     key = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
     mapping = {
         "air": "هوایی", "air cargo": "هوایی", "air freight": "هوایی",
-        "airline": "هوایی", "sea": "دریایی", "ocean": "دریایی",
-        "sea freight": "دریایی", "land": "زمینی", "ground": "زمینی",
-        "road": "زمینی", "truck": "زمینی", "rail": "ریلی", "train": "ریلی",
+        "airline": "هوایی", "flight": "هوایی", "air transport": "هوایی",
+        "land": "زمینی", "ground": "زمینی", "road": "زمینی",
+        "road transport": "زمینی", "truck": "زمینی", "ground transport": "زمینی",
     }
     return mapping.get(key, text)
 
 
+def _format_transfer_role(value):
+    text = str(value or "").strip().lower()
+    if text == "passenger":
+        return "مسافر"
+    if text == "shipper":
+        return "ارسال‌کننده بار"
+    return ""
+
+
+def _country_flag(value):
+    """Return a flag emoji for a two-letter ISO country code."""
+    code = str(value or "").strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return ""
+    return "".join(chr(0x1F1E6 + ord(char) - ord("A")) for char in code)
+
+
+def _format_location(city, country):
+    city = str(city or "").strip()
+    country = str(country or "").strip()
+    if not city:
+        return ""
+    flag = _country_flag(country)
+    return f"{flag} {city}".strip() if flag else city
+
+
 def format_transfer_ad(record):
-    """Build the requested Persian transfer-ad format for Telegram."""
-    origin = str(record.get("origin_city") or "نامشخص").strip()
-    destination = str(record.get("destination_city") or "نامشخص").strip()
+    """Build the channel-facing Persian transfer-ad format without a title."""
+    origin = str(record.get("origin_city") or "").strip()
+    destination = str(record.get("destination_city") or "").strip()
 
-    lines = [f"🚚 ارسال بار از {origin} به {destination}"]
+    route = " → ".join(
+        part for part in (
+            _format_location(origin, record.get("origin_country")),
+            _format_location(destination, record.get("destination_country")),
+        ) if part
+    )
+    lines = [route] if route else []
 
+    role = _format_transfer_role(record.get("transfer_role"))
+    if role:
+        lines.append(f"👤 نقش: {role}")
     if record.get("cargo_type"):
         lines.append(f"📦 نوع بار: {record['cargo_type']}")
     if record.get("weight") is not None:
         weight = _format_number(record["weight"])
         unit = str(record.get("weight_unit") or "").strip()
         lines.append(f"⚖️ وزن: {weight}{(' ' + unit) if unit else ''}")
+    if record.get("quantity") is not None:
+        lines.append(f"📦 تعداد: {_format_number(record['quantity'])}")
     if record.get("volume") is not None:
         volume = _format_number(record["volume"])
         unit = str(record.get("volume_unit") or "m³").strip()
         lines.append(f"📏 حجم: {volume} {unit}")
+    if record.get("transport_type"):
+        lines.append(f"✈️ نوع حمل: {_format_transport(record['transport_type'])}")
+    if record.get("airline"):
+        lines.append(f"✈️ شرکت هواپیمایی: {record['airline']}")
+    if record.get("flight_number"):
+        lines.append(f"🔢 شماره پرواز: {record['flight_number']}")
     if record.get("departure_date"):
         lines.append(f"📅 تاریخ ارسال: {_format_departure_date(record['departure_date'])}")
-    if record.get("transport_type"):
-        lines.append(f"🚛 نوع حمل: {_format_transport(record['transport_type'])}")
+    if record.get("arrival_date"):
+        lines.append(f"📅 تاریخ رسیدن: {_format_departure_date(record['arrival_date'])}")
     if record.get("price") is not None:
-        lines.append(f"💰 هزینه: {_format_number(record['price'])}")
-    if record.get("contact"):
-        lines.append(f"📞 تماس: {_mask_contact(record['contact'])}")
+        currency = str(record.get("currency") or "").strip()
+        suffix = f" {currency}" if currency else ""
+        lines.append(f"💰 هزینه: {_format_number(record['price'])}{suffix}")
+    if record.get("description"):
+        lines.append(f"📝 توضیحات:\n{str(record['description']).strip()}")
+    if record.get("features"):
+        features = record["features"]
+        if isinstance(features, (list, tuple)):
+            features = [str(item).strip() for item in features if str(item).strip()]
+            if features:
+                lines.append("✨ ویژگی‌ها:\n" + "\n".join(f"• {item}" for item in features))
+        elif str(features).strip():
+            lines.append(f"✨ ویژگی‌ها:\n{str(features).strip()}")
     username = str(record.get("sender_username") or "").strip()
     if username:
         if not username.startswith("@"):
             username = "@" + username
-        lines.append(f"یوزرنیم: {username}")
+        lines.append(f"👤 تماس: {username}")
+    elif record.get("contact"):
+        lines.append(f"👤 تماس: {_mask_contact(record['contact'])}")
 
-    return "\n".join(lines)
+    return "\n\n".join(lines)
 
 
 async def send_transfer_ads(client, target_channel, limit=20):

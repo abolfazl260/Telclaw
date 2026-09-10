@@ -14,7 +14,7 @@ CATEGORY_FIELDS = {
         "title", "description", "origin_city", "origin_province", "origin_country",
         "destination_city", "destination_province", "destination_country", "airline",
         "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
-        "transport_type", "cargo_type", "weight", "weight_unit", "quantity",
+        "transport_type", "transfer_role", "cargo_type", "weight", "weight_unit", "quantity",
         "volume", "volume_unit", "price", "currency", "contact", "features",
     ),
     "joblist": (

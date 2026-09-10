@@ -2,7 +2,6 @@
 
 from storage import database
 from storage.location_normalizer import normalize_location
-from storage.unlocode_repository import initialize as initialize_unlocode, lookup as lookup_unlocode
 
 
 class MessageRepository:
@@ -16,18 +15,15 @@ class MessageRepository:
     def _initialize_transfer_locations():
         conn = database.get_connection()
         try:
-            initialize_unlocode(conn)
             conn.execute("""CREATE TABLE IF NOT EXISTS transfer_locations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 processed_message_id INTEGER NOT NULL UNIQUE,
                 origin_city_canonical TEXT,
                 origin_city_key TEXT,
                 origin_country_iso2 TEXT,
-                origin_unlocode TEXT,
                 destination_city_canonical TEXT,
                 destination_city_key TEXT,
                 destination_country_iso2 TEXT,
-                destination_unlocode TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE
             )""")
@@ -46,25 +42,21 @@ class MessageRepository:
     def _save_transfer_location_conn(conn, data):
         origin = normalize_location(data.get("origin_city"), data.get("origin_country"))
         destination = normalize_location(data.get("destination_city"), data.get("destination_country"))
-        origin["unlocode"] = lookup_unlocode(conn, origin["city"], origin["country_iso2"])
-        destination["unlocode"] = lookup_unlocode(conn, destination["city"], destination["country_iso2"])
         conn.execute("""INSERT INTO transfer_locations(
             processed_message_id,
-            origin_city_canonical, origin_city_key, origin_country_iso2, origin_unlocode,
-            destination_city_canonical, destination_city_key, destination_country_iso2, destination_unlocode
-        ) VALUES(?,?,?,?,?,?,?,?,?)
+            origin_city_canonical, origin_city_key, origin_country_iso2,
+            destination_city_canonical, destination_city_key, destination_country_iso2
+        ) VALUES(?,?,?,?,?,?,?)
         ON CONFLICT(processed_message_id) DO UPDATE SET
             origin_city_canonical=excluded.origin_city_canonical,
             origin_city_key=excluded.origin_city_key,
             origin_country_iso2=excluded.origin_country_iso2,
-            origin_unlocode=excluded.origin_unlocode,
             destination_city_canonical=excluded.destination_city_canonical,
             destination_city_key=excluded.destination_city_key,
-            destination_country_iso2=excluded.destination_country_iso2,
-            destination_unlocode=excluded.destination_unlocode""", (
+            destination_country_iso2=excluded.destination_country_iso2""", (
             data.get("processed_message_id"),
-            origin["city"], origin["city_key"], origin["country_iso2"], origin["unlocode"],
-            destination["city"], destination["city_key"], destination["country_iso2"], destination["unlocode"],
+            origin["city"], origin["city_key"], origin["country_iso2"],
+            destination["city"], destination["city_key"], destination["country_iso2"],
         ))
 
     def insert(self, **message):

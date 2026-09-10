@@ -64,23 +64,11 @@ def get_transfer_queue_status():
                        AND ds.status = 'sent'
                 )"""
         ).fetchone()["n"] or 0
-        waiting = conn.execute(
-            """SELECT COUNT(*) AS n
-               FROM transferlist t
-               INNER JOIN messages m ON m.id = t.processed_message_id
-              WHERE m.processing_status = 'processed'
-                AND m.ai_status = 'processed'
-                AND m.ai_category = 'transferlist'
-                AND NOT EXISTS (
-                    SELECT 1 FROM telegram_transfer_delivery d
-                     WHERE d.processed_message_id = t.processed_message_id
-                       AND d.status IN ('sent', 'failed')
-                )"""
-        ).fetchone()["n"] or 0
+        waiting = max(int(total) - int(sent) - int(failed), 0)
         return {
             "total": int(total),
             "sent": int(sent),
-            "waiting": int(waiting),
+            "waiting": waiting,
             "failed": int(failed),
         }
     finally:
@@ -104,7 +92,7 @@ def _delivery_status_for_message(conn, processed_message_id):
 
 
 def get_ready_transfer_ads(limit=100):
-    """Return processed transfer records that have never been successfully delivered."""
+    """Return processed transfer records that have not been successfully delivered."""
     initialize_transfer_delivery_table()
     conn = get_connection()
     try:
@@ -232,7 +220,7 @@ def format_transfer_ad(record):
 
 
 async def send_transfer_ads(client, target_channel, limit=20):
-    """Send ready transfer ads to one Telegram channel and persist each result."""
+    """Send unsent transfer ads to one Telegram channel and persist each result."""
     records = get_ready_transfer_ads(limit=limit)
     result = {"found": len(records), "sent": 0, "failed": 0}
     if not records:

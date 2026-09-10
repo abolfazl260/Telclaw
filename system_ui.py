@@ -9,6 +9,7 @@ from ai.classification_service import CategoryClassificationService
 from ai.groq_connection_test import test_groq_connection
 from collection.media_downloader import download_photo_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
+from delivery.telegram_transfer import get_ready_transfer_ads, get_transfer_queue_status
 from services.processing_service import ProcessingService
 import config
 from ui import ConsoleUI
@@ -97,10 +98,6 @@ class SystemConsoleUI(ConsoleUI):
     def show_classification_queue_summary(self):
         """Render a queue snapshot using the exact eligibility query used by the worker."""
         status = self.classification_service.repository.get_classification_queue_status()
-        # The old pending counter counted every row with classification_status='pending'.
-        # The worker additionally requires processing_status='processed', an empty ai_category,
-        # and a retryable classification status. Use the worker's own repository query so the
-        # displayed Pending count can never disagree with Start Classification.
         pending_records = self.classification_service.repository.get_classification_pending(limit=100000)
         status["pending"] = len(pending_records)
         self.show_section_header("AI Category Classification")
@@ -194,6 +191,52 @@ class SystemConsoleUI(ConsoleUI):
                 await self.retry_failed_classifications()
             elif choice == "4":
                 await self.classification_settings()
+            else:
+                return
+
+    async def transfer_ads_menu(self):
+        """Show the Telegram transfer-list delivery dashboard without crawling or AI work."""
+        while True:
+            self.clear_screen()
+            self.show_banner()
+            self.show_section_header("Transfer Ads")
+            try:
+                status = get_transfer_queue_status()
+                print(f"{Fore.GREEN}│  📦 Total transfer ads: {status['total']}")
+                print(f"{Fore.GREEN}│  ✅ Already sent:      {status['sent']}")
+                print(f"{Fore.GREEN}│  📤 Ready to send:     {status['ready']}")
+            except Exception as exc:
+                self.show_message(f"Unable to read transfer queue: {exc}", Fore.RED)
+                await self.pause()
+                return
+            self.show_section_footer()
+            print(f"{Fore.GREEN}│  1. View ready transfer ads")
+            print(f"{Fore.GREEN}│  2. Refresh status")
+            print(f"{Fore.GREEN}│  3. ⬅ Back")
+            self.show_section_footer()
+
+            choice = await self.prompt_choice("\nChoose an option [1-3]: ", {"1", "2", "3"})
+            if choice == "1":
+                ready = get_ready_transfer_ads(limit=100)
+                self.clear_screen()
+                self.show_banner()
+                self.show_section_header("Ready Transfer Ads")
+                if not ready:
+                    self.show_message("No processed transfer ads are waiting to be sent.", Fore.YELLOW)
+                else:
+                    for index, record in enumerate(ready, start=1):
+                        origin = record.get("origin_city") or "Unknown origin"
+                        destination = record.get("destination_city") or "Unknown destination"
+                        title = record.get("title") or f"{origin} → {destination}"
+                        print(
+                            f"{Fore.GREEN}│  {index}. {title} | "
+                            f"{origin} → {destination} | "
+                            f"source=@{record.get('channel_username') or 'unknown'}"
+                        )
+                self.show_section_footer()
+                await self.pause()
+            elif choice == "2":
+                continue
             else:
                 return
 
@@ -295,16 +338,17 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  3. 🤖 Process AI queue")
             print(f"{Fore.GREEN}│  4. 🏷️ AI Category Classification")
             print(f"{Fore.GREEN}│  5. 📤 Send eligible ads to Advertio")
-            print(f"{Fore.GREEN}│  6. 🔬 Test Groq connection")
-            print(f"{Fore.GREEN}│  7. ⚙️ Change settings")
-            print(f"{Fore.GREEN}│  8. 📋 Manage channels")
-            print(f"{Fore.GREEN}│  9. 👤 Switch / add account")
-            print(f"{Fore.GREEN}│  10. 🚪 Exit")
+            print(f"{Fore.GREEN}│  6. ✈️ Transfer Ads")
+            print(f"{Fore.GREEN}│  7. 🔬 Test Groq connection")
+            print(f"{Fore.GREEN}│  8. ⚙️ Change settings")
+            print(f"{Fore.GREEN}│  9. 📋 Manage channels")
+            print(f"{Fore.GREEN}│  10. 👤 Switch / add account")
+            print(f"{Fore.GREEN}│  11. 🚪 Exit")
             self.show_section_footer()
 
             choice = await self.prompt_choice(
-                "\nChoose an option [1-10]: ",
-                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
+                "\nChoose an option [1-11]: ",
+                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"},
             )
             if choice == "1":
                 await self.start_crawler_flow()
@@ -317,12 +361,14 @@ class SystemConsoleUI(ConsoleUI):
             elif choice == "5":
                 await self.run_advertio_delivery()
             elif choice == "6":
-                await self.run_groq_connection_test()
+                await self.transfer_ads_menu()
             elif choice == "7":
-                await self.change_settings()
+                await self.run_groq_connection_test()
             elif choice == "8":
-                await self.manage_channels()
+                await self.change_settings()
             elif choice == "9":
+                await self.manage_channels()
+            elif choice == "10":
                 await self.account_menu()
             else:
                 self.crawler.stop_all()

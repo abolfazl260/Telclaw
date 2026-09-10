@@ -15,7 +15,7 @@ CATEGORY_FIELDS = {
         "destination_city", "destination_province", "destination_country", "airline",
         "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
         "transport_type", "cargo_type", "weight", "weight_unit", "quantity",
-        "price", "currency", "contact", "features",
+        "volume", "volume_unit", "price", "currency", "contact", "features",
     ),
     "joblist": (
         "job_title", "company", "location", "employment_type", "salary",
@@ -118,7 +118,7 @@ def _infer_housing_location(data):
 def _field_schema(field):
     if field in {"features", "skills"}:
         return {"type": ["array", "null"], "items": {"type": "string"}}
-    if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity"}:
+    if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity", "volume"}:
         return {"type": ["number", "string", "null"]}
     if field == "remote":
         return {"type": ["boolean", "string", "null"]}

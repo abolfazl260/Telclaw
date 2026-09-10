@@ -245,19 +245,15 @@ class SystemConsoleUI(ConsoleUI):
         await self.pause()
 
     async def send_transfer_ads(self):
-        """Send ready transfer ads to a manually selected Telegram channel."""
+        """Send unsent transfer ads, including previous failed attempts, to a selected channel."""
         self.clear_screen()
         self.show_banner()
         self.show_section_header("Send Transfer Ads")
         try:
             status = get_transfer_queue_status()
-            if status["waiting"] == 0:
-                self.show_message("No transfer ads are waiting for their first send attempt.", Fore.YELLOW)
-                if status["failed"]:
-                    self.show_message(
-                        f"{status['failed']} transfer ad(s) previously failed and remain unsent.",
-                        Fore.YELLOW,
-                    )
+            available = status["waiting"] + status["failed"]
+            if available == 0:
+                self.show_message("No transfer ads are currently available to send.", Fore.YELLOW)
                 await self.pause()
                 return
 
@@ -274,7 +270,7 @@ class SystemConsoleUI(ConsoleUI):
 
             count_text = await self.prompt_text(
                 "How many ads should be sent",
-                default=str(min(status["waiting"], 20)),
+                default=str(min(available, 20)),
                 allow_empty=False,
             )
             try:

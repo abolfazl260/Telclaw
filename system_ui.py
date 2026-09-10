@@ -163,9 +163,10 @@ class SystemConsoleUI(ConsoleUI):
         print(f"{Fore.GREEN}│  Enabled: {config.AI_CLASSIFICATION_ENABLED}")
         print(f"{Fore.GREEN}│  Default batch size: {config.AI_CLASSIFICATION_BATCH_SIZE}")
         print(f"{Fore.GREEN}│  Maximum retries: {config.AI_CLASSIFICATION_MAX_RETRIES}")
+        print(f"{Fore.GREEN}│  1. ⬅ Back")
         self.show_section_footer()
         self.show_message("Set TELCLAW_AI_CLASSIFICATION_BATCH_SIZE in configuration to change the default.", Fore.CYAN)
-        await self.pause()
+        await self._prompt_back()
 
     async def classification_menu(self):
         """Open the manual controls for the independent AI classification queue."""
@@ -176,8 +177,8 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  1. Start Classification")
             print(f"{Fore.GREEN}│  2. View Queue Status")
             print(f"{Fore.GREEN}│  3. Retry Failed")
-            print(f"{Fore.GREEN}│  4. Back")
-            print(f"{Fore.GREEN}│  5. Classification Settings")
+            print(f"{Fore.GREEN}│  4. Classification Settings")
+            print(f"{Fore.GREEN}│  5. ⬅ Back")
             self.show_section_footer()
             choice = await self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
             if choice == "1":
@@ -190,9 +191,9 @@ class SystemConsoleUI(ConsoleUI):
             elif choice == "3":
                 await self.retry_failed_classifications()
             elif choice == "4":
-                return
-            else:
                 await self.classification_settings()
+            else:
+                return
 
     async def run_advertio_delivery(self):
         self.clear_screen()

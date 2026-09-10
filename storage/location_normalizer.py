@@ -1,70 +1,22 @@
-"""Canonical location normalization for reporting.
+"""Storage-safe normalization for AI-extracted locations.
 
-Country identity follows ISO 3166-1 alpha-2. City identity is stored as a
-stable ASCII reporting key built from the canonical English city name and ISO
-country code. This avoids locale-specific spelling and special characters.
+The AI extraction prompt is responsible for converting multilingual city names
+to a canonical international city name and for returning ISO 3166-1 alpha-2
+country codes. This module does not maintain a city alias database or infer
+locations; it only validates the AI country code and creates a deterministic
+ASCII-safe reporting key.
 """
 from __future__ import annotations
 
 import re
 import unicodedata
 
-try:
-    import pycountry
-except ImportError:  # pragma: no cover - dependency is declared in requirements
-    pycountry = None
-
-_COUNTRY_ALIASES = {
-    "iran": "IR", "islamic republic of iran": "IR", "ایران": "IR", "ایران اسلامی": "IR",
-    "germany": "DE", "deutschland": "DE", "آلمان": "DE",
-    "canada": "CA", "کانادا": "CA",
-    "turkey": "TR", "türkiye": "TR", "turkiye": "TR", "ترکیه": "TR",
-    "united states": "US", "united states of america": "US", "usa": "US", "us": "US", "america": "US", "آمریکا": "US",
-    "united kingdom": "GB", "uk": "GB", "great britain": "GB", "england": "GB", "بریتانیا": "GB", "انگلستان": "GB",
-    "france": "FR", "فرانسه": "FR", "italy": "IT", "ایتالیا": "IT", "spain": "ES", "اسپانیا": "ES",
-    "netherlands": "NL", "the netherlands": "NL", "هلند": "NL", "belgium": "BE", "بلژیک": "BE",
-    "austria": "AT", "اتریش": "AT", "switzerland": "CH", "سوئیس": "CH", "sweden": "SE", "سوئد": "SE",
-    "norway": "NO", "نروژ": "NO", "denmark": "DK", "دانمارک": "DK", "finland": "FI", "فنلاند": "FI",
-    "poland": "PL", "لهستان": "PL", "greece": "GR", "یونان": "GR", "russia": "RU", "روسیه": "RU",
-    "ukraine": "UA", "اوکراین": "UA", "united arab emirates": "AE", "uae": "AE", "امارات": "AE",
-    "qatar": "QA", "قطر": "QA", "saudi arabia": "SA", "عربستان": "SA", "kuwait": "KW", "کویت": "KW",
-    "oman": "OM", "عمان": "OM", "iraq": "IQ", "عراق": "IQ", "azerbaijan": "AZ", "آذربایجان": "AZ",
-    "georgia": "GE", "گرجستان": "GE", "armenia": "AM", "ارمنستان": "AM", "china": "CN", "چین": "CN",
-    "japan": "JP", "ژاپن": "JP", "south korea": "KR", "republic of korea": "KR", "کره جنوبی": "KR",
-    "india": "IN", "هند": "IN", "pakistan": "PK", "پاکستان": "PK", "afghanistan": "AF", "افغانستان": "AF",
-}
-
-_CITY_ALIASES = {
-    "hannover": "Hannover", "hanover": "Hannover", "هانوفر": "Hannover", "هانوور": "Hannover",
-    "tehran": "Tehran", "teheran": "Tehran", "تهران": "Tehran", "طهران": "Tehran",
-    "istanbul": "Istanbul", "constantinople": "Istanbul", "استانبول": "Istanbul",
-    "berlin": "Berlin", "برلین": "Berlin", "munich": "Munich", "münchen": "Munich", "مونیخ": "Munich",
-    "frankfurt": "Frankfurt", "فرانکفورت": "Frankfurt", "hamburg": "Hamburg", "هامبورگ": "Hamburg",
-    "toronto": "Toronto", "تورنتو": "Toronto", "vancouver": "Vancouver", "ونکوور": "Vancouver",
-    "montreal": "Montreal", "مونترال": "Montreal", "calgary": "Calgary", "کلگری": "Calgary",
-    "london": "London", "لندن": "London", "paris": "Paris", "پاریس": "Paris",
-    "milan": "Milan", "milano": "Milan", "میلان": "Milan", "rome": "Rome", "roma": "Rome", "رم": "Rome",
-    "dubai": "Dubai", "دبی": "Dubai", "abu dhabi": "Abu Dhabi", "ابوظبی": "Abu Dhabi",
-}
-
 
 def country_iso2(value) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    key = text.casefold()
-    if key in _COUNTRY_ALIASES:
-        return _COUNTRY_ALIASES[key]
-    if re.fullmatch(r"[A-Za-z]{2}", text):
-        code = text.upper()
-        if pycountry and pycountry.countries.get(alpha_2=code):
-            return code
-    if pycountry:
-        try:
-            country = pycountry.countries.lookup(text)
-            return country.alpha_2
-        except LookupError:
-            pass
+    """Accept only an AI-provided ISO 3166-1 alpha-2 country code."""
+    text = str(value or "").strip().upper()
+    if re.fullmatch(r"[A-Z]{2}", text):
+        return text
     return None
 
 
@@ -76,26 +28,21 @@ def _ascii_key(value: str) -> str:
 
 
 def canonical_city(value) -> str | None:
+    """Return the canonical city exactly as supplied by the AI extractor."""
     text = str(value or "").strip()
-    if not text:
-        return None
-    alias = _CITY_ALIASES.get(text.casefold())
-    return alias or text
+    return text or None
 
 
 def normalize_location(city, country):
-    """Return canonical display city, ISO2 country and stable ASCII key."""
+    """Create a stable reporting representation without guessing location data."""
     canonical = canonical_city(city)
     iso2 = country_iso2(country)
     if not canonical:
-        return {"city": None, "country_iso2": iso2, "city_key": None, "unlocode": None}
+        return {"city": None, "country_iso2": iso2, "city_key": None}
     key = _ascii_key(canonical)
     city_key = f"{iso2}_{key}" if iso2 else key
     return {
         "city": canonical,
         "country_iso2": iso2,
         "city_key": city_key or None,
-        # UN/LOCODE is intentionally nullable until a verified authoritative
-        # location-code dataset is available; never let the AI invent it.
-        "unlocode": None,
     }

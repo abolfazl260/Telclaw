@@ -36,6 +36,14 @@ Transfer route extraction is critical:
 - If the route is ambiguous, do not guess.
 - Extract province/state and country only when explicitly stated or unambiguous from the same route location. Do not invent geographic details.
 
+International location standardization:
+- For origin_city and destination_city, use the internationally recognizable English/Roman city name when the source is written in Persian, Arabic, Cyrillic, or another language. Translate the city name; do not transliterate it character-by-character.
+- Preserve the standard international spelling where it is known, including names such as Hannover, Tehran, Munich, Istanbul, etc.
+- For origin_country and destination_country, when the country is confidently identified, return the ISO 3166-1 alpha-2 country code in uppercase (for example DE, IR, CA, TR, GB, US, AE). Do not invent a country code when the country is ambiguous.
+- Never put emojis, flags, punctuation, URLs, hashtags, or decorative characters into city or country values.
+- These fields are stored for reporting and normalization, so the city value should contain only the canonical place name and the country value should contain only the ISO alpha-2 code when known.
+- The application separately creates an ASCII-safe reporting key from the canonical city and ISO country. Do not create or guess a UN/LOCODE yourself.
+
 Cargo/measurement extraction:
 - Extract cargo_type only when the type of goods is stated, such as Personal belongings.
 - Extract weight and weight_unit when present, preserving the source unit.

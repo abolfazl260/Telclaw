@@ -1,13 +1,14 @@
 """Import an official UNECE UN/LOCODE CSV publication into Telclaw SQLite.
 
 Usage:
-    python3 scripts/import_unlocode.py /path/to/UNLOCODE-CodeList.csv --version 2025-1
+    python3 scripts/import_unlocode.py /path/to/locode_csv_dir --version 2025-1
 
-The importer intentionally requires a local CSV. It never invents or guesses
-UN/LOCODE values and stores the release version with every imported row.
+The directory should contain the official CodeListPart CSV files. The importer
+intentionally requires local source files. It never invents or guesses codes.
 """
 
 import argparse
+import glob
 import os
 import sys
 
@@ -19,21 +20,30 @@ from storage.unlocode_repository import import_csv
 
 def main():
     parser = argparse.ArgumentParser(description="Import official UN/LOCODE CSV into Telclaw SQLite")
-    parser.add_argument("csv_path", help="Path to an official UN/LOCODE CSV file")
+    parser.add_argument("csv_path", help="Official UN/LOCODE CSV file or directory containing CodeListPart CSV files")
     parser.add_argument("--version", required=True, help="UN/LOCODE release, for example 2025-1")
     args = parser.parse_args()
 
-    if not os.path.isfile(args.csv_path):
-        raise SystemExit(f"CSV file not found: {args.csv_path}")
+    if os.path.isdir(args.csv_path):
+        paths = sorted(glob.glob(os.path.join(args.csv_path, "*UNLOCODE*CodeListPart*.csv")))
+    else:
+        paths = [args.csv_path] if os.path.isfile(args.csv_path) else []
+
+    if not paths:
+        raise SystemExit(f"No UN/LOCODE CodeListPart CSV files found: {args.csv_path}")
 
     database.initialize_db()
     conn = database.get_connection()
+    total = 0
     try:
-        count = import_csv(conn, args.csv_path, args.version)
+        for path in paths:
+            count = import_csv(conn, path, args.version)
+            total += count
+            print(f"Imported {count:>6} locations from {os.path.basename(path)}")
     finally:
         conn.close()
 
-    print(f"Imported {count} UN/LOCODE locations | version={args.version}")
+    print(f"Total imported: {total} | version={args.version}")
 
 
 if __name__ == "__main__":

@@ -74,10 +74,6 @@ class SystemConsoleUI(ConsoleUI):
                 await self.pause()
                 return
 
-            # AI processing is synchronous and may wait on network/rate limits.
-            # Run it in a worker thread so the asyncio/Telethon event loop remains
-            # responsive. This is also required by _make_sync_media_downloader(),
-            # which schedules Telethon downloads back onto the main event loop.
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
             result = await asyncio.to_thread(self.ai_service.process_pending_with_stats)
             if result.get("disabled"):
@@ -99,8 +95,14 @@ class SystemConsoleUI(ConsoleUI):
         await self.pause()
 
     def show_classification_queue_summary(self):
-        """Render a fresh, database-backed snapshot of the classification queue."""
+        """Render a queue snapshot using the exact eligibility query used by the worker."""
         status = self.classification_service.repository.get_classification_queue_status()
+        # The old pending counter counted every row with classification_status='pending'.
+        # The worker additionally requires processing_status='processed', an empty ai_category,
+        # and a retryable classification status. Use the worker's own repository query so the
+        # displayed Pending count can never disagree with Start Classification.
+        pending_records = self.classification_service.repository.get_classification_pending(limit=100000)
+        status["pending"] = len(pending_records)
         self.show_section_header("AI Category Classification")
         print(f"{Fore.GREEN}│  Pending:     {status['pending']}")
         print(f"{Fore.GREEN}│  Processing:  {status['processing']}")

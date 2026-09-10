@@ -10,9 +10,10 @@ from ai.groq_connection_test import test_groq_connection
 from collection.media_downloader import download_photo_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
 from delivery.telegram_transfer import (
-    get_latest_transfer_ads,
     get_ready_transfer_ads,
     get_transfer_queue_status,
+    get_unsent_transfer_ads,
+    get_unsent_transfer_ads_count,
     send_transfer_ads,
 )
 from services.processing_service import ProcessingService
@@ -228,21 +229,64 @@ class SystemConsoleUI(ConsoleUI):
         )
 
     async def view_transfer_ads(self):
-        """Show the latest 20 transfer-list records, including delivery status."""
-        self.clear_screen()
-        self.show_banner()
-        self.show_section_header("Latest 20 Transfer Ads")
-        try:
-            records = get_latest_transfer_ads(limit=20)
-            if not records:
-                self.show_message("No transfer ads exist in the database.", Fore.YELLOW)
+        """Browse unsent transfer ads 20 at a time; successfully sent ads are hidden."""
+        page_size = 20
+        offset = 0
+
+        while True:
+            self.clear_screen()
+            self.show_banner()
+            try:
+                total = get_unsent_transfer_ads_count()
+                records = get_unsent_transfer_ads(limit=page_size, offset=offset)
+            except Exception as exc:
+                self.show_section_header("Transfer Ads")
+                self.show_message(f"Unable to read transfer ads: {exc}", Fore.RED)
+                self.show_section_footer()
+                await self.pause()
+                return
+
+            if total == 0:
+                self.show_section_header("Transfer Ads")
+                self.show_message("No unsent transfer ads exist in the database.", Fore.YELLOW)
+                self.show_section_footer()
+                await self.pause()
+                return
+
+            current_page = (offset // page_size) + 1
+            total_pages = (total + page_size - 1) // page_size
+            self.show_section_header(
+                f"Transfer Ads — Unsent {offset + 1}-{min(offset + len(records), total)} of {total}"
+            )
+            for index, record in enumerate(records, start=offset + 1):
+                print(self._format_transfer_record(record, index))
+
+            self.show_section_footer()
+            options = {"b"}
+            if offset + page_size < total:
+                options.add("n")
+            if offset > 0:
+                options.add("p")
+
+            navigation = []
+            if "n" in options:
+                navigation.append("N = Next 20")
+            if "p" in options:
+                navigation.append("P = Previous 20")
+            navigation.append("B = Back")
+            print(f"{Fore.CYAN}│  Page {current_page}/{total_pages} | " + " | ".join(navigation))
+            self.show_section_footer()
+
+            choice = await self.prompt_choice(
+                "\nChoose an option [N/P/B]: ",
+                options,
+            )
+            if choice == "n":
+                offset += page_size
+            elif choice == "p":
+                offset = max(0, offset - page_size)
             else:
-                for index, record in enumerate(records, start=1):
-                    print(self._format_transfer_record(record, index))
-        except Exception as exc:
-            self.show_message(f"Unable to read transfer ads: {exc}", Fore.RED)
-        self.show_section_footer()
-        await self.pause()
+                return
 
     async def send_transfer_ads(self):
         """Send unsent transfer ads, including previous failed attempts, to a selected channel."""
@@ -325,7 +369,7 @@ class SystemConsoleUI(ConsoleUI):
 
             self.show_section_footer()
             print(f"{Fore.GREEN}│  1. 📤 Send in channel")
-            print(f"{Fore.GREEN}│  2. 📋 View latest 20 transfer ads")
+            print(f"{Fore.GREEN}│  2. 📋 View unsent transfer ads (20 at a time)")
             print(f"{Fore.GREEN}│  3. 🔄 Refresh status")
             print(f"{Fore.GREEN}│  4. ⬅ Back")
             self.show_section_footer()

@@ -11,7 +11,7 @@ Required top-level shape:
 Only populate the {category} object. Use only the allowed fields below. Do not invent facts. Use null for unknown values where needed by the existing validator. Do not add fields that are not listed.
 
 Allowed fields:
-title, description, origin_city, origin_province, origin_country, destination_city, destination_province, destination_country, airline, flight_number, departure_date, departure_time, arrival_date, arrival_time, transport_type, cargo_type, weight, weight_unit, quantity, volume, volume_unit, price, currency, contact, features
+title, description, origin_city, origin_province, origin_country, destination_city, destination_province, destination_country, airline, flight_number, departure_date, departure_time, arrival_date, arrival_time, transport_type, transfer_role, cargo_type, weight, weight_unit, quantity, volume, volume_unit, price, currency, contact, features
 
 Transfer route extraction is critical:
 - origin_city is the explicit departure/loading/source city.
@@ -30,6 +30,12 @@ Cargo/measurement extraction:
 - Extract volume and volume_unit when a volume/cubic measurement is explicitly stated, such as 3 m³ or 3 cbm. Do not put volume into quantity.
 - Extract quantity only when a separate quantity/count is explicitly present.
 - Never convert or invent measurements unless the source explicitly provides the converted value.
+
+Passenger/sender role extraction:
+- Extract transfer_role only when the source explicitly or clearly states whether the person is a passenger carrying/bringing an item or a sender who wants to send/ship cargo.
+- Use exactly "passenger" for a passenger/traveler carrying or bringing an item.
+- Use exactly "shipper" for a sender/person offering or requesting shipment of cargo.
+- If the source does not provide enough evidence to distinguish these roles, use null. Never guess the role.
 
 Date and transport extraction:
 - Extract departure_date exactly when explicitly stated. Preserve ISO dates when present.

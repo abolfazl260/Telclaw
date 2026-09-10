@@ -74,13 +74,11 @@ if any(provider not in _SUPPORTED_AI_PROVIDERS for provider in AI_PROVIDERS):
 if len(AI_PROVIDERS) != len(set(AI_PROVIDERS)):
     raise RuntimeError("Duplicate AI providers are not allowed in AI_PROVIDER_1/AI_PROVIDER_2")
 
-# Generic provider routing controls. Existing provider-specific settings remain supported.
 AI_RETRY_COUNT = _int_env("AI_RETRY_COUNT", 3, minimum=0)
 AI_TIMEOUT_SECONDS = _float_env("AI_TIMEOUT_SECONDS", 60, minimum=1)
 AI_COOLDOWN_SECONDS = _float_env("AI_COOLDOWN_SECONDS", 200, minimum=0)
 AI_RECOVERY_INTERVAL_SECONDS = _float_env("AI_RECOVERY_INTERVAL_SECONDS", 60, minimum=1)
 
-# Existing Groq variables remain supported without migration.
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("TELCLAW_GROQ_MODEL", "").strip()
 
@@ -115,12 +113,8 @@ def _build_cloudflare_providers():
         account_id = os.getenv(f"CLOUDFLARE_ACCOUNT_ID{suffix}", "").strip()
         api_token = os.getenv(f"CLOUDFLARE_API_TOKEN{suffix}", "").strip()
         configured_model = os.getenv(f"CLOUDFLARE_MODEL{suffix}", "").strip()
-
-        # An additional slot is optional. Do not let the default model from
-        # credential #1 make an otherwise empty slot look configured.
         if not any((account_id, api_token, configured_model)):
             continue
-
         model = configured_model or CLOUDFLARE_MODEL
         missing = [
             name
@@ -168,3 +162,10 @@ ADVERTIO_SOURCE_NAME = os.getenv("TELCLAW_ADVERTIO_SOURCE_NAME", "telegram-rent"
 ADVERTIO_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_AUTO_PUBLISH", "false").lower() in {"1", "true", "yes", "on"}
 ADVERTIO_CONCURRENCY = max(1, min(3, _int_env("TELCLAW_ADVERTIO_CONCURRENCY", 3, minimum=1)))
 ADVERTIO_TIMEOUT_SECONDS = _float_env("TELCLAW_ADVERTIO_TIMEOUT_SECONDS", 60, minimum=1)
+
+# Dedicated Telegram transfer-ad publisher. It reuses the existing Telegram bot token
+# and publishes only AI-processed transferlist records to the configured channel.
+TRANSFER_TELEGRAM_PUBLISH_ENABLED = os.getenv("TELCLAW_TRANSFER_TELEGRAM_PUBLISH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+TRANSFER_TELEGRAM_CHANNEL = os.getenv("TELCLAW_TRANSFER_TELEGRAM_CHANNEL", "").strip()
+TRANSFER_TELEGRAM_INTERVAL_MINUTES = _float_env("TELCLAW_TRANSFER_TELEGRAM_INTERVAL_MINUTES", 1, minimum=0.1)
+TRANSFER_TELEGRAM_TIMEOUT_SECONDS = _float_env("TELCLAW_TRANSFER_TELEGRAM_TIMEOUT_SECONDS", 30, minimum=1)

@@ -113,6 +113,53 @@ def get_ready_transfer_ads(limit=100):
         conn.close()
 
 
+def get_unsent_transfer_ads(limit=20, offset=0):
+    """Return a page of transfer records that have not been successfully delivered."""
+    initialize_transfer_delivery_table()
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username
+                 FROM transferlist t
+                 INNER JOIN messages m ON m.id = t.processed_message_id
+                WHERE NOT EXISTS (
+                      SELECT 1 FROM telegram_transfer_delivery d
+                       WHERE d.processed_message_id = t.processed_message_id
+                         AND d.status = 'sent'
+                )
+                ORDER BY t.id DESC
+                LIMIT ? OFFSET ?""",
+            (int(limit), int(offset)),
+        ).fetchall()
+        records = []
+        for row in rows:
+            record = dict(row)
+            record["delivery_status"] = _delivery_status_for_message(conn, record["processed_message_id"])
+            records.append(record)
+        return records
+    finally:
+        conn.close()
+
+
+def get_unsent_transfer_ads_count():
+    """Return the number of transfer records that have not been successfully delivered."""
+    initialize_transfer_delivery_table()
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """SELECT COUNT(*) AS n
+                 FROM transferlist t
+                WHERE NOT EXISTS (
+                      SELECT 1 FROM telegram_transfer_delivery d
+                       WHERE d.processed_message_id = t.processed_message_id
+                         AND d.status = 'sent'
+                )"""
+        ).fetchone()
+        return int(row["n"] or 0)
+    finally:
+        conn.close()
+
+
 def get_latest_transfer_ads(limit=20):
     """Return the latest transfer records with their current delivery status."""
     initialize_transfer_delivery_table()

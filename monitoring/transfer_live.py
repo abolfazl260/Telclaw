@@ -133,12 +133,19 @@ def install_transfer_live_command(monitor):
     async def register_commands(self):
         await original_register_commands()
         commands = [
-            {"command": "transferlive", "description": "نمایش آگهی‌های فعال حمل‌ونقل"}
+            {"command": "start", "description": "فعال‌سازی دریافت گزارش‌ها"},
+            {"command": "stop", "description": "توقف دریافت گزارش‌ها"},
+            {"command": "status", "description": "نمایش وضعیت فعلی سیستم"},
+            {"command": "health", "description": "بررسی سلامت فعلی سیستم"},
+            {"command": "today", "description": "نمایش آمار امروز"},
+            {"command": "source", "description": "نمایش کانال‌ها و گروه‌های تحت کرال"},
+            {"command": "down_errors", "description": "Download crawler error log"},
+            {"command": "database", "description": "Download full SQLite database"},
+            {"command": "transferlive", "description": "نمایش آگهی‌های فعال حمل‌ونقل"},
         ]
         try:
             await self._api("setMyCommands", {"commands": commands})
         except Exception:
-            # The command still works even if Telegram rejects the secondary registration.
             pass
 
     monitor._handle_update = MethodType(handle_update, monitor)

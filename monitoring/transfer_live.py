@@ -1,5 +1,5 @@
 """Telegram /transferlive command using Telegram Bot API Rich Messages."""
-from __future__ import annotations__
+from __future__ import annotations
 
 import html
 from collections import OrderedDict

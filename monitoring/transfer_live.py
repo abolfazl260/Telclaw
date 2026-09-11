@@ -1,8 +1,9 @@
 """Telegram /transferlive command for active transfer advertisements."""
 from __future__ import annotations
 
+import html
 from collections import OrderedDict
-from datetime import datetime
+from datetime import date, datetime
 from types import MethodType
 from zoneinfo import ZoneInfo
 
@@ -22,13 +23,35 @@ COUNTRY_NAMES = {
 }
 
 
-def _display_date(value) -> str:
-    """Return the stored Gregorian date unchanged for Telegram display."""
+def _jalali(gregorian_date: date) -> str:
+    gy, gm, gd = gregorian_date.year, gregorian_date.month, gregorian_date.day
+    gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (355666 + 365 * gy + ((gy2 + 3) // 4) - ((gy2 + 99) // 100)
+            + ((gy2 + 399) // 400) + gd + gdm[gm - 1])
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + days // 31
+        jd = 1 + days % 31
+    else:
+        jm = 7 + (days - 186) // 30
+        jd = 1 + (days - 186) % 30
+    return f"{jy:04d}/{jm:02d}/{jd:02d}"
+
+
+def _dual_date(value) -> tuple[str, str]:
     text = str(value or "").strip()
     try:
-        return datetime.strptime(text[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+        parsed = datetime.strptime(text[:10], "%Y-%m-%d").date()
+        return parsed.strftime("%Y-%m-%d"), _jalali(parsed)
     except ValueError:
-        return text[:10] or "-"
+        return text[:10] or "-", "-"
 
 
 def _role_label(value) -> str:
@@ -77,13 +100,25 @@ def _build_messages():
 
     chunks = []
     current = "<b>🟢 آگهی های فعال</b>\n\n"
+
     for origin, rows in groups.items():
-        section = f"<b>📍 از مبدا {origin}</b>\n"
+        # Telegram HTML does not support real HTML tables. <pre> gives a stable
+        # monospaced table while the surrounding message remains rich-text HTML.
+        lines = [
+            "┌────────────────────┬────────────┬────────────┬──────────────────┐",
+            "│ کاربر              │ میلادی     │ شمسی       │ نوع              │",
+            "├────────────────────┼────────────┼────────────┼──────────────────┤",
+        ]
         for row in rows:
             username = str(row["sender_username"] or "").strip()
             username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
-            section += f"{username} | {_display_date(row['departure_date'])} | {_role_label(row['transfer_role'])}\n"
-        section += "\n"
+            gregorian, jalali = _dual_date(row["departure_date"])
+            role = _role_label(row["transfer_role"])
+            lines.append(
+                f"│ {username[:18]:<18} │ {gregorian:<10} │ {jalali:<10} │ {role:<16} │"
+            )
+        lines.append("└────────────────────┴────────────┴────────────┴──────────────────┘")
+        section = f"<b>📍 از مبدا {html.escape(origin)}</b>\n<pre>{html.escape(chr(10).join(lines))}</pre>\n"
 
         if len(current) + len(section) > MAX_MESSAGE_LENGTH and current.strip() != "<b>🟢 آگهی های فعال</b>":
             chunks.append(current.rstrip())
@@ -117,7 +152,8 @@ def install_transfer_live_command(monitor):
             return
 
         for chunk in _build_messages():
-            await self._send(chat_id, chunk, parse_mode="HTML")
+            # TelegramMonitor._send already uses parse_mode=HTML.
+            await self._send(chat_id, chunk)
 
     async def register_commands(self):
         await original_register_commands()

@@ -77,6 +77,31 @@ class TelegramTransferPublisher:
         return text or None
 
     @staticmethod
+    def _remove_emojis(text):
+        """Remove Unicode emoji/pictographic characters from published descriptions."""
+        if not text:
+            return text
+        emoji_pattern = re.compile(
+            "["
+            "\\U0001F1E6-\\U0001F1FF"
+            "\\U0001F300-\\U0001F5FF"
+            "\\U0001F600-\\U0001F64F"
+            "\\U0001F680-\\U0001F6FF"
+            "\\U0001F700-\\U0001F77F"
+            "\\U0001F780-\\U0001F7FF"
+            "\\U0001F800-\\U0001F8FF"
+            "\\U0001F900-\\U0001F9FF"
+            "\\U0001FA00-\\U0001FAFF"
+            "\\U00002702-\\U000027B0"
+            "\\U000024C2-\\U0001F251"
+            "]+",
+            flags=re.UNICODE,
+        )
+        text = emoji_pattern.sub("", str(text))
+        text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
+        return re.sub(r"[ \\t]{2,}", " ", text).strip()
+
+    @staticmethod
     def _country_flag(value):
         text = str(value or "").strip().lower()
         if re.fullmatch(r"[a-z]{2}", text):
@@ -132,7 +157,7 @@ class TelegramTransferPublisher:
     @classmethod
     def _infer_volume_from_text(cls, data):
         text = " ".join(str(data.get(key) or "") for key in ("description", "title", "features"))
-        match = re.search(r"(?<!\d)(\d+(?:[.,]\d+)?)\s*(m3|m³|cbm|cubic\s*meters?|متر\s*مکعب)(?!\w)", text, re.IGNORECASE)
+        match = re.search(r"(?<!\\d)(\\d+(?:[.,]\\d+)?)\\s*(m3|m³|cbm|cubic\\s*meters?|متر\\s*مکعب)(?!\\w)", text, re.IGNORECASE)
         if not match:
             return None
         return f"{float(match.group(1).replace(',', '.')):g} m³"
@@ -182,7 +207,7 @@ class TelegramTransferPublisher:
                 lines.append(f"📅 تاریخ ارسال: {gregorian.isoformat()} ({cls._jalali(gregorian)})")
             except ValueError:
                 lines.append(f"📅 تاریخ ارسال: {departure_date}")
-        description = cls._value(data, "description")
+        description = cls._remove_emojis(cls._value(data, "description"))
         if description:
             lines.append(f"📝 توضیحات: {description}")
         price = cls._number(data.get("price"))

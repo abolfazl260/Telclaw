@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 from collections import OrderedDict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from types import MethodType
 from zoneinfo import ZoneInfo
 
@@ -167,7 +167,6 @@ def _build_messages():
                 "html": (
                     "<h1>🟢 آگهی های فعال</h1>"
                     "<p>⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد.</p>"
-                    "<footer>Telclaw • به‌روزرسانی خودکار از SQLite</footer>"
                 )
             }
         ]
@@ -192,11 +191,9 @@ def _build_messages():
     suffix = (
         "<hr/>"
         f"<p>🕐 <b>آخرین بروزرسانی:</b> {generated} تهران</p>"
-        "<p><i>تاریخ فعال بودن آگهی با تاریخ میلادی دیتابیس محاسبه می‌شود.</i></p>"
         "<tg-button-row align=\"center\">"
         "<tg-button type=\"callback_data\" style=\"success\" data=\"transferlive:refresh\">🔄 بروزرسانی</tg-button>"
         "</tg-button-row>"
-        "<footer>Telclaw • Active Transfer Monitor</footer>"
     )
 
     chunks = []

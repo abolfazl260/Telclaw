@@ -61,17 +61,6 @@ def _dual_date(value) -> tuple[str, str, date | None]:
         return text[:10] or "-", "-", None
 
 
-def _role_label(value) -> str:
-    return {
-        "passenger": "✈️ مسافر",
-        "shipper": "📦 ارسال بار",
-    }.get(str(value or "").strip().lower(), "❔ نامشخص")
-
-
-def _role_icon(value) -> str:
-    return "✈️" if str(value or "").strip().lower() == "passenger" else "📦"
-
-
 def _origin_label(row) -> str:
     country = str(row["origin_country"] or "").strip().upper()
     city = str(row["origin_city"] or "").strip()
@@ -106,7 +95,7 @@ def _fetch_active_rows():
     try:
         return conn.execute(
             """SELECT t.origin_country, t.origin_city, t.destination_country, t.destination_city,
-                      t.departure_date, t.transfer_role, m.sender_username
+                      t.departure_date, m.sender_username
                FROM transferlist t
                JOIN messages m ON m.id = t.processed_message_id
                WHERE m.ai_status = 'processed'
@@ -135,7 +124,6 @@ def _origin_table(origin: str, rows, today: date) -> str:
         + _cell("میلادی", header=True, align="center")
         + _cell("شمسی", header=True, align="center")
         + _cell("مانده", header=True, align="center")
-        + _cell("نوع", header=True)
         + "</tr>"
     ]
 
@@ -150,7 +138,6 @@ def _origin_table(origin: str, rows, today: date) -> str:
             + _cell(gregorian, align="center")
             + _cell(jalali, align="center")
             + _cell(_remaining_label(departure, today), align="center")
-            + _cell(f"{_role_icon(row['transfer_role'])} {_role_label(row['transfer_role']).replace('✈️ ', '').replace('📦 ', '').replace('❔ ', '')}")
             + "</tr>"
         )
 
@@ -182,20 +169,11 @@ def _build_messages():
         ]
 
     total = len(rows)
-    passenger_count = sum(str(r["transfer_role"] or "").lower() == "passenger" for r in rows)
-    shipper_count = sum(str(r["transfer_role"] or "").lower() == "shipper" for r in rows)
-    unknown_count = total - passenger_count - shipper_count
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
 
     prefix = (
         "<h1>🟢 آگهی های فعال</h1>"
         f"<p><b>📊 خلاصه وضعیت</b> — <b>{total}</b> آگهی در <b>{len(groups)}</b> مبدا</p>"
-        "<table bordered compact>"
-        "<tr><th>نوع</th><th>تعداد</th></tr>"
-        f"<tr><td>✈️ مسافر</td><td align=\"center\">{passenger_count}</td></tr>"
-        f"<tr><td>📦 ارسال بار</td><td align=\"center\">{shipper_count}</td></tr>"
-        f"<tr><td>❔ نامشخص</td><td align=\"center\">{unknown_count}</td></tr>"
-        "</table>"
         "<hr/>"
     )
     suffix = (

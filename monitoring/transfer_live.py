@@ -89,13 +89,30 @@ def _remaining_label(departure: date | None, today: date) -> str:
     return f"📅 {delta} روز"
 
 
+def _transfer_identity(row) -> tuple:
+    """Return the identity of one active transfer trip for report deduplication.
+
+    Sender ID is preferred over username because usernames can change and may be absent.
+    Route + departure date are part of the identity so one user can legitimately have
+    multiple different trips.
+    """
+    sender_id = row["sender_id"]
+    sender_key = f"id:{sender_id}" if sender_id is not None else f"username:{str(row['sender_username'] or '').strip().lower()}"
+    origin_country = str(row["origin_country"] or "").strip().casefold()
+    origin_city = str(row["origin_city"] or "").strip().casefold()
+    destination_country = str(row["destination_country"] or "").strip().casefold()
+    destination_city = str(row["destination_city"] or "").strip().casefold()
+    departure_date = str(row["departure_date"] or "").strip()[:10]
+    return sender_key, origin_country, origin_city, destination_country, destination_city, departure_date
+
+
 def _fetch_active_rows():
     today = datetime.now(TEHRAN_TZ).date().isoformat()
     conn = database.get_connection()
     try:
-        return conn.execute(
+        rows = conn.execute(
             """SELECT t.origin_country, t.origin_city, t.destination_country, t.destination_city,
-                      t.departure_date, m.sender_username
+                      t.departure_date, m.sender_id, m.sender_username, m.id AS message_row_id
                FROM transferlist t
                JOIN messages m ON m.id = t.processed_message_id
                WHERE m.ai_status = 'processed'
@@ -107,6 +124,16 @@ def _fetch_active_rows():
                         m.id ASC""",
             (today,),
         ).fetchall()
+
+        unique_rows = []
+        seen = set()
+        for row in rows:
+            identity = _transfer_identity(row)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            unique_rows.append(row)
+        return unique_rows
     finally:
         conn.close()
 

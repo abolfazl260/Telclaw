@@ -1,16 +1,16 @@
-"""Telegram /transferlive command for active transfer advertisements."""
+"""Telegram /transferlive command using Telegram Bot API Rich Messages."""
 from __future__ import annotations
 
 import html
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import MethodType
 from zoneinfo import ZoneInfo
 
 from storage import database
 
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
-MAX_MESSAGE_LENGTH = 3900
+MAX_RICH_MESSAGE_LENGTH = 30000
 COUNTRY_NAMES = {
     "IR": "ایران", "DE": "آلمان", "TR": "ترکیه", "CA": "کانادا", "US": "آمریکا",
     "GB": "انگلستان", "FR": "فرانسه", "IT": "ایتالیا", "ES": "اسپانیا", "NL": "هلند",
@@ -45,26 +45,49 @@ def _jalali(gregorian_date: date) -> str:
     return f"{jy:04d}/{jm:02d}/{jd:02d}"
 
 
-def _dual_date(value) -> tuple[str, str]:
+def _dual_date(value) -> tuple[str, str, date | None]:
     text = str(value or "").strip()
     try:
         parsed = datetime.strptime(text[:10], "%Y-%m-%d").date()
-        return parsed.strftime("%Y-%m-%d"), _jalali(parsed)
+        return parsed.strftime("%Y-%m-%d"), _jalali(parsed), parsed
     except ValueError:
-        return text[:10] or "-", "-"
+        return text[:10] or "-", "-", None
 
 
 def _role_label(value) -> str:
     return {
         "passenger": "✈️ مسافر",
         "shipper": "📦 ارسال بار",
-    }.get(str(value or "").strip().lower(), "نامشخص")
+    }.get(str(value or "").strip().lower(), "❔ نامشخص")
+
+
+def _role_icon(value) -> str:
+    return "✈️" if str(value or "").strip().lower() == "passenger" else "📦"
 
 
 def _origin_label(row) -> str:
     country = str(row["origin_country"] or "").strip().upper()
     city = str(row["origin_city"] or "").strip()
     return COUNTRY_NAMES.get(country, country) or city or "نامشخص"
+
+
+def _destination_label(row) -> str:
+    return str(row["destination_city"] or "").strip() or "نامشخص"
+
+
+def _remaining_label(departure: date | None, today: date) -> str:
+    if departure is None:
+        return "—"
+    delta = (departure - today).days
+    if delta < 0:
+        return "منقضی"
+    if delta == 0:
+        return "🔥 امروز"
+    if delta == 1:
+        return "⏳ فردا"
+    if delta <= 7:
+        return f"⏳ {delta} روز"
+    return f"📅 {delta} روز"
 
 
 def _fetch_active_rows():
@@ -89,46 +112,123 @@ def _fetch_active_rows():
         conn.close()
 
 
+def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
+    tag = "th" if header else "td"
+    return f"<{tag} align=\"{align}\">{html.escape(str(text))}</{tag}>"
+
+
+def _origin_table(origin: str, rows, today: date) -> str:
+    table_rows = [
+        "<tr>"
+        + _cell("کاربر", header=True)
+        + _cell("مقصد", header=True)
+        + _cell("میلادی", header=True, align="center")
+        + _cell("شمسی", header=True, align="center")
+        + _cell("مانده", header=True, align="center")
+        + _cell("نوع", header=True)
+        + "</tr>"
+    ]
+
+    for row in rows:
+        username = str(row["sender_username"] or "").strip()
+        username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
+        gregorian, jalali, departure = _dual_date(row["departure_date"])
+        table_rows.append(
+            "<tr>"
+            + _cell(username)
+            + _cell(_destination_label(row))
+            + _cell(gregorian, align="center")
+            + _cell(jalali, align="center")
+            + _cell(_remaining_label(departure, today), align="center")
+            + _cell(f"{_role_icon(row['transfer_role'])} {_role_label(row['transfer_role']).replace('✈️ ', '').replace('📦 ', '').replace('❔ ', '')}")
+            + "</tr>"
+        )
+
+    return (
+        f"<h3>📍 از مبدا {html.escape(origin)}</h3>"
+        f"<table bordered striped compact>"
+        f"<caption>{len(rows)} آگهی فعال</caption>"
+        f"{''.join(table_rows)}"
+        f"</table>"
+    )
+
+
 def _build_messages():
+    rows = _fetch_active_rows()
+    today = datetime.now(TEHRAN_TZ).date()
+
     groups = OrderedDict()
-    for row in _fetch_active_rows():
-        origin = _origin_label(row)
-        groups.setdefault(origin, []).append(row)
+    for row in rows:
+        groups.setdefault(_origin_label(row), []).append(row)
 
     if not groups:
-        return ["<b>🟢 آگهی های فعال</b>\n\n⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد."]
+        return [
+            {
+                "html": (
+                    "<h1>🟢 آگهی های فعال</h1>"
+                    "<p>⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد.</p>"
+                    "<footer>Telclaw • به‌روزرسانی خودکار از SQLite</footer>"
+                )
+            }
+        ]
+
+    total = len(rows)
+    passenger_count = sum(str(r["transfer_role"] or "").lower() == "passenger" for r in rows)
+    shipper_count = sum(str(r["transfer_role"] or "").lower() == "shipper" for r in rows)
+    unknown_count = total - passenger_count - shipper_count
+    generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
+
+    prefix = (
+        "<h1>🟢 آگهی های فعال</h1>"
+        f"<p><b>📊 خلاصه وضعیت</b> — <b>{total}</b> آگهی در <b>{len(groups)}</b> مبدا</p>"
+        "<table bordered compact>"
+        "<tr><th>نوع</th><th>تعداد</th></tr>"
+        f"<tr><td>✈️ مسافر</td><td align=\"center\">{passenger_count}</td></tr>"
+        f"<tr><td>📦 ارسال بار</td><td align=\"center\">{shipper_count}</td></tr>"
+        f"<tr><td>❔ نامشخص</td><td align=\"center\">{unknown_count}</td></tr>"
+        "</table>"
+        "<hr/>"
+    )
+    suffix = (
+        "<hr/>"
+        f"<p>🕐 <b>آخرین بروزرسانی:</b> {generated} تهران</p>"
+        "<p><i>تاریخ فعال بودن آگهی با تاریخ میلادی دیتابیس محاسبه می‌شود.</i></p>"
+        "<tg-button-row align=\"center\">"
+        "<tg-button type=\"callback_data\" style=\"success\" data=\"transferlive:refresh\">🔄 بروزرسانی</tg-button>"
+        "</tg-button-row>"
+        "<footer>Telclaw • Active Transfer Monitor</footer>"
+    )
 
     chunks = []
-    current = "<b>🟢 آگهی های فعال</b>\n\n"
-
-    for origin, rows in groups.items():
-        # Telegram HTML does not support real HTML tables. <pre> gives a stable
-        # monospaced table while the surrounding message remains rich-text HTML.
-        lines = [
-            "┌────────────────────┬────────────┬────────────┬──────────────────┐",
-            "│ کاربر              │ میلادی     │ شمسی       │ نوع              │",
-            "├────────────────────┼────────────┼────────────┼──────────────────┤",
-        ]
-        for row in rows:
-            username = str(row["sender_username"] or "").strip()
-            username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
-            gregorian, jalali = _dual_date(row["departure_date"])
-            role = _role_label(row["transfer_role"])
-            lines.append(
-                f"│ {username[:18]:<18} │ {gregorian:<10} │ {jalali:<10} │ {role:<16} │"
-            )
-        lines.append("└────────────────────┴────────────┴────────────┴──────────────────┘")
-        section = f"<b>📍 از مبدا {html.escape(origin)}</b>\n<pre>{html.escape(chr(10).join(lines))}</pre>\n"
-
-        if len(current) + len(section) > MAX_MESSAGE_LENGTH and current.strip() != "<b>🟢 آگهی های فعال</b>":
-            chunks.append(current.rstrip())
-            current = section
-        else:
-            current += section
-
-    if current.strip():
-        chunks.append(current.rstrip())
+    current = prefix
+    for origin, origin_rows in groups.items():
+        section = _origin_table(origin, origin_rows, today)
+        if len(current) + len(section) + len(suffix) > MAX_RICH_MESSAGE_LENGTH and current != prefix:
+            chunks.append({"html": current + suffix})
+            current = prefix
+        current += section
+    chunks.append({"html": current + suffix})
     return chunks
+
+
+async def _send_rich(monitor, chat_id: int, rich_message: dict) -> None:
+    """Send a native Telegram Rich Message through Bot API 10.3."""
+    await monitor._api(
+        "sendRichMessage",
+        {
+            "chat_id": chat_id,
+            "rich_message": {
+                **rich_message,
+                "is_rtl": True,
+                "skip_entity_detection": False,
+            },
+        },
+    )
+
+
+async def _send_transfer_live(monitor, chat_id: int) -> None:
+    for message in _build_messages():
+        await _send_rich(monitor, chat_id, message)
 
 
 def install_transfer_live_command(monitor):
@@ -137,6 +237,19 @@ def install_transfer_live_command(monitor):
     original_register_commands = monitor._register_commands
 
     async def handle_update(self, update):
+        callback = update.get("callback_query") or {}
+        callback_data = str(callback.get("data") or "")
+        if callback_data == "transferlive:refresh":
+            callback_id = callback.get("id")
+            message = callback.get("message") or {}
+            chat = message.get("chat") or {}
+            chat_id = chat.get("id")
+            if callback_id:
+                await self._api("answerCallbackQuery", {"callback_query_id": callback_id})
+            if chat_id is not None and self._is_subscribed(chat_id):
+                await _send_transfer_live(self, chat_id)
+            return
+
         message = update.get("message") or {}
         chat = message.get("chat") or {}
         chat_id = chat.get("id")
@@ -151,9 +264,7 @@ def install_transfer_live_command(monitor):
             await self._send(chat_id, "⛔ ابتدا با /start دریافت گزارش‌های Telclaw را فعال کنید.")
             return
 
-        for chunk in _build_messages():
-            # TelegramMonitor._send already uses parse_mode=HTML.
-            await self._send(chat_id, chunk)
+        await _send_transfer_live(self, chat_id)
 
     async def register_commands(self):
         await original_register_commands()

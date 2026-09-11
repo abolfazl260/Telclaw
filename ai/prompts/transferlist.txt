@@ -38,8 +38,9 @@ Transfer route extraction is critical:
 
 International location standardization:
 - For origin_city and destination_city, use the internationally recognizable English/Roman city name when the source is written in Persian, Arabic, Cyrillic, or another language. Translate the city name; do not transliterate it character-by-character.
-- Preserve the standard international spelling where it is known, including names such as Hannover, Tehran, Munich, Istanbul, etc.
-- For origin_country and destination_country, when the country is confidently identified, return the ISO 3166-1 alpha-2 country code in uppercase (for example DE, IR, CA, TR, GB, US, AE). Do not invent a country code when the country is ambiguous.
+- Preserve the standard international spelling where it is known, including names such as Hannover, Tehran, Munich, Istanbul, Berlin, Stuttgart, etc.
+- For origin_country and destination_country, return the ISO 3166-1 alpha-2 country code in uppercase whenever the city itself unambiguously identifies its country, even if the country was not explicitly written in the source. Examples: Berlin -> DE, Stuttgart -> DE, Hannover -> DE, Tehran -> IR, Istanbul -> TR, Toronto -> CA, London -> GB, New York -> US, Dubai -> AE.
+- If the city is genuinely ambiguous or cannot be confidently associated with a country, return null rather than guessing.
 - Never put emojis, flags, punctuation, URLs, hashtags, or decorative characters into city or country values.
 - These fields are stored for reporting and normalization, so the city value should contain only the canonical place name and the country value should contain only the ISO alpha-2 code when known.
 - The application separately creates an ASCII-safe reporting key from the canonical city and ISO country. Do not create or guess a UN/LOCODE yourself.
@@ -58,12 +59,19 @@ Passenger/sender role extraction:
 - If the source does not provide enough evidence to distinguish these roles, use null. Never guess the role.
 
 Date and transport extraction:
-- Extract departure_date exactly when explicitly stated. Preserve ISO dates when present.
-- If a date is given in another calendar and the corresponding Gregorian date is explicitly available, keep the explicit Gregorian date in departure_date; do not calculate conversions yourself.
+- The current date for date interpretation is supplied by the application context. When a date in the source does NOT include a year, do NOT assume an old/default year and do NOT use the model's training-data year.
+- A date without a year must be interpreted as a recent date relative to the current date: consider the current month and the previous two calendar months, and choose the nearest plausible occurrence supported by the message context.
+- For example, if the current date is in September 2026, "12 Sep" means 2026-09-12, not 2024-09-12 or another historical year.
+- If the source explicitly includes a year, preserve that explicit year unless it is clearly a formatting/calendar artifact that the source itself resolves.
+- If a Jalali/Persian date is given without a Gregorian year, interpret it using the same recent-date rule and return the corresponding Gregorian date for departure_date.
+- Extract departure_date as ISO YYYY-MM-DD whenever the year is known or can be resolved by the recent-date rule.
+- If a date is given in another calendar and the corresponding Gregorian date is explicitly available, keep the explicit Gregorian date in departure_date; do not calculate conversions yourself unless the recent-date interpretation is required and unambiguous.
+- Never turn a day/month without a year into a date from years ago merely because that date exists in training data.
+- Never guess dates when the date is genuinely ambiguous.
 - Translate transport_type into concise Persian for the outbound Telegram message only through the delivery formatter; the stored extracted value should reflect the source meaning.
 
 Existing transfer normalization rules:
 - title must be concise, natural English. Translate non-English text; never transliterate. No URLs, hashtags, emojis, or explanations.
-- Never guess dates, times, cities, quantities, weights, prices, airlines, or flight numbers.
+- Never guess times, cities, quantities, weights, prices, airlines, or flight numbers.
 - currency is CAD when a monetary value is valid for the platform. Do not invent exchange rates.
 - Extract only transfer-related information present in the source.

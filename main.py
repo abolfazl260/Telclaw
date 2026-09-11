@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from storage import database
+from storage.transferlist_schema import ensure_transferlist_schema
 from system_ui import SystemConsoleUI
 from monitoring.telegram_monitor import get_telegram_monitor
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
@@ -27,7 +28,7 @@ async def _transfer_publisher_loop(publisher):
 
 
 async def _run():
-    database.initialize_db()
+    ensure_transferlist_schema()
     monitor = get_telegram_monitor()
     await monitor.start()
 

@@ -49,17 +49,19 @@ Cargo/measurement extraction:
 - Extract quantity only when a separate quantity/count is explicitly present.
 - Never convert or invent measurements unless the source explicitly provides the converted value.
 
-Passenger/sender role extraction — critical business definition:
-- First determine the author's intent, not the presence of a date, flight, route, or transport type.
-- "passenger" means the author is the traveler who can physically carry someone else's goods/baggage from the origin to the destination. The key evidence is an offer or statement that the author can/will carry another person's goods. Examples: "مسافر هستم", "پرواز دارم", "می‌تونم بار شما رو ببرم", "جا برای بار شما دارم", "I am traveling and can take your luggage", or an equivalent offer.
-- "shipper" means the author has/owns goods and wants those goods sent or transported to the destination, or is asking someone else to carry/send them. Examples: "ارسال بار دارم", "بار دارم", "می‌خواهم بارم را بفرستم", "مدارک و بار دارم", "I need to send my luggage", or an equivalent request.
-- An exact departure date is NOT evidence of passenger status. A message can have a precise date and still be a shipper advertisement. For example, "برلین به تهران پرواز رفت: ۱۱ سپتامبر بار سبک و مدارک..." is a shipper when the author is offering/declaring goods to be sent, not offering to carry other people's goods.
-- A flight number, flight date, airline, route, or words such as "پرواز دارم" are NOT sufficient by themselves to classify the author as passenger. They become passenger evidence only when the author clearly presents themselves as the traveler who can carry other people's goods.
-- A cargo description such as "بار سبک و مدارک، گوشی و ..." is strong evidence of shipper intent when the author is describing goods they want transported.
-- If the message says the author is traveling AND explicitly offers to carry another person's goods, classify as passenger.
-- If the message says the author has goods to send, classify as shipper even if a precise flight date is included.
-- If both roles are explicitly present, prefer the role that matches the author's direct offer/request: carrying others' goods -> passenger; sending/owning goods -> shipper.
-- If the author's intent is genuinely unclear, return null. Never infer the role from a date, flight, route, or transport type alone.
+Passenger/sender role extraction — business priority:
+- The primary distinction is NOT simply whether the author mentions a flight. Determine whether the author is advertising their own physical travel/carrying capacity or is advertising goods that need to be transported.
+- passenger = the author is traveling from origin to destination and can/will physically carry goods for another person. shipper = the author has/owns goods and wants someone else to transport them.
+- BUSINESS PRIORITY 1 — SPECIFIC TRAVEL DATE + TRAVEL CONTEXT: When the author gives a specific departure/travel date or a clearly specific travel schedule together with a route, flight, or other unmistakable travel context, strongly treat this as passenger evidence. The reason is that a precise date normally represents the author's booked/planned journey and available carrying capacity. Examples: "برلین به تهران پرواز رفت: ۱۱ سپتامبر", "11 September Berlin to Tehran flight", "پروازم ۱۱ سپتامبر از برلین به تهران است". A specific date alone, without travel context, is not sufficient.
+- BUSINESS PRIORITY 2 — EXPLICIT CARRYING CAPACITY/OFFER: If the author explicitly says they are traveling and can carry another person's goods, classify as passenger regardless of whether the date is exact or approximate. Examples: "مسافر هستم", "پرواز دارم", "می‌تونم بار شما رو ببرم", "جا برای بار شما دارم", "I am traveling and can take your luggage".
+- BUSINESS PRIORITY 3 — EXPLICIT SHIPMENT REQUEST: If the author clearly says they have goods and want to send/ship them, classify as shipper. Examples: "ارسال بار دارم", "بار دارم", "می‌خواهم بارم را بفرستم", "I need to send my luggage".
+- A precise travel date plus a route/flight is stronger evidence of passenger than a generic cargo description. For example, "برلین به تهران پرواز رفت: ۱۱ سپتامبر بار سبک و مدارک، گوشی و ..." should be classified as passenger because the author is presenting a specific flight/travel opportunity; the listed light goods are treated as the carrying capacity/available baggage context unless the message explicitly says the author wants those goods sent by someone else.
+- A cargo description by itself does NOT make the author a shipper when it appears alongside a specific flight/travel schedule. Distinguish "I am flying and have room for cargo" from "I have cargo that I need someone to send".
+- Approximate shipping timing such as "این هفته", "حدود ۲۰ سپتامبر", "در چند روز آینده", or "به زودی" combined with goods/shipment language is generally shipper evidence unless explicit travel/carrying evidence exists.
+- Flight number, airline, route, or transport type without a date or explicit carrying/travel context is not automatically passenger evidence.
+- If both passenger and shipper signals exist, apply this precedence: (1) explicit statement that the author can carry others' goods -> passenger; (2) specific travel date/schedule + route/flight -> passenger; (3) explicit statement that the author wants their goods shipped -> shipper; (4) genuinely unclear -> null.
+- Do not require the literal words "مسافر هستم" for passenger classification when the message clearly advertises a specific upcoming journey with a route/date and available cargo context.
+- Never infer passenger from a date that is unrelated to travel, and never infer shipper merely because goods are listed.
 - Use exactly "passenger" or "shipper"; otherwise null.
 
 Date and transport extraction:

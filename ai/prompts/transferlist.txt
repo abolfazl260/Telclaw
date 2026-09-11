@@ -45,7 +45,7 @@ Return ONLY one valid JSON object. No Markdown, explanations, comments, or text 
 ```
 
 Use ONLY these fields. Never add, remove, or rename fields.
-Use `null` when information is unknown or ambiguous.
+Use `null` when information is unknown or genuinely ambiguous.
 
 ## ROLE
 
@@ -55,18 +55,24 @@ Use `null` when information is unknown or ambiguous.
 * `shipper`
 * `null`
 
-`passenger` = the author is traveling and can carry another person's goods.
+`passenger` = the author is traveling and is offering to carry another person's goods, baggage, documents, or packages along their own trip.
 
-`shipper` = the author has goods and wants another person or service to transport them.
+`shipper` = the author owns, controls, or needs to send goods and is looking for another person or service to transport them.
 
-Priority:
+Determine the role from the author's intent and the relationship between travel information and cargo information. Do not classify from isolated words.
 
-1. Explicit offer to carry goods → `passenger`
-2. Clear travel/flight with cargo capacity → `passenger`
-3. Author has goods and needs transportation → `shipper`
-4. Otherwise → `null`
+Use the following evidence hierarchy:
 
-Never determine the role from a single keyword such as flight, date, airport, route, cargo, or post.
+1. The author's explicit action or offer has highest priority.
+2. First-person travel intent combined with an offer/capacity to carry goods strongly indicates `passenger`.
+3. A specific future travel/departure date attached to the author's route is strong evidence that the author is the traveler. When cargo is presented as something the author can carry on that trip, classify as `passenger`.
+4. Travel details such as flight/departure route, airline, airport, or departure date strengthen `passenger` only when they describe the author's own trip or carrying capacity.
+5. If the author is presenting their own goods and asking someone else to transport them, classify as `shipper`, even if the message also mentions a date or route.
+6. If the message only describes a shipment/service without establishing who is traveling and who owns the goods, use `null`.
+
+A precise travel date is meaningful role evidence because a traveler normally provides a concrete date for their own trip, while a shipper may provide a shipment/delivery date without traveling. Therefore, a concrete travel date must be linked to the author's travel intent before using it as passenger evidence; it must not override explicit shipper intent.
+
+Never determine the role from a single isolated keyword. Consider the complete relationship among subject, author perspective, travel, route, cargo, and date.
 
 If `transfer_role = null`, the application must NOT save the record.
 
@@ -96,15 +102,38 @@ Do not include flags, emojis, airport codes, UN/LOCODE, URLs, or hashtags in loc
 
 ## DATES
 
-Extract explicit travel, departure, arrival, delivery, or shipment dates as Gregorian `YYYY-MM-DD`.
+Extract every explicit date that represents travel, departure, arrival, delivery, or shipment timing.
 
-The application provides the current date.
+A date is valid evidence even when it is embedded inside a sentence, placed next to emojis, separated by punctuation, or written in a nonstandard textual form.
 
-If the year is missing, assume the date belongs to the current month unless another year is explicitly stated.
+Recognize date expressions in all relevant forms, including:
 
-Recognize Persian/Jalali dates and convert them to Gregorian.
+* Gregorian dates written with digits or month names
+* Persian/Jalali dates written with Persian digits or Latin digits
+* dates written partly in Persian and partly in English
+* dates containing a Gregorian date and a Persian/Jalali equivalent
+* month-and-day expressions without an explicit year
+* dates with surrounding words such as "on", "in", "at", "date", "تاریخ", "در", "روز", or similar date markers
 
-If a date clearly belongs to a flight/travel route and no arrival date exists, use it as `departure_date`.
+Normalize Persian and Gregorian digits before interpreting the date.
+
+If both Gregorian and Persian/Jalali representations of the same date are present, treat them as two representations of ONE date, not two separate dates. Prefer the explicitly stated Gregorian date when both are consistent; otherwise convert the Persian/Jalali date to Gregorian and use the consistent result.
+
+Convert all extracted dates to Gregorian `YYYY-MM-DD`.
+
+If the year is explicitly stated, preserve that year.
+
+If the year is missing, infer the year from the current application date only when the resulting date is temporally plausible for the stated travel/shipment context. Do not invent a year merely because a month or day appears.
+
+For a yearless date, first determine whether it refers to the upcoming/current occurrence relative to the application date. If the date has already passed and the message clearly describes a future trip/shipment, use the next plausible occurrence only when the text supports that interpretation; otherwise use `null` rather than guessing.
+
+When a date is explicitly connected to the author's flight or travel route and no separate arrival date is given, assign it to `departure_date`.
+
+When a date is explicitly connected to arrival, assign it to `arrival_date`.
+
+When a date is explicitly connected to delivery/shipment timing but not travel, do not automatically assign it to `departure_date`; use the field that matches the stated event and preserve the distinction between travel and shipment timing.
+
+Never lose a date merely because it is written in Persian, Jalali, mixed-language text, or informal formatting.
 
 Never invent dates or times.
 
@@ -161,8 +190,9 @@ Allowed normalization only:
 
 * standard city name
 * clearly identifiable city → country
-* yearless date → current month
+* explicit date normalization to Gregorian
 * Persian/Jalali date → Gregorian
+* yearless date resolution only under the date rules above
 * high-confidence currency inference when price is explicitly stated
 
 Everything else uncertain must be `null`.

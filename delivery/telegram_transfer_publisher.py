@@ -134,14 +134,6 @@ class TelegramTransferPublisher:
         return f"{float(match.group(1).replace(',', '.')):g} m³"
 
     @staticmethod
-    def _transport_type(value):
-        text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-        aliases = {"ground":"زمینی", "land":"زمینی", "road":"زمینی", "truck":"زمینی", "زمینی":"زمینی",
-                   "air":"هوایی", "air_freight":"هوایی", "flight":"هوایی", "هوایی":"هوایی",
-                   "sea":"دریایی", "marine":"دریایی", "ocean":"دریایی", "دریایی":"دریایی"}
-        return aliases.get(text, value)
-
-    @staticmethod
     def _telegram_username(record):
         username = str(record.get("sender_username") or "").strip().lstrip("@")
         if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
@@ -166,13 +158,10 @@ class TelegramTransferPublisher:
         if not origin or not destination:
             raise TransferTelegramPublishError("Transfer advertisement requires both origin_city and destination_city")
 
-        transfer_role = cls._value(data, "transfer_role")
-        role = {"passenger": "✈️ مسافر", "shipper": "📦 ارسال بار"}.get((transfer_role or "").lower())
-        lines = [role] if role else []
-        lines.extend([
-            cls._location_line("📍 مبدا", origin, cls._value(data, "origin_country")),
-            cls._location_line("📍 مقصد", destination, cls._value(data, "destination_country")),
-        ])
+        lines = [
+            cls._location_line("🇨🇦 مبدا" if cls._country_flag(cls._value(data, "origin_country")) == "🇨🇦" else "مبدا", origin, cls._value(data, "origin_country")),
+            cls._location_line("🇮🇷 مقصد" if cls._country_flag(cls._value(data, "destination_country")) == "🇮🇷" else "مقصد", destination, cls._value(data, "destination_country")),
+        ]
         cargo = cls._value(data, "cargo_type")
         if cargo:
             lines.append(f"📦 نوع بار: {cargo}")
@@ -189,9 +178,6 @@ class TelegramTransferPublisher:
                 lines.append(f"📅 تاریخ ارسال: {gregorian.isoformat()} ({cls._jalali(gregorian)})")
             except ValueError:
                 lines.append(f"📅 تاریخ ارسال: {departure_date}")
-        transport = cls._transport_type(data.get("transport_type"))
-        if transport:
-            lines.append(f"🚛 نوع حمل: {transport}")
         description = cls._value(data, "description")
         if description:
             lines.append(f"📝 توضیحات: {description}")
@@ -226,7 +212,7 @@ class TelegramTransferPublisher:
                 t.title, t.description, t.origin_city, t.origin_province, t.origin_country,
                 t.destination_city, t.destination_province, t.destination_country, t.airline,
                 t.flight_number, t.departure_date, t.departure_time, t.arrival_date, t.arrival_time,
-                t.transport_type, t.transfer_role, t.cargo_type, t.weight, t.weight_unit, t.quantity,
+                t.cargo_type, t.weight, t.weight_unit, t.quantity,
                 t.volume, t.volume_unit, t.price, t.currency, t.contact, t.features
                 FROM transferlist t JOIN messages m ON m.id=t.processed_message_id
                 LEFT JOIN telegram_transfer_publications p ON p.message_row_id=m.id
@@ -266,7 +252,7 @@ class TelegramTransferPublisher:
                 "title", "description", "origin_city", "origin_province", "origin_country",
                 "destination_city", "destination_province", "destination_country", "airline",
                 "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
-                "transport_type", "transfer_role", "cargo_type", "weight", "weight_unit", "quantity",
+                "cargo_type", "weight", "weight_unit", "quantity",
                 "volume", "volume_unit", "price", "currency", "contact", "features")}
             try:
                 sent = await self._send_message(self.format_ad(record, data), self._contact_button(record))

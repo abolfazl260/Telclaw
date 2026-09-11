@@ -30,7 +30,6 @@ Return ONLY one valid JSON object. No Markdown, explanations, comments, or text 
       "departure_time": null,
       "arrival_date": null,
       "arrival_time": null,
-      "transport_type": null,
       "cargo_type": null,
       "weight": null,
       "weight_unit": null,
@@ -109,19 +108,6 @@ When a date is explicitly connected to delivery/shipment timing, preserve the di
 Never lose a date merely because it is written in Persian, Jalali, mixed-language text, or informal formatting.
 
 Never invent dates or times.
-
-## TRANSPORT
-
-`transport_type` MUST be one of:
-
-* `air`
-* `ground`
-* `sea`
-* `null`
-
-Use `air` for air transportation, `ground` for road/rail transportation, and `sea` for maritime transportation.
-
-`post` alone does not determine transport type.
 
 ## CARGO / PRICE / TRAVEL
 

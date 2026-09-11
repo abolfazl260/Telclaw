@@ -56,7 +56,12 @@ def _dual_date(value) -> tuple[str, str, date | None]:
     text = str(value or "").strip()
     try:
         parsed = datetime.strptime(text[:10], "%Y-%m-%d").date()
-        return parsed.strftime("%Y-%m-%d"), _jalali(parsed), parsed
+        jalali = _jalali(parsed)
+        # Show only month/day; hide the year in both calendar columns.
+        gregorian_label = parsed.strftime("%d/%m")
+        jalali_parts = jalali.split("/")
+        jalali_label = f"{jalali_parts[2]}/{jalali_parts[1]}"
+        return gregorian_label, jalali_label, parsed
     except ValueError:
         return text[:10] or "-", "-", None
 
@@ -71,6 +76,8 @@ def _origin_label(row) -> str:
 def _destination_label(row) -> str:
     country = str(row["destination_country"] or "").strip().upper()
     city = str(row["destination_city"] or "").strip() or "نامشخص"
+    # Keep the country flag at the beginning of the destination cell so the
+    # destination column remains visually aligned and predictable.
     return f"{_country_flag(country)} {city}" if country else city
 
 

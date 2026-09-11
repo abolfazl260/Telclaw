@@ -98,7 +98,7 @@ class TelegramTransferPublisher:
     @classmethod
     def _location_line(cls, label, city, country):
         flag = cls._country_flag(country)
-        return f"{label}: {flag + ' ' if flag else ''}{city}"
+        return f"{flag + ' ' if flag else ''}{label}: {city}"
 
     @staticmethod
     def _number(value):
@@ -145,11 +145,7 @@ class TelegramTransferPublisher:
         username = cls._telegram_username(record)
         if not username:
             return None
-        return {
-            "inline_keyboard": [[
-                {"text": f"👤 @{username}", "url": f"https://t.me/{username}"}
-            ]]
-        }
+        return {"inline_keyboard": [[{"text": f"👤 @{username}", "url": f"https://t.me/{username}"}]]}
 
     @classmethod
     def format_ad(cls, record, data):
@@ -159,8 +155,8 @@ class TelegramTransferPublisher:
             raise TransferTelegramPublishError("Transfer advertisement requires both origin_city and destination_city")
 
         lines = [
-            cls._location_line("🇨🇦 مبدا" if cls._country_flag(cls._value(data, "origin_country")) == "🇨🇦" else "مبدا", origin, cls._value(data, "origin_country")),
-            cls._location_line("🇮🇷 مقصد" if cls._country_flag(cls._value(data, "destination_country")) == "🇮🇷" else "مقصد", destination, cls._value(data, "destination_country")),
+            cls._location_line("مبدا", origin, cls._value(data, "origin_country")),
+            cls._location_line("مقصد", destination, cls._value(data, "destination_country")),
         ]
         cargo = cls._value(data, "cargo_type")
         if cargo:

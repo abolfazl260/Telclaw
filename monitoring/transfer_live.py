@@ -10,6 +10,16 @@ from storage import database
 
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_MESSAGE_LENGTH = 3900
+COUNTRY_NAMES = {
+    "IR": "ایران", "DE": "آلمان", "TR": "ترکیه", "CA": "کانادا", "US": "آمریکا",
+    "GB": "انگلستان", "FR": "فرانسه", "IT": "ایتالیا", "ES": "اسپانیا", "NL": "هلند",
+    "BE": "بلژیک", "AT": "اتریش", "CH": "سوئیس", "SE": "سوئد", "NO": "نروژ",
+    "DK": "دانمارک", "FI": "فنلاند", "PL": "لهستان", "GR": "یونان", "RU": "روسیه",
+    "UA": "اوکراین", "AE": "امارات", "QA": "قطر", "SA": "عربستان", "KW": "کویت",
+    "OM": "عمان", "IQ": "عراق", "AZ": "آذربایجان", "GE": "گرجستان", "AM": "ارمنستان",
+    "CN": "چین", "JP": "ژاپن", "KR": "کره جنوبی", "IN": "هند", "PK": "پاکستان",
+    "AF": "افغانستان",
+}
 
 
 def _jalali(gregorian_date: date) -> str:
@@ -50,9 +60,9 @@ def _role_label(value) -> str:
 
 
 def _origin_label(row) -> str:
-    country = str(row["origin_country"] or "").strip()
+    country = str(row["origin_country"] or "").strip().upper()
     city = str(row["origin_city"] or "").strip()
-    return country or city or "نامشخص"
+    return COUNTRY_NAMES.get(country, country) or city or "نامشخص"
 
 
 def _fetch_active_rows():

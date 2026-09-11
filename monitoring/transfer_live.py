@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import datetime
 from types import MethodType
 from zoneinfo import ZoneInfo
 
@@ -22,32 +22,11 @@ COUNTRY_NAMES = {
 }
 
 
-def _jalali(gregorian_date: date) -> str:
-    gy, gm, gd = gregorian_date.year, gregorian_date.month, gregorian_date.day
-    gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
-    gy2 = gy + 1 if gm > 2 else gy
-    days = 355666 + 365 * gy + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) + gd + gdm[gm - 1]
-    jy = -1595 + 33 * (days // 12053)
-    days %= 12053
-    jy += 4 * (days // 1461)
-    days %= 1461
-    if days > 365:
-        jy += (days - 1) // 365
-        days = (days - 1) % 365
-    if days < 186:
-        jm = 1 + days // 31
-        jd = 1 + days % 31
-    else:
-        jm = 7 + (days - 186) // 30
-        jd = 1 + (days - 186) % 30
-    return f"{jy:04d}/{jm:02d}/{jd:02d}"
-
-
 def _display_date(value) -> str:
+    """Return the stored Gregorian date unchanged for Telegram display."""
     text = str(value or "").strip()
     try:
-        parsed = datetime.strptime(text[:10], "%Y-%m-%d").date()
-        return _jalali(parsed)
+        return datetime.strptime(text[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError:
         return text[:10] or "-"
 
@@ -94,19 +73,19 @@ def _build_messages():
         groups.setdefault(origin, []).append(row)
 
     if not groups:
-        return ["⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد."]
+        return ["<b>🟢 آگهی های فعال</b>\n\n⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد."]
 
     chunks = []
-    current = "🚚 آگهی‌های فعال حمل‌ونقل\n\n"
+    current = "<b>🟢 آگهی های فعال</b>\n\n"
     for origin, rows in groups.items():
-        section = f"📍 از مبدا {origin}\n"
+        section = f"<b>📍 از مبدا {origin}</b>\n"
         for row in rows:
             username = str(row["sender_username"] or "").strip()
             username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
             section += f"{username} | {_display_date(row['departure_date'])} | {_role_label(row['transfer_role'])}\n"
         section += "\n"
 
-        if len(current) + len(section) > MAX_MESSAGE_LENGTH and current.strip() != "🚚 آگهی‌های فعال حمل‌ونقل":
+        if len(current) + len(section) > MAX_MESSAGE_LENGTH and current.strip() != "<b>🟢 آگهی های فعال</b>":
             chunks.append(current.rstrip())
             current = section
         else:
@@ -138,7 +117,7 @@ def install_transfer_live_command(monitor):
             return
 
         for chunk in _build_messages():
-            await self._send(chat_id, chunk)
+            await self._send(chat_id, chunk, parse_mode="HTML")
 
     async def register_commands(self):
         await original_register_commands()

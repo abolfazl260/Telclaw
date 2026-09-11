@@ -187,6 +187,7 @@ class TelegramTransferPublisher:
         ad_number = record.get("ad_number")
         if ad_number is not None:
             lines.append(f"TR-{int(ad_number):06d}")
+            lines.append("")
         lines.extend([
             cls._location_line("مبدا", origin, cls._value(data, "origin_country")),
             cls._location_line("مقصد", destination, cls._value(data, "destination_country")),
@@ -204,9 +205,14 @@ class TelegramTransferPublisher:
         if departure_date:
             try:
                 gregorian = datetime.strptime(departure_date[:10], "%Y-%m-%d").date()
-                lines.append(f"📅 تاریخ ارسال: {gregorian.isoformat()} ({cls._jalali(gregorian)})")
+                gregorian_label = gregorian.strftime("%d/%m/%Y")
+                jalali = cls._jalali(gregorian)
+                jy, jm, jd = jalali.split("/")
+                jalali_label = f"{jd}/{jm}/{jy}"
+                lines.append(f"📅 تاریخ: {gregorian_label} | {jalali_label}")
             except ValueError:
-                lines.append(f"📅 تاریخ ارسال: {departure_date}")
+                lines.append(f"📅 تاریخ: {departure_date}")
+            lines.append("")
         description = cls._remove_emojis(cls._value(data, "description"))
         if description:
             lines.append(f"📝 توضیحات: {description}")

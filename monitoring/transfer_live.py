@@ -130,7 +130,7 @@ def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
 def _origin_table(origin: str, rows, today: date) -> str:
     table_rows = [
         "<tr>"
-        + _cell("👤", header=True)
+        + _cell("کاربر", header=True)
         + _cell("مقصد", header=True)
         + _cell("میلادی", header=True, align="center")
         + _cell("شمسی", header=True, align="center")
@@ -142,11 +142,10 @@ def _origin_table(origin: str, rows, today: date) -> str:
     for row in rows:
         username = str(row["sender_username"] or "").strip()
         username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
-        username_display = f"👤 {username}"
         gregorian, jalali, departure = _dual_date(row["departure_date"])
         table_rows.append(
             "<tr>"
-            + _cell(username_display)
+            + _cell(username)
             + _cell(_destination_label(row))
             + _cell(gregorian, align="center")
             + _cell(jalali, align="center")

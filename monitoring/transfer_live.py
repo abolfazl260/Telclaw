@@ -76,9 +76,12 @@ def _origin_label(row) -> str:
 def _destination_label(row) -> str:
     country = str(row["destination_country"] or "").strip().upper()
     city = str(row["destination_city"] or "").strip() or "نامشخص"
-    # Keep the country flag at the beginning of the destination cell so the
-    # destination column remains visually aligned and predictable.
-    return f"{_country_flag(country)} {city}" if country else city
+    # Rich Message tables are RTL. Use an LTR isolate around the flag+city
+    # so the country flag stays visually before the city instead of being
+    # reordered by the surrounding RTL layout.
+    if country:
+        return f"\u2066{_country_flag(country)} {city}\u2069"
+    return city
 
 
 def _remaining_label(departure: date | None, today: date) -> str:

@@ -14,16 +14,13 @@ Allowed fields:
 title, description, origin_city, origin_province, origin_country, destination_city, destination_province, destination_country, airline, flight_number, departure_date, departure_time, arrival_date, arrival_time, transport_type, transfer_role, cargo_type, weight, weight_unit, quantity, volume, volume_unit, price, currency, contact, features
 
 Human-readable description:
-- description is NOT a copy of the source message and must NOT be a technical list of extracted fields.
-- Write a short, natural, human-sounding Persian summary of the user's actual transfer/shipping need.
-- Focus on the user's main request and useful details that are not already represented by the structured fields.
-- Mention distinctive details when they matter, for example what the item is for, why it is being sent, urgency, special handling needs, who it is intended for, or what the user is looking for from a passenger/sender.
-- Do not unnecessarily repeat origin, destination, weight, date, price, transport type, contact, or other structured fields that are already clearly shown separately.
-- Do not use robotic wording such as "کاربر اعلام کرده"، "طبق پیام"، "این فرد نیاز دارد" or similar meta-language.
-- Make the result read like a concise explanation in a real marketplace advertisement.
-- Preserve the meaning and important nuance of the source. Do not add assumptions or facts that are not supported by the message.
-- If the message contains no meaningful information beyond the structured fields, return description as null rather than repeating those fields.
-- Keep the description concise, normally one or two natural sentences.
+- description MUST be the original source message text, preserved as faithfully as possible.
+- Do NOT summarize, rewrite, translate, shorten, expand, or paraphrase the user's message.
+- Preserve the user's original language, wording, spelling, punctuation, and meaning.
+- The purpose of this field is to publish the user's own original text as the description.
+- Do not add extracted fields, explanations, meta-language, or AI-generated wording.
+- If the original source message has meaningful text, return that original text.
+- If there is no meaningful source text, return null.
 
 Transfer route extraction is critical:
 - origin_city is the explicit departure/loading/source city.
@@ -52,11 +49,13 @@ Cargo/measurement extraction:
 - Extract quantity only when a separate quantity/count is explicitly present.
 - Never convert or invent measurements unless the source explicitly provides the converted value.
 
-Passenger/sender role extraction:
-- Extract transfer_role only when the source explicitly or clearly states whether the person is a passenger carrying/bringing an item or a sender who wants to send/ship cargo.
-- Use exactly "passenger" for a passenger/traveler carrying or bringing an item.
-- Use exactly "shipper" for a sender/person offering or requesting shipment of cargo.
-- If the source does not provide enough evidence to distinguish these roles, use null. Never guess the role.
+Passenger/sender role extraction — critical business definition:
+- "passenger" means the person is traveling from the origin to the destination and is willing/able to physically carry the other person's goods/baggage with them. Typical evidence: "I am traveling", "I have a flight", "I can take your luggage", "I can carry 15 kg", "مسافر هستم", "پرواز دارم", "می‌تونم بار شما رو ببرم", or an equivalent offer to carry someone else's goods.
+- "shipper" means the person owns/has the goods and wants the goods transported to the destination, or is requesting/arranging shipment. Typical evidence: "I want to send", "I need to send my luggage", "ارسال بار دارم", "می‌خواهم بارم را بفرستم", "مدارک و بار دارم", or an equivalent request to send goods.
+- A message merely mentioning a flight, travel, people flying, or a route does NOT by itself make the person a passenger.
+- A message saying that people are traveling to a destination does NOT mean the author is a passenger.
+- If the author does not clearly indicate whether they are the traveler carrying someone else's goods or the owner/sender of the goods, return null. Never infer the role from the presence of a flight or transport type alone.
+- Use exactly "passenger" or "shipper"; otherwise null.
 
 Date and transport extraction:
 - The current date for date interpretation is supplied by the application context. When a date in the source does NOT include a year, do NOT assume an old/default year and do NOT use the model's training-data year.

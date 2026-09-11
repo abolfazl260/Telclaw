@@ -141,6 +141,24 @@ class TelegramTransferPublisher:
                    "sea":"دریایی", "marine":"دریایی", "ocean":"دریایی", "دریایی":"دریایی"}
         return aliases.get(text, value)
 
+    @staticmethod
+    def _telegram_username(record):
+        username = str(record.get("sender_username") or "").strip().lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
+            return None
+        return username
+
+    @classmethod
+    def _contact_button(cls, record):
+        username = cls._telegram_username(record)
+        if not username:
+            return None
+        return {
+            "inline_keyboard": [[
+                {"text": f"👤 @{username}", "url": f"https://t.me/{username}"}
+            ]]
+        }
+
     @classmethod
     def format_ad(cls, record, data):
         origin = cls._value(data, "origin_city")
@@ -183,14 +201,13 @@ class TelegramTransferPublisher:
         contact = cls._value(data, "contact")
         if contact:
             lines.append(f"📞 تماس: {contact}")
-        username = cls._value(record, "sender_username")
-        if username:
-            lines.append(f"یوزرنیم: {username if username.startswith('@') else '@' + username}")
         return "\n".join(lines)
 
-    async def _send_message(self, text):
+    async def _send_message(self, text, reply_markup=None):
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {"chat_id": self.channel, "text": text, "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         timeout = aiohttp.ClientTimeout(total=config.TRANSFER_TELEGRAM_TIMEOUT_SECONDS)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=payload) as response:
@@ -252,7 +269,7 @@ class TelegramTransferPublisher:
                 "transport_type", "transfer_role", "cargo_type", "weight", "weight_unit", "quantity",
                 "volume", "volume_unit", "price", "currency", "contact", "features")}
             try:
-                sent = await self._send_message(self.format_ad(record, data))
+                sent = await self._send_message(self.format_ad(record, data), self._contact_button(record))
                 self._result(record["message_row_id"], "sent", telegram_message_id=sent.get("message_id"))
                 result["sent"] += 1
                 logger.info("[TRANSFER TELEGRAM] sent message=%s telegram_message_id=%s", record.get("message_id"), sent.get("message_id"))

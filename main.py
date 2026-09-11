@@ -4,6 +4,7 @@ import logging
 from storage import database
 from system_ui import SystemConsoleUI
 from monitoring.telegram_monitor import get_telegram_monitor
+from monitoring.transfer_live import install_transfer_live_command
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 import config
 
@@ -29,6 +30,7 @@ async def _transfer_publisher_loop(publisher):
 async def _run():
     database.initialize_db()
     monitor = get_telegram_monitor()
+    install_transfer_live_command(monitor)
     await monitor.start()
 
     transfer_publisher = None

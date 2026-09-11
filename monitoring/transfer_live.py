@@ -23,6 +23,13 @@ COUNTRY_NAMES = {
 }
 
 
+def _country_flag(iso2: str) -> str:
+    code = str(iso2 or "").strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return "🌍"
+    return "".join(chr(127397 + ord(char)) for char in code)
+
+
 def _jalali(gregorian_date: date) -> str:
     gy, gm, gd = gregorian_date.year, gregorian_date.month, gregorian_date.day
     gdm = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
@@ -68,11 +75,14 @@ def _role_icon(value) -> str:
 def _origin_label(row) -> str:
     country = str(row["origin_country"] or "").strip().upper()
     city = str(row["origin_city"] or "").strip()
-    return COUNTRY_NAMES.get(country, country) or city or "نامشخص"
+    country_name = COUNTRY_NAMES.get(country, country) or "نامشخص"
+    return f"{_country_flag(country)} {country_name}" if country else (city or "نامشخص")
 
 
 def _destination_label(row) -> str:
-    return str(row["destination_city"] or "").strip() or "نامشخص"
+    country = str(row["destination_country"] or "").strip().upper()
+    city = str(row["destination_city"] or "").strip() or "نامشخص"
+    return f"{_country_flag(country)} {city}" if country else city
 
 
 def _remaining_label(departure: date | None, today: date) -> str:
@@ -95,7 +105,7 @@ def _fetch_active_rows():
     conn = database.get_connection()
     try:
         return conn.execute(
-            """SELECT t.origin_country, t.origin_city, t.destination_city,
+            """SELECT t.origin_country, t.origin_city, t.destination_country, t.destination_city,
                       t.departure_date, t.transfer_role, m.sender_username
                FROM transferlist t
                JOIN messages m ON m.id = t.processed_message_id
@@ -120,7 +130,7 @@ def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
 def _origin_table(origin: str, rows, today: date) -> str:
     table_rows = [
         "<tr>"
-        + _cell("کاربر", header=True)
+        + _cell("👤", header=True)
         + _cell("مقصد", header=True)
         + _cell("میلادی", header=True, align="center")
         + _cell("شمسی", header=True, align="center")
@@ -132,10 +142,11 @@ def _origin_table(origin: str, rows, today: date) -> str:
     for row in rows:
         username = str(row["sender_username"] or "").strip()
         username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
+        username_display = f"👤 {username}"
         gregorian, jalali, departure = _dual_date(row["departure_date"])
         table_rows.append(
             "<tr>"
-            + _cell(username)
+            + _cell(username_display)
             + _cell(_destination_label(row))
             + _cell(gregorian, align="center")
             + _cell(jalali, align="center")

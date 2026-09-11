@@ -88,12 +88,10 @@ def _remaining_label(departure: date | None, today: date) -> str:
     if delta < 0:
         return "منقضی"
     if delta == 0:
-        return "🔥 امروز"
+        return "امروز"
     if delta == 1:
-        return "⏳ فردا"
-    if delta <= 7:
-        return f"⏳ {delta} روز"
-    return f"📅 {delta} روز"
+        return "فردا"
+    return f"{delta} روز"
 
 
 def _transfer_identity(row) -> tuple:

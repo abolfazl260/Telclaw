@@ -1,5 +1,5 @@
 """Telegram /transferlive command using Telegram Bot API Rich Messages."""
-from __future__ import annotations
+from __future__ import annotations__
 
 import html
 from collections import OrderedDict
@@ -201,9 +201,6 @@ def _build_messages():
     suffix = (
         "<hr/>"
         f"<p>🕐 <b>آخرین بروزرسانی:</b> {generated} تهران</p>"
-        "<tg-button-row align=\"center\">"
-        "<tg-button type=\"callback_data\" style=\"success\" data=\"transferlive:refresh\">🔄 بروزرسانی</tg-button>"
-        "</tg-button-row>"
     )
 
     chunks = []
@@ -244,19 +241,6 @@ def install_transfer_live_command(monitor):
     original_register_commands = monitor._register_commands
 
     async def handle_update(self, update):
-        callback = update.get("callback_query") or {}
-        callback_data = str(callback.get("data") or "")
-        if callback_data == "transferlive:refresh":
-            callback_id = callback.get("id")
-            message = callback.get("message") or {}
-            chat = message.get("chat") or {}
-            chat_id = chat.get("id")
-            if callback_id:
-                await self._api("answerCallbackQuery", {"callback_query_id": callback_id})
-            if chat_id is not None and self._is_subscribed(chat_id):
-                await _send_transfer_live(self, chat_id)
-            return
-
         message = update.get("message") or {}
         chat = message.get("chat") or {}
         chat_id = chat.get("id")

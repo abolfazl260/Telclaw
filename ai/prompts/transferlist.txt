@@ -26,7 +26,9 @@ Transfer route extraction is critical:
 - origin_city is the explicit departure/loading/source city.
 - destination_city is the explicit arrival/unloading/target city.
 - Preserve direction exactly. "from A to B", "A to B", "از A به B", "A به B", "A → B", and equivalent wording mean origin=A and destination=B.
-- Never reverse origin and destination.
+- NEVER reverse origin and destination.
+- A route may contain MORE THAN ONE origin city. For wording such as "A و B به C", "A و B ب C", "از A و B به C", "A, B to C", or equivalent wording, treat BOTH A and B as origin locations and C as the destination. Do not collapse the first two cities into one value and do not incorrectly use the second origin as the destination.
+- When the schema provides only one origin_city field, represent multiple explicit origins as a clear comma-separated list in the same field, preserving each canonical city, e.g. "Arak, Tehran" for "اراک و تهران".
 - If the source contains a route in the title or first lines, extract it; do not require the route to appear in a dedicated field.
 - Do not use a city merely because it appears in a phone number, address, airline name, description, or unrelated text.
 - If only one endpoint is explicitly known, populate only that endpoint and set the other endpoint to null.
@@ -35,11 +37,11 @@ Transfer route extraction is critical:
 
 International location standardization:
 - For origin_city and destination_city, use the internationally recognizable English/Roman city name when the source is written in Persian, Arabic, Cyrillic, or another language. Translate the city name; do not transliterate it character-by-character.
-- Preserve the standard international spelling where it is known, including names such as Hannover, Tehran, Munich, Istanbul, Berlin, Stuttgart, etc.
-- For origin_country and destination_country, return the ISO 3166-1 alpha-2 country code in uppercase whenever the city itself unambiguously identifies its country, even if the country was not explicitly written in the source. Examples: Berlin -> DE, Stuttgart -> DE, Hannover -> DE, Tehran -> IR, Istanbul -> TR, Toronto -> CA, London -> GB, New York -> US, Dubai -> AE.
+- Preserve the standard international spelling where it is known, including names such as Hannover, Tehran, Munich, Istanbul, Berlin, Stuttgart, Arak, Rome, etc.
+- For origin_country and destination_country, return the ISO 3166-1 alpha-2 country code in uppercase whenever the city itself unambiguously identifies its country, even if the country was not explicitly written in the source. Examples: Berlin -> DE, Stuttgart -> DE, Hannover -> DE, Tehran -> IR, Arak -> IR, Rome -> IT, Istanbul -> TR, Toronto -> CA, London -> GB, New York -> US, Dubai -> AE.
 - If the city is genuinely ambiguous or cannot be confidently associated with a country, return null rather than guessing.
 - Never put emojis, flags, punctuation, URLs, hashtags, or decorative characters into city or country values.
-- These fields are stored for reporting and normalization, so the city value should contain only the canonical place name and the country value should contain only the ISO alpha-2 code when known.
+- These fields are stored for reporting and normalization, so each city value should contain only canonical place names. For multiple origins, use a comma-separated list of canonical city names only.
 - The application separately creates an ASCII-safe reporting key from the canonical city and ISO country. Do not create or guess a UN/LOCODE yourself.
 
 Cargo/measurement extraction:
@@ -64,17 +66,31 @@ Passenger/sender role extraction — business priority:
 - Never infer passenger from a date that is unrelated to travel, and never infer shipper merely because goods are listed.
 - Use exactly "passenger" or "shipper"; otherwise null.
 
-Date and transport extraction:
-- The current date for date interpretation is supplied by the application context. When a date in the source does NOT include a year, do NOT assume an old/default year and do NOT use the model's training-data year.
-- A date without a year must be interpreted as a recent date relative to the current date: consider the current month and the previous two calendar months, and choose the nearest plausible occurrence supported by the message context.
-- For example, if the current date is in September 2026, "12 Sep" means 2026-09-12, not 2024-09-12 or another historical year.
+Date extraction is mandatory when a travel/shipment date is explicitly present:
+- Extract every explicit date that clearly refers to departure, travel, flight, delivery, or shipment timing. Do not omit a date merely because it is written in Persian, Jalali, Arabic-script numerals, English, or with a month name.
+- Examples that MUST be recognized include "۳۰ شهریور", "30 شهریور", "۲۱ آگوست", "21 August", "21 Agust", "۱۱ سپتامبر", and equivalent forms.
+- If the date is attached to a route or travel phrase, it is a departure/travel date unless the source explicitly labels it as arrival/delivery/another date.
+- The current date for date interpretation is supplied by the application context. When a date does NOT include a year, resolve it relative to the current date using the current month and previous two calendar months, choosing the nearest plausible occurrence supported by the message context.
 - If the source explicitly includes a year, preserve that explicit year unless it is clearly a formatting/calendar artifact that the source itself resolves.
-- If a Jalali/Persian date is given without a Gregorian year, interpret it using the same recent-date rule and return the corresponding Gregorian date for departure_date.
-- Extract departure_date as ISO YYYY-MM-DD whenever the year is known or can be resolved by the recent-date rule.
-- If a date is given in another calendar and the corresponding Gregorian date is explicitly available, keep the explicit Gregorian date in departure_date; do not calculate conversions yourself unless the recent-date interpretation is required and unambiguous.
+- Persian/Jalali dates without a Gregorian year MUST be converted to the corresponding Gregorian ISO date when the year can be resolved from the current-date rule. Do not leave a clearly resolvable Jalali date as null.
+- If a message contains both a Jalali date and a Gregorian date that appear to refer to the SAME travel event, treat them as date evidence for that event. If they are equivalent representations, return the corresponding Gregorian date once. If they genuinely conflict, do not silently choose one; prefer the date explicitly tied to the travel/flight event and use the other explicit date only if it is clearly a second event.
+- For the current-date example September 2026: "۳۰ شهریور" resolves to 2026-09-21 when it is the relevant travel date; "21 August" resolves to 2026-08-21 when it is the relevant travel date.
+- Extract departure_date as ISO YYYY-MM-DD whenever the date is explicit and the year is known or can be resolved.
+- Do not omit departure_date because the message also contains other fields such as cargo type, username, hashtags, or a second date.
 - Never turn a day/month without a year into a date from years ago merely because that date exists in training data.
 - Never guess dates when the date is genuinely ambiguous.
-- Translate transport_type into concise Persian for the outbound Telegram message only through the delivery formatter; the stored extracted value should reflect the source meaning.
+
+Transport type — STRICT ENUM:
+- transport_type MUST be exactly ONE of these three values and NOTHING ELSE: "هوایی", "زمینی", "دریایی".
+- NEVER output English values such as "air", "post", "road", "land", "sea", "flight", "plane", or "ship".
+- NEVER output source words such as "هوا", "هواپیما", "پست", "ماشین", "اتوبوس", "قطار", "کشتی" as the stored transport_type. Normalize them to the allowed value.
+- Air travel/flight/airplane/airport/🛬/🛫/پرواز/هواپیما/هوا -> "هوایی".
+- Ground transport by car, truck, bus, train, road, زمینی, ماشین, اتوبوس, قطار, جاده, پست زمینی -> "زمینی" only when the source clearly indicates ground transport.
+- Sea/maritime/ship/boat/کشتی/دریا/دریایی -> "دریایی".
+- "پست" by itself is NOT a fourth transport type. If the source only says "پست" and does not specify air/ground/sea, set transport_type to null rather than outputting "post".
+- If the route includes a flight, airplane, airport, takeoff/landing marker, or explicit flight date/schedule, transport_type MUST be "هوایی".
+- If the source explicitly says a mode that maps to one of the three values, normalize it to that value.
+- If the mode cannot be determined confidently, return null. Do not invent a fourth value.
 
 Existing transfer normalization rules:
 - title must be concise, natural English. Translate non-English text; never transliterate. No URLs, hashtags, emojis, or explanations.

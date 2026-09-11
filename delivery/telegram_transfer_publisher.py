@@ -149,7 +149,7 @@ class TelegramTransferPublisher:
             raise TransferTelegramPublishError("Transfer advertisement requires both origin_city and destination_city")
 
         transfer_role = cls._value(data, "transfer_role")
-        role = {"passenger": "#مسافر", "shipper": "#ارسال_کننده"}.get((transfer_role or "").lower())
+        role = {"passenger": "✈️ مسافر", "shipper": "📦 ارسال بار"}.get((transfer_role or "").lower())
         lines = [role] if role else []
         lines.extend([
             cls._location_line("📍 مبدا", origin, cls._value(data, "origin_country")),

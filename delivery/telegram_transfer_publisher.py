@@ -35,9 +35,13 @@ class TelegramTransferPublisher:
             conn.execute("""CREATE TABLE IF NOT EXISTS telegram_transfer_publications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, message_row_id INTEGER NOT NULL UNIQUE,
                 channel_username TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'waiting',
-                telegram_message_id INTEGER, error TEXT, processed_at TEXT,
+                telegram_message_id INTEGER, ad_number INTEGER UNIQUE, error TEXT, processed_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(message_row_id) REFERENCES messages(id) ON DELETE CASCADE)""")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(telegram_transfer_publications)").fetchall()}
+            if "ad_number" not in columns:
+                conn.execute("ALTER TABLE telegram_transfer_publications ADD COLUMN ad_number INTEGER")
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transfer_publication_ad_number ON telegram_transfer_publications(ad_number)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_publication_status ON telegram_transfer_publications(status)")
             conn.commit()
         finally:
@@ -154,10 +158,14 @@ class TelegramTransferPublisher:
         if not origin or not destination:
             raise TransferTelegramPublishError("Transfer advertisement requires both origin_city and destination_city")
 
-        lines = [
+        lines = []
+        ad_number = record.get("ad_number")
+        if ad_number is not None:
+            lines.append(f"TR-{int(ad_number):06d}")
+        lines.extend([
             cls._location_line("مبدا", origin, cls._value(data, "origin_country")),
             cls._location_line("مقصد", destination, cls._value(data, "destination_country")),
-        ]
+        ])
         cargo = cls._value(data, "cargo_type")
         if cargo:
             lines.append(f"📦 نوع بار: {cargo}")
@@ -205,6 +213,7 @@ class TelegramTransferPublisher:
         try:
             rows = conn.execute("""SELECT m.id AS message_row_id, m.channel_username, m.message_id, m.sender_username,
                 m.ai_status, m.ai_category, m.raw_text, m.text,
+                p.ad_number,
                 t.title, t.description, t.origin_city, t.origin_province, t.origin_country,
                 t.destination_city, t.destination_province, t.destination_country, t.airline,
                 t.flight_number, t.departure_date, t.departure_time, t.arrival_date, t.arrival_time,
@@ -219,13 +228,27 @@ class TelegramTransferPublisher:
             conn.close()
 
     @staticmethod
-    def _claim(message_row_id, channel_username):
+    def _next_ad_number(conn):
+        row = conn.execute("SELECT COALESCE(MAX(ad_number), 7239) + 1 AS next_number FROM telegram_transfer_publications").fetchone()
+        return int(row["next_number"])
+
+    @classmethod
+    def _claim(cls, message_row_id, channel_username):
         conn = database.get_connection()
         try:
-            conn.execute("""INSERT INTO telegram_transfer_publications(message_row_id,channel_username,status)
-                VALUES(?,?, 'processing') ON CONFLICT(message_row_id) DO UPDATE SET
-                channel_username=excluded.channel_username, status='processing', error=NULL""", (message_row_id, channel_username))
+            existing = conn.execute("SELECT ad_number FROM telegram_transfer_publications WHERE message_row_id=?", (message_row_id,)).fetchone()
+            if existing and existing["ad_number"] is not None:
+                ad_number = int(existing["ad_number"])
+                conn.execute("UPDATE telegram_transfer_publications SET channel_username=?, status='processing', error=NULL WHERE message_row_id=?", (channel_username, message_row_id))
+            else:
+                ad_number = cls._next_ad_number(conn)
+                if existing:
+                    conn.execute("UPDATE telegram_transfer_publications SET channel_username=?, status='processing', ad_number=?, error=NULL WHERE message_row_id=?", (channel_username, ad_number, message_row_id))
+                else:
+                    conn.execute("""INSERT INTO telegram_transfer_publications(message_row_id,channel_username,status,ad_number)
+                        VALUES(?,?, 'processing', ?)""", (message_row_id, channel_username, ad_number))
             conn.commit()
+            return ad_number
         finally:
             conn.close()
 
@@ -243,7 +266,8 @@ class TelegramTransferPublisher:
         records = self._pending_records(limit)
         result = {"found": len(records), "sent": 0, "failed": 0, "rejected": 0}
         for record in records:
-            self._claim(record["message_row_id"], record["channel_username"])
+            ad_number = self._claim(record["message_row_id"], record["channel_username"])
+            record["ad_number"] = ad_number
             data = {key: record.get(key) for key in (
                 "title", "description", "origin_city", "origin_province", "origin_country",
                 "destination_city", "destination_province", "destination_country", "airline",
@@ -254,14 +278,14 @@ class TelegramTransferPublisher:
                 sent = await self._send_message(self.format_ad(record, data), self._contact_button(record))
                 self._result(record["message_row_id"], "sent", telegram_message_id=sent.get("message_id"))
                 result["sent"] += 1
-                logger.info("[TRANSFER TELEGRAM] sent message=%s telegram_message_id=%s", record.get("message_id"), sent.get("message_id"))
+                logger.info("[TRANSFER TELEGRAM] sent ad=%s message=%s telegram_message_id=%s", record.get("ad_number"), record.get("message_id"), sent.get("message_id"))
             except TransferTelegramPublishError as exc:
                 status = "rejected" if "requires both origin_city" in str(exc) else "retry"
                 self._result(record["message_row_id"], status, error=str(exc)[:4000])
                 result["rejected" if status == "rejected" else "failed"] += 1
-                logger.warning("[TRANSFER TELEGRAM] %s message=%s reason=%s", status, record.get("message_id"), exc)
+                logger.warning("[TRANSFER TELEGRAM] %s ad=%s message=%s reason=%s", status, record.get("ad_number"), record.get("message_id"), exc)
             except Exception as exc:
                 self._result(record["message_row_id"], "retry", error=str(exc)[:4000])
                 result["failed"] += 1
-                logger.exception("[TRANSFER TELEGRAM] failed message=%s", record.get("message_id"))
+                logger.exception("[TRANSFER TELEGRAM] failed ad=%s message=%s", record.get("ad_number"), record.get("message_id"))
         return result

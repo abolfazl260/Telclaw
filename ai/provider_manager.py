@@ -67,8 +67,16 @@ class AIProviderManager:
         self._unavailable_until[index] = time.monotonic() + seconds
 
     def _next_available(self):
+        """Return the next available provider, wrapping to the first provider."""
         now = time.monotonic()
-        for index in range(self.active_index + 1, len(self.providers)):
+        provider_count = len(self.providers)
+        if provider_count <= 1:
+            return None
+
+        # Continue in priority order, but wrap after the last provider so a
+        # completed provider cycle can start again from provider #1.
+        for offset in range(1, provider_count + 1):
+            index = (self.active_index + offset) % provider_count
             if self._unavailable_until[index] <= now:
                 return index
         return None
@@ -84,17 +92,28 @@ class AIProviderManager:
                 last_error = exc
                 if not self._is_failover_error(exc):
                     raise
+
+                current_index = self.active_index
                 next_index = self._next_available()
                 if next_index is not None:
                     cooldown = getattr(exc, "retry_after", None) if getattr(exc, "status", None) == 429 else None
-                    self._mark_unavailable(self.active_index, cooldown)
+                    self._mark_unavailable(current_index, cooldown)
+                    wrapped = next_index <= current_index
                     self.active_index = next_index
+                    if wrapped:
+                        attempts += 1
                     continue
+
+                # Every configured provider is currently unavailable. Count
+                # this as a completed failover cycle and, once a provider is
+                # available again, resume from the highest-priority provider.
                 if attempts >= config.AI_RETRY_COUNT:
                     raise
-                self._mark_unavailable(self.active_index, getattr(exc, "retry_after", None))
-                self._select_highest_priority_available(force=True)
+
+                self._mark_unavailable(current_index, getattr(exc, "retry_after", None))
                 attempts += 1
+                self._select_highest_priority_available(force=True)
+
         raise last_error
 
     def classify(self, text):

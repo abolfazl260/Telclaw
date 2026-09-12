@@ -9,6 +9,13 @@ from ai.classification_service import CategoryClassificationService
 from ai.groq_connection_test import test_groq_connection
 from collection.media_downloader import download_photo_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
+from delivery.telegram_transfer import (
+    get_ready_transfer_ads,
+    get_transfer_queue_status,
+    get_unsent_transfer_ads,
+    get_unsent_transfer_ads_count,
+    send_transfer_ads,
+)
 from services.processing_service import ProcessingService
 import config
 from ui import ConsoleUI
@@ -49,7 +56,7 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("Information Processing Queue")
         self.show_message("Checking the processing queue in the database...", Fore.CYAN)
         try:
-            result = self.processing_service.process_pending_with_stats()
+            result = await asyncio.to_thread(self.processing_service.process_pending_with_stats)
             self.show_message(
                 f"Completed. Found: {result['found']} | "
                 f"Processed: {result['processed']} | Failed: {result['failed']}",
@@ -65,24 +72,40 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("AI Processing Queue")
         self.show_message("Checking the AI queue in the database...", Fore.CYAN)
         try:
+            client = await self.connect_client()
+            if client is None:
+                self.show_message(
+                    "AI queue requires a connected Telegram account because housing media may need to be downloaded.",
+                    Fore.RED,
+                )
+                await self.pause()
+                return
+
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
-            result = self.ai_service.process_pending_with_stats()
+            result = await asyncio.to_thread(self.ai_service.process_pending_with_stats)
             if result.get("disabled"):
                 self.show_message("AI extraction is disabled in configuration.", Fore.YELLOW)
             else:
+                remaining = result.get("remaining", 0)
+                if result.get("stopped"):
+                    status = f"Stopped. Remaining pending: {remaining}"
+                else:
+                    status = f"Completed. Remaining pending: {remaining}"
                 self.show_message(
-                    f"Completed. Found: {result['found']} | "
+                    f"{status} | Found: {result['found']} | "
                     f"Processed: {result['processed']} | Failed: {result['failed']} | "
                     f"Skipped: {result['skipped']}",
-                    Fore.GREEN if result["failed"] == 0 else Fore.YELLOW,
+                    Fore.GREEN if result["failed"] == 0 and not result.get("stopped") else Fore.YELLOW,
                 )
         except Exception as exc:
             self.show_message(f"AI queue failed: {exc}", Fore.RED)
         await self.pause()
 
     def show_classification_queue_summary(self):
-        """Render a fresh, database-backed snapshot of the classification queue."""
+        """Render a queue snapshot using the exact eligibility query used by the worker."""
         status = self.classification_service.repository.get_classification_queue_status()
+        pending_records = self.classification_service.repository.get_classification_pending(limit=100000)
+        status["pending"] = len(pending_records)
         self.show_section_header("AI Category Classification")
         print(f"{Fore.GREEN}│  Pending:     {status['pending']}")
         print(f"{Fore.GREEN}│  Processing:  {status['processing']}")
@@ -113,7 +136,7 @@ class SystemConsoleUI(ConsoleUI):
             return
         self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
         try:
-            result = self.classification_service.process_pending_with_stats(limit=batch_size)
+            result = await asyncio.to_thread(self.classification_service.process_pending_with_stats, batch_size)
             if result.get("disabled"):
                 self.show_message("AI category classification is disabled in configuration.", Fore.YELLOW)
                 self.show_message("Set TELCLAW_AI_CLASSIFICATION_ENABLED=true to enable it.", Fore.YELLOW)
@@ -145,9 +168,10 @@ class SystemConsoleUI(ConsoleUI):
         print(f"{Fore.GREEN}│  Enabled: {config.AI_CLASSIFICATION_ENABLED}")
         print(f"{Fore.GREEN}│  Default batch size: {config.AI_CLASSIFICATION_BATCH_SIZE}")
         print(f"{Fore.GREEN}│  Maximum retries: {config.AI_CLASSIFICATION_MAX_RETRIES}")
+        print(f"{Fore.GREEN}│  1. ⬅ Back")
         self.show_section_footer()
         self.show_message("Set TELCLAW_AI_CLASSIFICATION_BATCH_SIZE in configuration to change the default.", Fore.CYAN)
-        await self.pause()
+        await self._prompt_back()
 
     async def classification_menu(self):
         """Open the manual controls for the independent AI classification queue."""
@@ -158,8 +182,8 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  1. Start Classification")
             print(f"{Fore.GREEN}│  2. View Queue Status")
             print(f"{Fore.GREEN}│  3. Retry Failed")
-            print(f"{Fore.GREEN}│  4. Back")
-            print(f"{Fore.GREEN}│  5. Classification Settings")
+            print(f"{Fore.GREEN}│  4. Classification Settings")
+            print(f"{Fore.GREEN}│  5. ⬅ Back")
             self.show_section_footer()
             choice = await self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
             if choice == "1":
@@ -172,9 +196,193 @@ class SystemConsoleUI(ConsoleUI):
             elif choice == "3":
                 await self.retry_failed_classifications()
             elif choice == "4":
-                return
-            else:
                 await self.classification_settings()
+            else:
+                return
+
+    @staticmethod
+    def _transfer_status_label(status):
+        return {
+            "sent": "SENT",
+            "failed": "FAILED",
+            "waiting": "NOT SENT",
+        }.get(status, "NOT SENT")
+
+    @staticmethod
+    def _format_transfer_record(record, index):
+        origin = record.get("origin_city") or record.get("origin_country") or "?"
+        destination = record.get("destination_city") or record.get("destination_country") or "?"
+        title = record.get("title") or f"{origin} → {destination}"
+        price = record.get("price")
+        currency = record.get("currency") or ""
+        price_text = f"{price} {currency}".strip() if price is not None else "-"
+        departure = " ".join(
+            value for value in (record.get("departure_date"), record.get("departure_time")) if value
+        ) or "-"
+        return (
+            f"{Fore.GREEN}│  {index:>2}. {title}\n"
+            f"{Fore.GREEN}│      Route: {origin} → {destination} | "
+            f"Departure: {departure} | Price: {price_text}\n"
+            f"{Fore.GREEN}│      Contact: {record.get('contact') or '-'} | "
+            f"Status: {SystemConsoleUI._transfer_status_label(record.get('delivery_status'))} | "
+            f"Source: @{record.get('channel_username') or 'unknown'}"
+        )
+
+    async def view_transfer_ads(self):
+        """Browse unsent transfer ads 20 at a time; successfully sent ads are hidden."""
+        page_size = 20
+        offset = 0
+
+        while True:
+            self.clear_screen()
+            self.show_banner()
+            try:
+                total = get_unsent_transfer_ads_count()
+                records = get_unsent_transfer_ads(limit=page_size, offset=offset)
+            except Exception as exc:
+                self.show_section_header("Transfer Ads")
+                self.show_message(f"Unable to read transfer ads: {exc}", Fore.RED)
+                self.show_section_footer()
+                await self.pause()
+                return
+
+            if total == 0:
+                self.show_section_header("Transfer Ads")
+                self.show_message("No unsent transfer ads exist in the database.", Fore.YELLOW)
+                self.show_section_footer()
+                await self.pause()
+                return
+
+            current_page = (offset // page_size) + 1
+            total_pages = (total + page_size - 1) // page_size
+            self.show_section_header(
+                f"Transfer Ads — Unsent {offset + 1}-{min(offset + len(records), total)} of {total}"
+            )
+            for index, record in enumerate(records, start=offset + 1):
+                print(self._format_transfer_record(record, index))
+
+            self.show_section_footer()
+            options = {"b"}
+            if offset + page_size < total:
+                options.add("n")
+            if offset > 0:
+                options.add("p")
+
+            navigation = []
+            if "n" in options:
+                navigation.append("N = Next 20")
+            if "p" in options:
+                navigation.append("P = Previous 20")
+            navigation.append("B = Back")
+            print(f"{Fore.CYAN}│  Page {current_page}/{total_pages} | " + " | ".join(navigation))
+            self.show_section_footer()
+
+            choice = await self.prompt_choice(
+                "\nChoose an option [N/P/B]: ",
+                options,
+            )
+            if choice == "n":
+                offset += page_size
+            elif choice == "p":
+                offset = max(0, offset - page_size)
+            else:
+                return
+
+    async def send_transfer_ads(self):
+        """Send unsent transfer ads, including previous failed attempts, to a selected channel."""
+        self.clear_screen()
+        self.show_banner()
+        self.show_section_header("Send Transfer Ads")
+        try:
+            status = get_transfer_queue_status()
+            available = status["waiting"] + status["failed"]
+            if available == 0:
+                self.show_message("No transfer ads are currently available to send.", Fore.YELLOW)
+                await self.pause()
+                return
+
+            self.show_message(
+                f"Not sent: {status['waiting']} | Failed: {status['failed']} | Already sent: {status['sent']}",
+                Fore.CYAN,
+            )
+            target_channel = await self.prompt_text(
+                "Target Telegram channel (e.g. @my_channel)",
+                allow_empty=False,
+            )
+            if not target_channel.startswith("@"):
+                target_channel = f"@{target_channel}"
+
+            count_text = await self.prompt_text(
+                "How many ads should be sent",
+                default=str(min(available, 20)),
+                allow_empty=False,
+            )
+            try:
+                limit = int(count_text)
+                if limit <= 0:
+                    raise ValueError
+            except ValueError:
+                self.show_message("Number of ads must be a positive integer.", Fore.RED)
+                await self.pause()
+                return
+
+            confirm = await self.prompt_choice(
+                f"Send up to {limit} transfer ad(s) to {target_channel}? [y/n]: ",
+                {"y", "n"},
+            )
+            if confirm == "n":
+                self.show_message("Transfer delivery cancelled.", Fore.YELLOW)
+                await self.pause()
+                return
+
+            client = await self.connect_client()
+            if client is None:
+                await self.pause()
+                return
+
+            result = await send_transfer_ads(client, target_channel, limit=limit)
+            color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
+            self.show_message(
+                f"Completed. Found: {result['found']} | Sent: {result['sent']} | Failed: {result['failed']}",
+                color,
+            )
+        except Exception as exc:
+            self.show_message(f"Transfer delivery failed: {exc}", Fore.RED)
+        await self.pause()
+
+    async def transfer_ads_menu(self):
+        """Manage transfer-list delivery without crawling or AI processing."""
+        while True:
+            self.clear_screen()
+            self.show_banner()
+            self.show_section_header("Transfer Ads")
+            try:
+                status = get_transfer_queue_status()
+                print(f"{Fore.GREEN}│  📦 Total transfer ads: {status['total']}")
+                print(f"{Fore.GREEN}│  ✅ Already sent:      {status['sent']}")
+                print(f"{Fore.GREEN}│  📤 Not sent:          {status['waiting']}")
+                print(f"{Fore.GREEN}│  ❌ Failed / not sent: {status['failed']}")
+            except Exception as exc:
+                self.show_message(f"Unable to read transfer queue: {exc}", Fore.RED)
+                await self.pause()
+                return
+
+            self.show_section_footer()
+            print(f"{Fore.GREEN}│  1. 📤 Send in channel")
+            print(f"{Fore.GREEN}│  2. 📋 View unsent transfer ads (20 at a time)")
+            print(f"{Fore.GREEN}│  3. 🔄 Refresh status")
+            print(f"{Fore.GREEN}│  4. ⬅ Back")
+            self.show_section_footer()
+
+            choice = await self.prompt_choice("\nChoose an option [1-4]: ", {"1", "2", "3", "4"})
+            if choice == "1":
+                await self.send_transfer_ads()
+            elif choice == "2":
+                await self.view_transfer_ads()
+            elif choice == "3":
+                continue
+            else:
+                return
 
     async def run_advertio_delivery(self):
         self.clear_screen()
@@ -237,7 +445,7 @@ class SystemConsoleUI(ConsoleUI):
                 "Starting Advertio delivery. No Telegram crawl and no AI extraction will run.",
                 Fore.CYAN,
             )
-            result = self.advertio_service.deliver_pending(limit=limit, progress=True)
+            result = await asyncio.to_thread(self.advertio_service.deliver_pending, limit=limit, progress=True)
             color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
             self.show_message(
                 f"Completed. Found: {result['found']} | Sent: {result['sent']} | "
@@ -253,7 +461,7 @@ class SystemConsoleUI(ConsoleUI):
         self.show_banner()
         self.show_section_header("Groq Connection Test")
         try:
-            success = test_groq_connection()
+            success = await asyncio.to_thread(test_groq_connection)
             self.show_message(
                 "Groq minimal connection test succeeded."
                 if success
@@ -274,16 +482,17 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  3. 🤖 Process AI queue")
             print(f"{Fore.GREEN}│  4. 🏷️ AI Category Classification")
             print(f"{Fore.GREEN}│  5. 📤 Send eligible ads to Advertio")
-            print(f"{Fore.GREEN}│  6. 🔬 Test Groq connection")
-            print(f"{Fore.GREEN}│  7. ⚙️ Change settings")
-            print(f"{Fore.GREEN}│  8. 📋 Manage channels")
-            print(f"{Fore.GREEN}│  9. 👤 Switch / add account")
-            print(f"{Fore.GREEN}│  10. 🚪 Exit")
+            print(f"{Fore.GREEN}│  6. ✈️ Transfer Ads")
+            print(f"{Fore.GREEN}│  7. 🔬 Test Groq connection")
+            print(f"{Fore.GREEN}│  8. ⚙️ Change settings")
+            print(f"{Fore.GREEN}│  9. 📋 Manage channels")
+            print(f"{Fore.GREEN}│  10. 👤 Switch / add account")
+            print(f"{Fore.GREEN}│  11. 🚪 Exit")
             self.show_section_footer()
 
             choice = await self.prompt_choice(
-                "\nChoose an option [1-10]: ",
-                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
+                "\nChoose an option [1-11]: ",
+                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"},
             )
             if choice == "1":
                 await self.start_crawler_flow()
@@ -296,12 +505,14 @@ class SystemConsoleUI(ConsoleUI):
             elif choice == "5":
                 await self.run_advertio_delivery()
             elif choice == "6":
-                await self.run_groq_connection_test()
+                await self.transfer_ads_menu()
             elif choice == "7":
-                await self.change_settings()
+                await self.run_groq_connection_test()
             elif choice == "8":
-                await self.manage_channels()
+                await self.change_settings()
             elif choice == "9":
+                await self.manage_channels()
+            elif choice == "10":
                 await self.account_menu()
             else:
                 self.crawler.stop_all()

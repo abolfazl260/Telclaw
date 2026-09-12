@@ -76,7 +76,7 @@ Do not include flags, emojis, airport codes, UN/LOCODE, URLs, or hashtags in loc
 
 Extract every explicit date that represents travel, departure, arrival, delivery, or shipment timing.
 
-A date is valid evidence only when the date itself appears in the source message. Never use a Telegram message/post date, database timestamp, crawl date, processing date, current date, or any other metadata as the travel/shipment date unless that date is explicitly present in the source message text.
+A date is valid evidence only when the date itself appears in the source message. Never use a Telegram message/post date, database timestamp, crawl date, processing date, or any other metadata as the travel/shipment date unless that date is explicitly present in the source message text.
 
 A date is valid evidence even when it is embedded inside a sentence, placed next to emojis, separated by punctuation, or written in a nonstandard textual form.
 
@@ -97,23 +97,18 @@ Convert all extracted dates to Gregorian `YYYY-MM-DD`.
 
 If the year is explicitly stated in the source text, preserve that year.
 
-### STRICT YEAR RULE
+### YEAR INFERENCE RULE
 
-A month-and-day expression without an explicit year, such as `9 August`, `9 آگوست`, `9 Aug`, or `۹ آگوست`, MUST NOT be assigned a year by guessing.
+If a month-and-day expression has NO explicit year, use the CURRENT CALENDAR YEAR as its year.
 
-Do NOT copy the year from:
-- the Telegram message/post date
-- the crawl date
-- the processing date
-- the current application date
-- another unrelated date in metadata
-- an unrelated date elsewhere in the message
+The current calendar year means the year from the current application/system date supplied to the worker. Do NOT use the Telegram message/post date, database timestamp, crawl date, processing date, or any unrelated date as the year.
 
-If a date has no explicit year and the source text does not contain a clear, explicit year that belongs to that same date, return `null` for that date field.
+Examples:
+- `تاریخ پرواز: 9 آگوست` → if the current year is 2026, `departure_date` MUST be `2026-08-09`.
+- `9 August` → if the current year is 2026, `departure_date` MUST be `2026-08-09`.
+- `۹ آگوست` → if the current year is 2026, `departure_date` MUST be `2026-08-09`.
 
-Example: `تاریخ پرواز: 9 آگوست` means the flight date is explicitly `9 آگوست`, but because no year is stated, `departure_date` MUST be `null`. Never turn it into `2023-08-09`, `2024-08-09`, `2025-08-09`, `2026-08-09`, or any other year.
-
-If the same date is explicitly written with a year elsewhere in the source, use that year only when the text clearly indicates that both expressions refer to the same event/date.
+If an explicit year is present in the source text, always preserve that explicit year instead of using the current year.
 
 When a date is explicitly connected to a flight, departure, loading, or transport route and no separate arrival date is given, assign it to `departure_date`.
 
@@ -123,7 +118,7 @@ When a date is explicitly connected to delivery/shipment timing, preserve the di
 
 Never lose an explicitly year-qualified date merely because it is written in Persian, Jalali, mixed-language text, or informal formatting.
 
-Never invent dates or times.
+Never invent a month or day. If the source does not explicitly provide a month and day, the corresponding date field must be `null`.
 
 ## CARGO / PRICE / TRAVEL
 
@@ -171,8 +166,9 @@ Allowed normalization only:
 * clearly identifiable city → country
 * explicit date normalization to Gregorian
 * Persian/Jalali date → Gregorian
+* month/day → current calendar year when the year is not explicitly stated
 * emoji removal from `description`
 
-Yearless dates are NOT allowed to be resolved by inference. Everything else uncertain must be `null`.
+The year may be inferred ONLY for a date whose month and day are explicitly present in the source message and ONLY from the current calendar year. The month and day themselves must never be guessed or inferred. Everything else uncertain must be `null`.
 
 Return ONLY the JSON object.

@@ -50,17 +50,53 @@ class SystemConsoleUI(ConsoleUI):
 
         return download
 
+    async def _run_with_q_stop(self, operation):
+        """Run a queue operation while allowing the operator to stop it with Q + Enter."""
+        stop_event = asyncio.Event()
+
+        async def wait_for_q():
+            while not stop_event.is_set():
+                value = await asyncio.to_thread(
+                    input,
+                    "\nPress Q + Enter to stop the current command: ",
+                )
+                if value.strip().lower() == "q":
+                    stop_event.set()
+                    self.show_message(
+                        "Stop requested. The current item will finish, then the queue will stop.",
+                        Fore.YELLOW,
+                    )
+                    return
+
+        stop_task = asyncio.create_task(wait_for_q())
+        try:
+            return await operation(lambda: stop_event.is_set())
+        finally:
+            stop_event.set()
+            if not stop_task.done():
+                stop_task.cancel()
+            try:
+                await stop_task
+            except asyncio.CancelledError:
+                pass
+
     async def run_processing_queue(self):
         self.clear_screen()
         self.show_banner()
         self.show_section_header("Information Processing Queue")
         self.show_message("Checking the processing queue in the database...", Fore.CYAN)
         try:
-            result = await asyncio.to_thread(self.processing_service.process_pending_with_stats)
+            result = await self._run_with_q_stop(
+                lambda should_stop: asyncio.to_thread(
+                    self.processing_service.process_pending_with_stats,
+                    should_stop=should_stop,
+                )
+            )
+            status = "Stopped" if result.get("stopped") else "Completed"
             self.show_message(
-                f"Completed. Found: {result['found']} | "
+                f"{status}. Found: {result['found']} | "
                 f"Processed: {result['processed']} | Failed: {result['failed']}",
-                Fore.GREEN if result["failed"] == 0 else Fore.YELLOW,
+                Fore.GREEN if result["failed"] == 0 and not result.get("stopped") else Fore.YELLOW,
             )
         except Exception as exc:
             self.show_message(f"Processing queue failed: {exc}", Fore.RED)
@@ -82,7 +118,12 @@ class SystemConsoleUI(ConsoleUI):
                 return
 
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
-            result = await asyncio.to_thread(self.ai_service.process_pending_with_stats)
+            result = await self._run_with_q_stop(
+                lambda should_stop: asyncio.to_thread(
+                    self.ai_service.process_pending_with_stats,
+                    should_stop=should_stop,
+                )
+            )
             if result.get("disabled"):
                 self.show_message("AI extraction is disabled in configuration.", Fore.YELLOW)
             else:
@@ -152,13 +193,20 @@ class SystemConsoleUI(ConsoleUI):
         self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
         total_found = total_processed = total_failed = total_skipped = 0
         batch_number = 0
+        stopped = False
 
-        try:
+        async def process_batches(should_stop):
+            nonlocal total_found, total_processed, total_failed, total_skipped, batch_number, stopped
             while True:
+                if should_stop():
+                    stopped = True
+                    break
+
                 batch_number += 1
                 result = await asyncio.to_thread(
                     self.classification_service.process_pending_with_stats,
                     batch_size,
+                    should_stop=should_stop,
                 )
 
                 if result.get("disabled"):
@@ -172,6 +220,7 @@ class SystemConsoleUI(ConsoleUI):
                 total_skipped += result["skipped"]
 
                 if result["found"] == 0 or result.get("stopped"):
+                    stopped = stopped or result.get("stopped", False)
                     break
 
                 remaining = len(
@@ -181,6 +230,10 @@ class SystemConsoleUI(ConsoleUI):
                     )
                 )
                 if remaining == 0:
+                    break
+
+                if should_stop():
+                    stopped = True
                     break
 
                 self.show_message(
@@ -197,14 +250,22 @@ class SystemConsoleUI(ConsoleUI):
                     )
                     remaining_wait = batch_interval
                     while remaining_wait > 0:
+                        if should_stop():
+                            stopped = True
+                            break
                         seconds_left = int(remaining_wait + 0.999999)
                         print(f"[AI CLASSIFICATION] Next batch in {seconds_left}s")
                         await asyncio.sleep(min(1.0, remaining_wait))
                         remaining_wait -= 1.0
+                    if stopped:
+                        break
 
-            color = Fore.GREEN if total_failed == 0 else Fore.YELLOW
+        try:
+            await self._run_with_q_stop(process_batches)
+            color = Fore.GREEN if total_failed == 0 and not stopped else Fore.YELLOW
+            status = "Stopped" if stopped else "Completed"
             self.show_message(
-                f"Completed. Found: {total_found} | Classified: {total_processed} | "
+                f"{status}. Found: {total_found} | Classified: {total_processed} | "
                 f"Failed: {total_failed} | Skipped: {total_skipped}",
                 color,
             )

@@ -134,21 +134,83 @@ class SystemConsoleUI(ConsoleUI):
         if batch_size is None:
             await self.pause()
             return
-        self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
+
+        interval_value = await self.prompt_text(
+            "Batch interval in seconds",
+            default="20",
+            allow_empty=False,
+        )
         try:
-            result = await asyncio.to_thread(self.classification_service.process_pending_with_stats, batch_size)
-            if result.get("disabled"):
-                self.show_message("AI category classification is disabled in configuration.", Fore.YELLOW)
-                self.show_message("Set TELCLAW_AI_CLASSIFICATION_ENABLED=true to enable it.", Fore.YELLOW)
-            else:
-                color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
-                self.show_message(
-                    f"Completed. Found: {result['found']} | Classified: {result['processed']} | "
-                    f"Failed: {result['failed']} | Skipped: {result['skipped']}",
-                    color,
+            batch_interval = float(interval_value)
+            if batch_interval < 0:
+                raise ValueError
+        except ValueError:
+            self.show_message("Batch interval must be zero or a positive number.", Fore.RED)
+            await self.pause()
+            return
+
+        self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
+        total_found = total_processed = total_failed = total_skipped = 0
+        batch_number = 0
+
+        try:
+            while True:
+                batch_number += 1
+                result = await asyncio.to_thread(
+                    self.classification_service.process_pending_with_stats,
+                    batch_size,
                 )
+
+                if result.get("disabled"):
+                    self.show_message("AI category classification is disabled in configuration.", Fore.YELLOW)
+                    self.show_message("Set TELCLAW_AI_CLASSIFICATION_ENABLED=true to enable it.", Fore.YELLOW)
+                    break
+
+                total_found += result["found"]
+                total_processed += result["processed"]
+                total_failed += result["failed"]
+                total_skipped += result["skipped"]
+
+                if result["found"] == 0 or result.get("stopped"):
+                    break
+
+                remaining = len(
+                    await asyncio.to_thread(
+                        self.classification_service.repository.get_classification_pending,
+                        limit=100000,
+                    )
+                )
+                if remaining == 0:
+                    break
+
+                self.show_message(
+                    f"Batch {batch_number} completed. Found: {result['found']} | "
+                    f"Classified: {result['processed']} | Failed: {result['failed']} | "
+                    f"Skipped: {result['skipped']}",
+                    Fore.GREEN if result["failed"] == 0 else Fore.YELLOW,
+                )
+
+                if batch_interval > 0:
+                    self.show_message(
+                        f"Waiting {batch_interval:g} seconds before the next batch...",
+                        Fore.CYAN,
+                    )
+                    remaining_wait = batch_interval
+                    while remaining_wait > 0:
+                        seconds_left = int(remaining_wait + 0.999999)
+                        print(f"[AI CLASSIFICATION] Next batch in {seconds_left}s")
+                        await asyncio.sleep(min(1.0, remaining_wait))
+                        remaining_wait -= 1.0
+
+            color = Fore.GREEN if total_failed == 0 else Fore.YELLOW
+            self.show_message(
+                f"Completed. Found: {total_found} | Classified: {total_processed} | "
+                f"Failed: {total_failed} | Skipped: {total_skipped}",
+                color,
+            )
         except Exception as exc:
             self.show_message(f"Classification queue failed: {exc}", Fore.RED)
+
         self.show_classification_queue_summary()
         await self.pause()
 

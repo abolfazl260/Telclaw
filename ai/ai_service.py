@@ -28,18 +28,16 @@ class AIProcessingService:
 
     def _print_provider_status(self, prefix="[AI]"):
         print(
-            f"{prefix} provider={getattr(self.provider_manager, 'provider', 'unknown')} | "
-            f"model={getattr(self.provider_manager, 'model', None)}"
+            f"{prefix} provider={getattr(self.provider_manager, 'provider', 'unknown')}"
         )
 
     def _print_message_status(self, index, total, record, category, status, **extra):
         provider = getattr(self.provider_manager, "provider", "unknown")
-        model = getattr(self.provider_manager, "model", None)
         details = " | ".join(f"{key}={value}" for key, value in extra.items())
         suffix = f" | {details}" if details else ""
         print(
             f"[AI] {index}/{total} | message={record.get('message_id')} | "
-            f"provider={provider} | model={model} | category={category or '-'} | "
+            f"provider={provider} | category={category or '-'} | "
             f"status={status}{suffix}"
         )
 
@@ -56,10 +54,9 @@ class AIProcessingService:
 
     def _log_ai_error(self, record, exc):
         logger.error(
-            "[AI ERROR] provider=%s status=%s model=%s reason=%s message_id=%s channel=%s detail=%s",
+            "[AI ERROR] provider=%s status=%s reason=%s message_id=%s channel=%s detail=%s",
             getattr(exc, "provider", getattr(self.provider_manager, "provider", "groq-1")),
             getattr(exc, "status", None),
-            getattr(self.provider_manager, "model", None),
             getattr(exc, "reason", None),
             record.get("message_id"),
             record.get("channel_username"),
@@ -85,8 +82,8 @@ class AIProcessingService:
             base = min(2 ** retry_number, config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS)
             wait = max(config.GROQ_RATE_LIMIT_MIN_WAIT_SECONDS, min(base + random.uniform(0, min(1.0, base * 0.25)), config.GROQ_RATE_LIMIT_MAX_WAIT_SECONDS))
             reason = "exponential_backoff_jitter"
-        logger.warning("[AI RATE LIMIT] provider=%s model=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.provider_manager, "provider", "groq-1"), getattr(self.provider_manager, "model", None), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
-        print(f"[AI] rate_limit_wait | provider={getattr(self.provider_manager, 'provider', 'groq-1')} | model={getattr(self.provider_manager, 'model', None)} | retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} | wait={wait:.2f}s | reason={reason}")
+        logger.warning("[AI RATE LIMIT] provider=%s status=429 retry=%s/%s wait=%.2fs reason=%s", getattr(self.provider_manager, "provider", "groq-1"), retry_number, config.GROQ_RATE_LIMIT_MAX_RETRIES, wait, reason)
+        print(f"[AI] rate_limit_wait | provider={getattr(self.provider_manager, 'provider', 'groq-1')} | retry={retry_number}/{config.GROQ_RATE_LIMIT_MAX_RETRIES} | wait={wait:.2f}s | reason={reason}")
         time.sleep(wait)
 
     def _extract_with_retry(self, source_text, record, category, progress=False):
@@ -105,9 +102,8 @@ class AIProcessingService:
                         raise
                     invalid_json_attempts += 1
                     logger.warning(
-                        "[AI INVALID PROVIDER OUTPUT] provider=%s model=%s retry=%s/%s message_id=%s channel=%s",
+                        "[AI INVALID PROVIDER OUTPUT] provider=%s retry=%s/%s message_id=%s channel=%s",
                         getattr(self.provider_manager, "provider", "groq-1"),
-                        getattr(self.provider_manager, "model", None),
                         invalid_json_attempts,
                         config.GROQ_INVALID_JSON_MAX_RETRIES,
                         record.get("message_id"),
@@ -221,11 +217,11 @@ class AIProcessingService:
                 if progress: self._print_message_status(index, offset + total, record, category, "failed", reason=getattr(exc, "reason", "ai_error"))
                 if exc.stop_queue:
                     stopped = True
-                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 model=%s reason=%s; remaining messages stay pending", getattr(self.provider_manager, "provider", "groq-1"), self.provider_manager.model, getattr(exc, "reason", "permissions_error"))
-                    if progress: print(f"[AI] QUEUE STOPPED | message={record.get('message_id')} | provider={getattr(self.provider_manager, 'provider', 'unknown')} | model={getattr(self.provider_manager, 'model', None)} | reason={getattr(exc, 'reason', 'permissions_error')}")
+                    logger.error("[AI QUEUE STOPPED] provider=%s status=403 reason=%s; remaining messages stay pending", getattr(self.provider_manager, "provider", "groq-1"), getattr(exc, "reason", "permissions_error"))
+                    if progress: print(f"[AI] QUEUE STOPPED | message={record.get('message_id')} | provider={getattr(self.provider_manager, 'provider', 'unknown')} | reason={getattr(exc, 'reason', 'permissions_error')}")
                     break
             except Exception as exc:
-                logger.exception("[AI ERROR] provider=%s model=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.provider_manager, "provider", "groq-1"), self.provider_manager.model, record.get("message_id"), record.get("channel_username"))
+                logger.exception("[AI ERROR] provider=%s reason=unexpected_error message_id=%s channel=%s", getattr(self.provider_manager, "provider", "groq-1"), record.get("message_id"), record.get("channel_username"))
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=False, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 failed += 1
                 if progress: self._print_message_status(index, offset + total, record, category, "failed", reason="unexpected_error", detail=str(exc)[:200])

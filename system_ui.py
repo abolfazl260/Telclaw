@@ -9,6 +9,13 @@ from ai.classification_service import CategoryClassificationService
 from ai.groq_connection_test import test_groq_connection
 from collection.media_downloader import download_photo_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
+from delivery.telegram_transfer import (
+    get_ready_transfer_ads,
+    get_transfer_queue_status,
+    get_unsent_transfer_ads,
+    get_unsent_transfer_ads_count,
+    send_transfer_ads,
+)
 from services.processing_service import ProcessingService
 import config
 from ui import ConsoleUI
@@ -43,17 +50,53 @@ class SystemConsoleUI(ConsoleUI):
 
         return download
 
+    async def _run_with_q_stop(self, operation):
+        """Run a queue operation while allowing the operator to stop it with Q + Enter."""
+        stop_event = asyncio.Event()
+
+        async def wait_for_q():
+            while not stop_event.is_set():
+                value = await asyncio.to_thread(
+                    input,
+                    "\nPress Q + Enter to stop the current command: ",
+                )
+                if value.strip().lower() == "q":
+                    stop_event.set()
+                    self.show_message(
+                        "Stop requested. The current item will finish, then the queue will stop.",
+                        Fore.YELLOW,
+                    )
+                    return
+
+        stop_task = asyncio.create_task(wait_for_q())
+        try:
+            return await operation(lambda: stop_event.is_set())
+        finally:
+            stop_event.set()
+            if not stop_task.done():
+                stop_task.cancel()
+            try:
+                await stop_task
+            except asyncio.CancelledError:
+                pass
+
     async def run_processing_queue(self):
         self.clear_screen()
         self.show_banner()
         self.show_section_header("Information Processing Queue")
         self.show_message("Checking the processing queue in the database...", Fore.CYAN)
         try:
-            result = await asyncio.to_thread(self.processing_service.process_pending_with_stats)
+            result = await self._run_with_q_stop(
+                lambda should_stop: asyncio.to_thread(
+                    self.processing_service.process_pending_with_stats,
+                    should_stop=should_stop,
+                )
+            )
+            status = "Stopped" if result.get("stopped") else "Completed"
             self.show_message(
-                f"Completed. Found: {result['found']} | "
+                f"{status}. Found: {result['found']} | "
                 f"Processed: {result['processed']} | Failed: {result['failed']}",
-                Fore.GREEN if result["failed"] == 0 else Fore.YELLOW,
+                Fore.GREEN if result["failed"] == 0 and not result.get("stopped") else Fore.YELLOW,
             )
         except Exception as exc:
             self.show_message(f"Processing queue failed: {exc}", Fore.RED)
@@ -74,12 +117,13 @@ class SystemConsoleUI(ConsoleUI):
                 await self.pause()
                 return
 
-            # AI processing is synchronous and may wait on network/rate limits.
-            # Run it in a worker thread so the asyncio/Telethon event loop remains
-            # responsive. This is also required by _make_sync_media_downloader(),
-            # which schedules Telethon downloads back onto the main event loop.
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
-            result = await asyncio.to_thread(self.ai_service.process_pending_with_stats)
+            result = await self._run_with_q_stop(
+                lambda should_stop: asyncio.to_thread(
+                    self.ai_service.process_pending_with_stats,
+                    should_stop=should_stop,
+                )
+            )
             if result.get("disabled"):
                 self.show_message("AI extraction is disabled in configuration.", Fore.YELLOW)
             else:
@@ -99,8 +143,10 @@ class SystemConsoleUI(ConsoleUI):
         await self.pause()
 
     def show_classification_queue_summary(self):
-        """Render a fresh, database-backed snapshot of the classification queue."""
+        """Render a queue snapshot using the exact eligibility query used by the worker."""
         status = self.classification_service.repository.get_classification_queue_status()
+        pending_records = self.classification_service.repository.get_classification_pending(limit=100000)
+        status["pending"] = len(pending_records)
         self.show_section_header("AI Category Classification")
         print(f"{Fore.GREEN}│  Pending:     {status['pending']}")
         print(f"{Fore.GREEN}│  Processing:  {status['processing']}")
@@ -129,21 +175,103 @@ class SystemConsoleUI(ConsoleUI):
         if batch_size is None:
             await self.pause()
             return
-        self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
+
+        interval_value = await self.prompt_text(
+            "Batch interval in seconds",
+            default="20",
+            allow_empty=False,
+        )
         try:
-            result = await asyncio.to_thread(self.classification_service.process_pending_with_stats, batch_size)
-            if result.get("disabled"):
-                self.show_message("AI category classification is disabled in configuration.", Fore.YELLOW)
-                self.show_message("Set TELCLAW_AI_CLASSIFICATION_ENABLED=true to enable it.", Fore.YELLOW)
-            else:
-                color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
-                self.show_message(
-                    f"Completed. Found: {result['found']} | Classified: {result['processed']} | "
-                    f"Failed: {result['failed']} | Skipped: {result['skipped']}",
-                    color,
+            batch_interval = float(interval_value)
+            if batch_interval < 0:
+                raise ValueError
+        except ValueError:
+            self.show_message("Batch interval must be zero or a positive number.", Fore.RED)
+            await self.pause()
+            return
+
+        self.show_message("Sending ready messages to AI for category classification...", Fore.CYAN)
+        total_found = total_processed = total_failed = total_skipped = 0
+        batch_number = 0
+        stopped = False
+
+        async def process_batches(should_stop):
+            nonlocal total_found, total_processed, total_failed, total_skipped, batch_number, stopped
+            while True:
+                if should_stop():
+                    stopped = True
+                    break
+
+                batch_number += 1
+                result = await asyncio.to_thread(
+                    self.classification_service.process_pending_with_stats,
+                    batch_size,
+                    should_stop=should_stop,
                 )
+
+                if result.get("disabled"):
+                    self.show_message("AI category classification is disabled in configuration.", Fore.YELLOW)
+                    self.show_message("Set TELCLAW_AI_CLASSIFICATION_ENABLED=true to enable it.", Fore.YELLOW)
+                    break
+
+                total_found += result["found"]
+                total_processed += result["processed"]
+                total_failed += result["failed"]
+                total_skipped += result["skipped"]
+
+                if result["found"] == 0 or result.get("stopped"):
+                    stopped = stopped or result.get("stopped", False)
+                    break
+
+                remaining = len(
+                    await asyncio.to_thread(
+                        self.classification_service.repository.get_classification_pending,
+                        limit=100000,
+                    )
+                )
+                if remaining == 0:
+                    break
+
+                if should_stop():
+                    stopped = True
+                    break
+
+                self.show_message(
+                    f"Batch {batch_number} completed. Found: {result['found']} | "
+                    f"Classified: {result['processed']} | Failed: {result['failed']} | "
+                    f"Skipped: {result['skipped']}",
+                    Fore.GREEN if result["failed"] == 0 else Fore.YELLOW,
+                )
+
+                if batch_interval > 0:
+                    self.show_message(
+                        f"Waiting {batch_interval:g} seconds before the next batch...",
+                        Fore.CYAN,
+                    )
+                    remaining_wait = batch_interval
+                    while remaining_wait > 0:
+                        if should_stop():
+                            stopped = True
+                            break
+                        seconds_left = int(remaining_wait + 0.999999)
+                        print(f"[AI CLASSIFICATION] Next batch in {seconds_left}s")
+                        await asyncio.sleep(min(1.0, remaining_wait))
+                        remaining_wait -= 1.0
+                    if stopped:
+                        break
+
+        try:
+            await self._run_with_q_stop(process_batches)
+            color = Fore.GREEN if total_failed == 0 and not stopped else Fore.YELLOW
+            status = "Stopped" if stopped else "Completed"
+            self.show_message(
+                f"{status}. Found: {total_found} | Classified: {total_processed} | "
+                f"Failed: {total_failed} | Skipped: {total_skipped}",
+                color,
+            )
         except Exception as exc:
             self.show_message(f"Classification queue failed: {exc}", Fore.RED)
+
         self.show_classification_queue_summary()
         await self.pause()
 
@@ -163,9 +291,10 @@ class SystemConsoleUI(ConsoleUI):
         print(f"{Fore.GREEN}│  Enabled: {config.AI_CLASSIFICATION_ENABLED}")
         print(f"{Fore.GREEN}│  Default batch size: {config.AI_CLASSIFICATION_BATCH_SIZE}")
         print(f"{Fore.GREEN}│  Maximum retries: {config.AI_CLASSIFICATION_MAX_RETRIES}")
+        print(f"{Fore.GREEN}│  1. ⬅ Back")
         self.show_section_footer()
         self.show_message("Set TELCLAW_AI_CLASSIFICATION_BATCH_SIZE in configuration to change the default.", Fore.CYAN)
-        await self.pause()
+        await self._prompt_back()
 
     async def classification_menu(self):
         """Open the manual controls for the independent AI classification queue."""
@@ -176,8 +305,8 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  1. Start Classification")
             print(f"{Fore.GREEN}│  2. View Queue Status")
             print(f"{Fore.GREEN}│  3. Retry Failed")
-            print(f"{Fore.GREEN}│  4. Back")
-            print(f"{Fore.GREEN}│  5. Classification Settings")
+            print(f"{Fore.GREEN}│  4. Classification Settings")
+            print(f"{Fore.GREEN}│  5. ⬅ Back")
             self.show_section_footer()
             choice = await self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
             if choice == "1":
@@ -190,9 +319,193 @@ class SystemConsoleUI(ConsoleUI):
             elif choice == "3":
                 await self.retry_failed_classifications()
             elif choice == "4":
-                return
-            else:
                 await self.classification_settings()
+            else:
+                return
+
+    @staticmethod
+    def _transfer_status_label(status):
+        return {
+            "sent": "SENT",
+            "failed": "FAILED",
+            "waiting": "NOT SENT",
+        }.get(status, "NOT SENT")
+
+    @staticmethod
+    def _format_transfer_record(record, index):
+        origin = record.get("origin_city") or record.get("origin_country") or "?"
+        destination = record.get("destination_city") or record.get("destination_country") or "?"
+        title = record.get("title") or f"{origin} → {destination}"
+        price = record.get("price")
+        currency = record.get("currency") or ""
+        price_text = f"{price} {currency}".strip() if price is not None else "-"
+        departure = " ".join(
+            value for value in (record.get("departure_date"), record.get("departure_time")) if value
+        ) or "-"
+        return (
+            f"{Fore.GREEN}│  {index:>2}. {title}\n"
+            f"{Fore.GREEN}│      Route: {origin} → {destination} | "
+            f"Departure: {departure} | Price: {price_text}\n"
+            f"{Fore.GREEN}│      Contact: {record.get('contact') or '-'} | "
+            f"Status: {SystemConsoleUI._transfer_status_label(record.get('delivery_status'))} | "
+            f"Source: @{record.get('channel_username') or 'unknown'}"
+        )
+
+    async def view_transfer_ads(self):
+        """Browse unsent transfer ads 20 at a time; successfully sent ads are hidden."""
+        page_size = 20
+        offset = 0
+
+        while True:
+            self.clear_screen()
+            self.show_banner()
+            try:
+                total = get_unsent_transfer_ads_count()
+                records = get_unsent_transfer_ads(limit=page_size, offset=offset)
+            except Exception as exc:
+                self.show_section_header("Transfer Ads")
+                self.show_message(f"Unable to read transfer ads: {exc}", Fore.RED)
+                self.show_section_footer()
+                await self.pause()
+                return
+
+            if total == 0:
+                self.show_section_header("Transfer Ads")
+                self.show_message("No unsent transfer ads exist in the database.", Fore.YELLOW)
+                self.show_section_footer()
+                await self.pause()
+                return
+
+            current_page = (offset // page_size) + 1
+            total_pages = (total + page_size - 1) // page_size
+            self.show_section_header(
+                f"Transfer Ads — Unsent {offset + 1}-{min(offset + len(records), total)} of {total}"
+            )
+            for index, record in enumerate(records, start=offset + 1):
+                print(self._format_transfer_record(record, index))
+
+            self.show_section_footer()
+            options = {"b"}
+            if offset + page_size < total:
+                options.add("n")
+            if offset > 0:
+                options.add("p")
+
+            navigation = []
+            if "n" in options:
+                navigation.append("N = Next 20")
+            if "p" in options:
+                navigation.append("P = Previous 20")
+            navigation.append("B = Back")
+            print(f"{Fore.CYAN}│  Page {current_page}/{total_pages} | " + " | ".join(navigation))
+            self.show_section_footer()
+
+            choice = await self.prompt_choice(
+                "\nChoose an option [N/P/B]: ",
+                options,
+            )
+            if choice == "n":
+                offset += page_size
+            elif choice == "p":
+                offset = max(0, offset - page_size)
+            else:
+                return
+
+    async def send_transfer_ads(self):
+        """Send unsent transfer ads, including previous failed attempts, to a selected channel."""
+        self.clear_screen()
+        self.show_banner()
+        self.show_section_header("Send Transfer Ads")
+        try:
+            status = get_transfer_queue_status()
+            available = status["waiting"] + status["failed"]
+            if available == 0:
+                self.show_message("No transfer ads are currently available to send.", Fore.YELLOW)
+                await self.pause()
+                return
+
+            self.show_message(
+                f"Not sent: {status['waiting']} | Failed: {status['failed']} | Already sent: {status['sent']}",
+                Fore.CYAN,
+            )
+            target_channel = await self.prompt_text(
+                "Target Telegram channel (e.g. @my_channel)",
+                allow_empty=False,
+            )
+            if not target_channel.startswith("@"):
+                target_channel = f"@{target_channel}"
+
+            count_text = await self.prompt_text(
+                "How many ads should be sent",
+                default=str(min(available, 20)),
+                allow_empty=False,
+            )
+            try:
+                limit = int(count_text)
+                if limit <= 0:
+                    raise ValueError
+            except ValueError:
+                self.show_message("Number of ads must be a positive integer.", Fore.RED)
+                await self.pause()
+                return
+
+            confirm = await self.prompt_choice(
+                f"Send up to {limit} transfer ad(s) to {target_channel}? [y/n]: ",
+                {"y", "n"},
+            )
+            if confirm == "n":
+                self.show_message("Transfer delivery cancelled.", Fore.YELLOW)
+                await self.pause()
+                return
+
+            client = await self.connect_client()
+            if client is None:
+                await self.pause()
+                return
+
+            result = await send_transfer_ads(client, target_channel, limit=limit)
+            color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
+            self.show_message(
+                f"Completed. Found: {result['found']} | Sent: {result['sent']} | Failed: {result['failed']}",
+                color,
+            )
+        except Exception as exc:
+            self.show_message(f"Transfer delivery failed: {exc}", Fore.RED)
+        await self.pause()
+
+    async def transfer_ads_menu(self):
+        """Manage transfer-list delivery without crawling or AI processing."""
+        while True:
+            self.clear_screen()
+            self.show_banner()
+            self.show_section_header("Transfer Ads")
+            try:
+                status = get_transfer_queue_status()
+                print(f"{Fore.GREEN}│  📦 Total transfer ads: {status['total']}")
+                print(f"{Fore.GREEN}│  ✅ Already sent:      {status['sent']}")
+                print(f"{Fore.GREEN}│  📤 Not sent:          {status['waiting']}")
+                print(f"{Fore.GREEN}│  ❌ Failed / not sent: {status['failed']}")
+            except Exception as exc:
+                self.show_message(f"Unable to read transfer queue: {exc}", Fore.RED)
+                await self.pause()
+                return
+
+            self.show_section_footer()
+            print(f"{Fore.GREEN}│  1. 📤 Send in channel")
+            print(f"{Fore.GREEN}│  2. 📋 View unsent transfer ads (20 at a time)")
+            print(f"{Fore.GREEN}│  3. 🔄 Refresh status")
+            print(f"{Fore.GREEN}│  4. ⬅ Back")
+            self.show_section_footer()
+
+            choice = await self.prompt_choice("\nChoose an option [1-4]: ", {"1", "2", "3", "4"})
+            if choice == "1":
+                await self.send_transfer_ads()
+            elif choice == "2":
+                await self.view_transfer_ads()
+            elif choice == "3":
+                continue
+            else:
+                return
 
     async def run_advertio_delivery(self):
         self.clear_screen()
@@ -292,16 +605,17 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  3. 🤖 Process AI queue")
             print(f"{Fore.GREEN}│  4. 🏷️ AI Category Classification")
             print(f"{Fore.GREEN}│  5. 📤 Send eligible ads to Advertio")
-            print(f"{Fore.GREEN}│  6. 🔬 Test Groq connection")
-            print(f"{Fore.GREEN}│  7. ⚙️ Change settings")
-            print(f"{Fore.GREEN}│  8. 📋 Manage channels")
-            print(f"{Fore.GREEN}│  9. 👤 Switch / add account")
-            print(f"{Fore.GREEN}│  10. 🚪 Exit")
+            print(f"{Fore.GREEN}│  6. ✈️ Transfer Ads")
+            print(f"{Fore.GREEN}│  7. 🔬 Test Groq connection")
+            print(f"{Fore.GREEN}│  8. ⚙️ Change settings")
+            print(f"{Fore.GREEN}│  9. 📋 Manage channels")
+            print(f"{Fore.GREEN}│  10. 👤 Switch / add account")
+            print(f"{Fore.GREEN}│  11. 🚪 Exit")
             self.show_section_footer()
 
             choice = await self.prompt_choice(
-                "\nChoose an option [1-10]: ",
-                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"},
+                "\nChoose an option [1-11]: ",
+                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"},
             )
             if choice == "1":
                 await self.start_crawler_flow()
@@ -314,12 +628,14 @@ class SystemConsoleUI(ConsoleUI):
             elif choice == "5":
                 await self.run_advertio_delivery()
             elif choice == "6":
-                await self.run_groq_connection_test()
+                await self.transfer_ads_menu()
             elif choice == "7":
-                await self.change_settings()
+                await self.run_groq_connection_test()
             elif choice == "8":
-                await self.manage_channels()
+                await self.change_settings()
             elif choice == "9":
+                await self.manage_channels()
+            elif choice == "10":
                 await self.account_menu()
             else:
                 self.crawler.stop_all()

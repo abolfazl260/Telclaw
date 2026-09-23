@@ -1,5 +1,6 @@
 """Safe category-specific extraction prompt loading."""
 
+from datetime import date
 from pathlib import Path
 
 
@@ -29,10 +30,11 @@ def load_prompt(category: str) -> str:
 
 
 def render_prompt(category: str, message_text: str = "") -> str:
-    """Render the category placeholder and append the existing message context."""
+    """Render the category prompt with the current date and message context."""
     prompt = load_prompt(category).replace("{category}", category)
+    prompt = f"{prompt.rstrip()}\n\nCurrent date for relative date interpretation: {date.today().isoformat()}"
     if message_text:
-        prompt = f"{prompt.rstrip()}\n\nMessage to extract:\n{message_text}"
+        prompt = f"{prompt}\n\nMessage to extract:\n{message_text}"
     return prompt
 
 

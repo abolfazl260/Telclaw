@@ -192,7 +192,32 @@ class _GroqBatchClassifier:
             ],
             "temperature": 0,
             "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
-            "response_format": {"type": "json_object"},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "telclaw_classification",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "classifications": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "message_id": {"type": "integer"},
+                                        "category": {"type": "string", "enum": list(self.categories)},
+                                    },
+                                    "required": ["message_id", "category"],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        },
+                        "required": ["classifications"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
         }
         if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
             payload["include_reasoning"] = False

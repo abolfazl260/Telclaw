@@ -439,3 +439,30 @@ async def test_backoffice_uses_generic_rule_builder_copy(rule_db):
     assert "+ Add condition" in response.text
     assert "Existing country, city and price filters" not in response.text
     assert "+ Add destination" not in response.text
+
+
+def test_new_structured_topic_table_is_discovered_without_rule_code_change(rule_db):
+    conn = rule_db()
+    conn.execute("""CREATE TABLE eventlist (
+        id INTEGER PRIMARY KEY,
+        processed_message_id INTEGER UNIQUE,
+        event_type TEXT,
+        city TEXT
+    )""")
+    conn.execute("INSERT INTO messages VALUES(3,'eventlist','processed',13,'carol','events_source')")
+    conn.execute("INSERT INTO eventlist(processed_message_id,event_type,city) VALUES(3,'conference','Toronto')")
+    conn.commit()
+    conn.close()
+
+    assert "eventlist" in routing_rules.categories()
+    assert routing_rules.category_fields("eventlist") == ("event_type", "city")
+
+    routing_rules.save_target("Events", "@eventchannel")
+    routing_rules.save_rule(
+        "Toronto conferences", "eventlist", "", "either", 1, delivery_mode="manual",
+        conditions=[
+            {"field": "event_type", "operator": "eq", "value": "conference"},
+            {"join": "and", "field": "city", "operator": "eq", "value": "Toronto"},
+        ],
+    )
+    assert routing_rules.rule_matches(1)[1]["total"] == 1

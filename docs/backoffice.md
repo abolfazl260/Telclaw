@@ -38,6 +38,7 @@ group/channel chat ID such as `-100...`. Then create a rule:
   whether it must match the origin, destination, or either. Housing checks its
   `country_code`; job listings have no structured country field and should use
   category-only rules.
+- **Other conditions:** source Telegram channel, exact origin and destination city, and minimum/maximum numeric price. All populated conditions in one rule must match.
 - **Priority:** smaller numbers run first. The first matching rule wins by default.
   Check **Continue** to allow later matching rules to publish to additional
   destinations. Repeated matches to the same destination are deduplicated.

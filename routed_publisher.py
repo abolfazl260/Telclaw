@@ -73,6 +73,12 @@ class RoutedPublisher:
                 continue
             try:
                 if record["ai_category"] == "transferlist":
+                    # Preserve the existing TR-XXXXXX numbering scheme used by the
+                    # legacy transfer publisher. The number is message-scoped, so
+                    # retries and multiple publishing targets keep the same ID.
+                    record["ad_number"] = TelegramTransferPublisher._claim(
+                        message_id, rule["chat_id"]
+                    )
                     text = TelegramTransferPublisher.format_ad(record, record)
                     markup = TelegramTransferPublisher._contact_button(record)
                 else:

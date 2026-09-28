@@ -23,6 +23,20 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
 3. Configure a reverse proxy with a valid HTTPS certificate to forward the public
    URL to `http://127.0.0.1:8787`. Do not expose port 8787 directly to the internet.
    The browser session cookie is marked `Secure`, so the public URL must use HTTPS.
+   For direct access by server IP and port without a reverse proxy, set:
+
+   ```dotenv
+   TELCLAW_BACKOFFICE_PUBLIC_URL=https://SERVER_PUBLIC_IP:8787
+   TELCLAW_BACKOFFICE_PUBLIC_PORT=0
+   TELCLAW_BACKOFFICE_HOST=0.0.0.0
+   TELCLAW_BACKOFFICE_PORT=8787
+   TELCLAW_BACKOFFICE_TLS_CERT=/path/to/ip-certificate.pem
+   TELCLAW_BACKOFFICE_TLS_KEY=/path/to/private-key.pem
+   ```
+
+   The certificate must be valid for that IP address. Allow incoming TCP 8787
+   through the server firewall. Keep the TLS private key readable only by the
+   service account. Restart Telclaw and request a fresh link from the bot.
    To include a port in the Telegram link, set `TELCLAW_BACKOFFICE_PUBLIC_PORT=8443`
    and configure the HTTPS reverse proxy to listen on 8443. A public IP can replace
    the domain in `TELCLAW_BACKOFFICE_PUBLIC_URL` only if HTTPS has a certificate valid

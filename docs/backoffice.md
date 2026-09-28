@@ -37,6 +37,19 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    The certificate must be valid for that IP address. Allow incoming TCP 8787
    through the server firewall. Keep the TLS private key readable only by the
    service account. Restart Telclaw and request a fresh link from the bot.
+   If you explicitly want direct HTTP without TLS, use:
+
+   ```dotenv
+   TELCLAW_BACKOFFICE_PUBLIC_URL=http://SERVER_PUBLIC_IP:8787
+   TELCLAW_BACKOFFICE_PUBLIC_PORT=0
+   TELCLAW_BACKOFFICE_HOST=0.0.0.0
+   TELCLAW_BACKOFFICE_PORT=8787
+   TELCLAW_BACKOFFICE_TLS_CERT=
+   TELCLAW_BACKOFFICE_TLS_KEY=
+   ```
+
+   Open TCP port 8787 in the firewall. Direct HTTP exposes the one-time login
+   link and browser session to anyone who can observe the network connection.
    To include a port in the Telegram link, set `TELCLAW_BACKOFFICE_PUBLIC_PORT=8443`
    and configure the HTTPS reverse proxy to listen on 8443. A public IP can replace
    the domain in `TELCLAW_BACKOFFICE_PUBLIC_URL` only if HTTPS has a certificate valid

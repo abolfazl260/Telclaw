@@ -212,7 +212,7 @@ async def index(request):
             <label>Telegram ID or username<input name="chat_id" value="{_escape(target['chat_id'])}" required></label>
             <label>Purpose / notes<textarea name="description" maxlength="500" rows="3">{_escape(target.get('description'))}</textarea></label>
             <label><input type="checkbox" name="enabled" {"checked" if target['enabled'] else ""}> Enabled</label>
-            <button>Save destination</button></form></details>
+            <button>Save channel / group</button></form></details>
             <div class="subsection"><h3>Publishing rules</h3>{rule_rows or '<p>No rules for this channel yet.</p>'}
             <details><summary>Add a rule for this channel</summary>{_rule_form(None, target, csrf)}</details></div>
             <details class="subsection"><summary>Delivery history ({len(history)})</summary><div class="scroll"><table>
@@ -241,6 +241,9 @@ async def index(request):
     .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}
     .rule-panel{{padding:1rem;margin:.8rem 0;border:1px solid #dce4ef;border-radius:10px;background:white}}
     .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:1rem}}
+    .conditions-editor{{flex:1 1 100%;border:1px solid #dce4ef;border-radius:9px;padding:.7rem;background:#f8faff}}
+    .condition-row{{display:grid;grid-template-columns:90px minmax(140px,1fr) 140px minmax(150px,1fr) auto;gap:.45rem;align-items:center;margin:.45rem 0}}
+    .condition-row:first-child .condition-join{{visibility:hidden}}@media(max-width:760px){{.condition-row{{grid-template-columns:1fr}}.condition-row:first-child .condition-join{{display:none}}}}
     .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
     .ad-row p{{margin:.3rem 0}}.ad-row form{{display:inline-flex;padding:0}}
     .ad-row pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;background:#f5f7fb;padding:.7rem}}
@@ -251,9 +254,9 @@ async def index(request):
     <a href="/data">Database</a><a href="/health">System Health</a></nav>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
-    <p class="hint">Rules run by priority. Unmatched ads are not published. Check that the bot can post to each destination.</p>
-    <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add destination</button>
-    <div class="grid">{''.join(rows) or '<p>No destinations yet.</p>'}</div>
+    <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
+    <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add channel / group</button>
+    <div class="grid">{''.join(rows) or '<p>No publishing channels or groups yet.</p>'}</div>
     <dialog id="target-new"><button type="button" data-close>Close</button><h2>New channel or group</h2>
     <form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
     <label>Name<input name="label" placeholder="Name" required></label>
@@ -262,30 +265,63 @@ async def index(request):
     <label><input type="checkbox" name="enabled" checked> Enabled</label><button>Save</button></form></dialog></section>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}"><button>Log out</button></form>
     <script nonce="{request['csp_nonce']}">
-    const fields={json.dumps({key: list(value) for key,value in routing_rules.FILTER_FIELDS.items()})};
+    const fields={json.dumps({key: list(value) for key,value in routing_rules.filter_fields().items()})};
     document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.open).showModal()));
     document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
     document.querySelectorAll('[data-confirm]').forEach(b=>b.closest('form').addEventListener('submit',e=>{{
       if(!confirm(b.dataset.confirm)) e.preventDefault();
     }}));
-    document.querySelectorAll('select[name="category"]').forEach(category=>{{
-      const form=category.closest('form');const field=form.querySelector('select[name="filter_field"]');
-      const value=form.querySelector('select[name="filter_value"]');
-      const savedField=field.dataset.selected;const savedValue=value.dataset.selected;
-      async function updateValues(selected){{value.replaceChildren();
-        const add=(v,label)=>{{const opt=document.createElement('option');opt.value=v;opt.textContent=label;value.append(opt);}};
-        add('','Any value');if(!field.value) return;
+    const operators=[
+      ['eq','='],['ne','≠'],['contains','contains'],['not_contains','does not contain'],
+      ['gt','>'],['gte','≥'],['lt','<'],['lte','≤'],['empty','is empty'],['not_empty','is not empty']
+    ];
+    document.querySelectorAll('.conditions-editor').forEach(editor=>{{
+      const form=editor.closest('form');const category=form.querySelector('select[name="category"]');
+      const rows=editor.querySelector('.condition-rows');const hidden=editor.querySelector('input[name="conditions_json"]');
+      const addButton=editor.querySelector('.add-condition');
+      let conditions=[];try{{conditions=JSON.parse(editor.dataset.conditions||'[]')}}catch(error){{conditions=[]}}
+      const option=(select,value,label)=>{{const item=document.createElement('option');item.value=value;item.textContent=label;select.append(item);}};
+      async function suggestions(field,input,list){{
+        list.replaceChildren();if(!field.value)return;
         try{{const url='/filter-values?category='+encodeURIComponent(category.value)+'&field='+encodeURIComponent(field.value);
-          const response=await fetch(url,{{credentials:'same-origin'}});if(!response.ok) throw Error('Fetch failed');
-          const values=await response.json();for(const v of values) add(v,v);
-          if(selected && !values.includes(selected)) add(selected,selected+' (saved)');value.value=selected||'';
-        }}catch(error){{add('','Values unavailable');if(selected){{add(selected,selected+' (saved)');value.value=selected;}}}}
+          const response=await fetch(url,{{credentials:'same-origin'}});if(!response.ok)return;
+          for(const value of await response.json()){{const item=document.createElement('option');item.value=value;list.append(item);}}
+        }}catch(error){{}}
       }}
-      function updateFields(selected){{field.replaceChildren();for(const v of ['',...(fields[category.value]||[])]){{
-        const option=document.createElement('option');option.value=v;option.textContent=v?v.replaceAll('_',' '):'All values';field.append(option);
-      }}field.value=selected||'';updateValues(selected?savedValue:'');}}
-      category.addEventListener('change',()=>updateFields(''));field.addEventListener('change',()=>updateValues(''));
-      updateFields(savedField);
+      function render(){{
+        rows.replaceChildren();
+        conditions.forEach((condition,index)=>{{
+          const row=document.createElement('div');row.className='condition-row';
+          const join=document.createElement('select');join.className='condition-join';option(join,'and','AND');option(join,'or','OR');join.value=condition.join||'and';
+          const field=document.createElement('select');field.className='condition-field';
+          for(const name of (fields[category.value]||[]))option(field,name,name.replaceAll('_',' '));
+          field.value=condition.field||field.value;
+          const operator=document.createElement('select');operator.className='condition-operator';
+          for(const [value,label] of operators)option(operator,value,label);operator.value=condition.operator||'eq';
+          const value=document.createElement('input');value.className='condition-value';value.value=condition.value||'';value.placeholder='Value';
+          const list=document.createElement('datalist');list.id='condition-values-'+form.elements.target_id.value+'-'+(form.elements.id.value||'new')+'-'+index;
+          value.setAttribute('list',list.id);
+          const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Remove';
+          const syncValue=()=>{{const noValue=new Set(['empty','not_empty']);value.disabled=noValue.has(operator.value);if(value.disabled)value.value='';}};
+          field.addEventListener('change',()=>suggestions(field,value,list));operator.addEventListener('change',syncValue);
+          remove.addEventListener('click',()=>{{conditions.splice(index,1);render();}});
+          row.append(join,field,operator,value,list,remove);rows.append(row);syncValue();suggestions(field,value,list);
+        }});
+        sync();
+      }}
+      function sync(){{
+        const next=[];rows.querySelectorAll('.condition-row').forEach((row,index)=>{{
+          next.push({{join:index===0?'and':row.querySelector('.condition-join').value,
+            field:row.querySelector('.condition-field').value,
+            operator:row.querySelector('.condition-operator').value,
+            value:row.querySelector('.condition-value').disabled?'':row.querySelector('.condition-value').value}});
+        }});conditions=next;hidden.value=JSON.stringify(next);
+      }}
+      rows.addEventListener('change',sync);rows.addEventListener('input',sync);
+      addButton.addEventListener('click',()=>{{const available=fields[category.value]||[];if(!available.length)return;
+        conditions.push({{join:'and',field:available[0],operator:'eq',value:''}});render();}});
+      category.addEventListener('change',()=>{{conditions=[];render();}});
+      form.addEventListener('submit',sync);render();
     }});
     </script>
     </body></html>'''
@@ -294,28 +330,27 @@ async def index(request):
 
 def _rule_form(rule, target, csrf):
     rule = rule or {}
+    conditions = routing_rules.effective_conditions(rule) if rule.get("id") else []
+    encoded_conditions = _escape(json.dumps(conditions, ensure_ascii=False, separators=(",", ":")))
+    default_category = routing_rules.CATEGORIES[0] if routing_rules.CATEGORIES else ""
     return f'''<form method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="id" value="{rule.get('id','')}">
         <input type="hidden" name="target_id" value="{target['id']}">
-        <input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required>
-        {_select('category', routing_rules.CATEGORIES, rule.get('category','transferlist'))}
-        <label>Category field <select name="filter_field" data-selected="{_escape(rule.get('filter_field'))}"></select></label>
-        <label>Stored value <select name="filter_value" data-selected="{_escape(rule.get('filter_value'))}"><option value="">Any value</option></select></label>
-        <input name="source_channel" placeholder="Source @channel" value="{_escape(rule.get('source_channel'))}">
+        <label>Rule name<input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required></label>
+        <label>Topic / category {_select('category', routing_rules.CATEGORIES, rule.get('category', default_category))}</label>
+        <label>Source channel (optional)<input name="source_channel" placeholder="@source_channel" value="{_escape(rule.get('source_channel'))}"></label>
+        <div class="conditions-editor" data-conditions="{encoded_conditions}">
+        <p class="hint">Conditions use the real columns currently stored for the selected topic. Add as many as needed; AND/OR is evaluated from left to right.</p>
+        <div class="condition-rows"></div>
+        <button type="button" class="add-condition">+ Add condition</button>
+        <input type="hidden" name="conditions_json" value="[]"></div>
         <label>Publishing <select name="delivery_mode">
             <option value="manual" {"selected" if rule.get('delivery_mode','manual')=='manual' else ''}>Manual selection</option>
             <option value="auto" {"selected" if rule.get('delivery_mode')=='auto' else ''}>Automatic</option>
         </select></label>
-        <input name="priority" type="number" value="{rule.get('priority',100)}" required>
+        <label>Priority<input name="priority" type="number" value="{rule.get('priority',100)}" required></label>
         <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
-        <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue</label>
-        <details><summary>Existing country, city and price filters</summary>
-        <input name="country" maxlength="2" placeholder="Country code (TR)" value="{_escape(rule.get('country'))}">
-        {_select('scope', routing_rules.SCOPES, rule.get('country_scope','either'))}
-        <input name="origin_city" placeholder="Origin city" value="{_escape(rule.get('origin_city'))}">
-        <input name="destination_city" placeholder="Destination city" value="{_escape(rule.get('destination_city'))}">
-        <input name="min_price" type="number" step="any" min="0" placeholder="Min price" value="{_escape(rule.get('min_price'))}">
-        <input name="max_price" type="number" step="any" min="0" placeholder="Max price" value="{_escape(rule.get('max_price'))}"></details>
+        <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue after match</label>
         <button>Save rule</button></form>'''
 
 
@@ -403,14 +438,13 @@ async def save_target(request):
 async def save_rule(request):
     data = await request.post()
     try:
-        routing_rules.save_rule(data.get("name", ""), data.get("category", ""),
-                                data.get("country", ""), data.get("scope", ""),
-                                data.get("target_id"), data.get("priority", 100),
-                                "enabled" in data, "continue" not in data, data.get("id") or None,
-                                data.get("source_channel", ""), data.get("origin_city", ""),
-                                data.get("destination_city", ""), data.get("min_price"),
-                                data.get("max_price"), data.get("filter_field", ""),
-                                data.get("filter_value", ""), data.get("delivery_mode", "auto"))
+        routing_rules.save_rule(
+            data.get("name", ""), data.get("category", ""), "", "either", data.get("target_id"),
+            priority=data.get("priority", 100), enabled="enabled" in data,
+            stop_on_match="continue" not in data, rule_id=data.get("id") or None,
+            source_channel=data.get("source_channel", ""),
+            delivery_mode=data.get("delivery_mode", "auto"),
+            conditions=data.get("conditions_json", "[]"))
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
     target_id = int(data.get("target_id"))
@@ -831,7 +865,7 @@ async def health_page(request):
     <tbody>{activity_rows or '<tr><td colspan="6">No persisted activity yet.</td></tr>'}</tbody></table></div></section>
 
     <div class="health-sections">
-    <section><h2>Publishing activity</h2><p>{publishing['targets']} destinations · {publishing['rules']} rules</p>
+    <section><h2>Publishing activity</h2><p>{publishing['targets']} channels / groups · {publishing['rules']} rules</p>
     <table><thead><tr><th>Type</th><th>Status</th><th>Count</th></tr></thead>
     <tbody>{publish_rows or '<tr><td colspan="3">No publishing attempts.</td></tr>'}</tbody></table></section>
     <section><h2>Recent database edits</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Admin</th><th>Row</th><th>Column</th><th>Before</th><th>After</th></tr></thead>

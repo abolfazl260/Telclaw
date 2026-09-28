@@ -3,10 +3,12 @@ from datetime import datetime, timezone
 import math
 import re
 
-from storage.database import get_connection
+from storage.database import CATEGORY_TABLES, get_connection
 
 CATEGORIES = ("transferlist", "housinglist", "joblist")
 SCOPES = ("either", "origin", "destination")
+FILTER_FIELDS = {category: tuple(fields) for category, fields in CATEGORY_TABLES.items()
+                 if category in CATEGORIES}
 
 
 def initialize():
@@ -15,7 +17,9 @@ def initialize():
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS publishing_targets (
             id INTEGER PRIMARY KEY, label TEXT NOT NULL,
-            chat_id TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 1
+            chat_id TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 1,
+            description TEXT NOT NULL DEFAULT '', connection_status TEXT NOT NULL DEFAULT 'unknown',
+            connection_detail TEXT NOT NULL DEFAULT '', checked_at TEXT
         );
         CREATE TABLE IF NOT EXISTS publishing_rules (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL,
@@ -28,7 +32,8 @@ def initialize():
             target_id INTEGER NOT NULL REFERENCES publishing_targets(id),
             priority INTEGER NOT NULL DEFAULT 100,
             enabled INTEGER NOT NULL DEFAULT 1,
-            stop_on_match INTEGER NOT NULL DEFAULT 1
+            stop_on_match INTEGER NOT NULL DEFAULT 1,
+            filter_field TEXT NOT NULL DEFAULT '', filter_value TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS publishing_deliveries (
             message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -39,12 +44,20 @@ def initialize():
         );
         CREATE INDEX IF NOT EXISTS idx_publishing_deliveries_status ON publishing_deliveries(status);
         """)
+        target_columns = {row[1] for row in conn.execute("PRAGMA table_info(publishing_targets)")}
+        for name, definition in {"description": "TEXT NOT NULL DEFAULT ''",
+                                 "connection_status": "TEXT NOT NULL DEFAULT 'unknown'",
+                                 "connection_detail": "TEXT NOT NULL DEFAULT ''",
+                                 "checked_at": "TEXT"}.items():
+            if name not in target_columns:
+                conn.execute(f"ALTER TABLE publishing_targets ADD COLUMN {name} {definition}")
         columns = {row[1] for row in conn.execute("PRAGMA table_info(publishing_rules)")}
         for name, definition in {
             "source_channel": "TEXT NOT NULL DEFAULT ''",
             "origin_city": "TEXT NOT NULL DEFAULT ''",
             "destination_city": "TEXT NOT NULL DEFAULT ''",
             "min_price": "REAL", "max_price": "REAL",
+            "filter_field": "TEXT NOT NULL DEFAULT ''", "filter_value": "TEXT NOT NULL DEFAULT ''",
         }.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE publishing_rules ADD COLUMN {name} {definition}")
@@ -73,8 +86,9 @@ def list_rules():
         conn.close()
 
 
-def save_target(label, chat_id, enabled=True, target_id=None):
+def save_target(label, chat_id, enabled=True, target_id=None, description=""):
     label, chat_id = label.strip(), chat_id.strip()
+    description = str(description or "").strip()[:500]
     if not label or not (re.fullmatch(r'@[A-Za-z0-9_]{5,32}', chat_id) or
                          re.fullmatch(r'-[0-9]{5,}', chat_id)):
         raise ValueError("A label and a @channel username or negative Telegram chat ID are required")
@@ -82,11 +96,14 @@ def save_target(label, chat_id, enabled=True, target_id=None):
     conn = get_connection()
     try:
         if target_id is None:
-            conn.execute("INSERT INTO publishing_targets(label,chat_id,enabled) VALUES(?,?,?)",
-                         (label, chat_id, int(enabled)))
+            conn.execute("INSERT INTO publishing_targets(label,chat_id,enabled,description) VALUES(?,?,?,?)",
+                         (label, chat_id, int(enabled), description))
         else:
-            cursor = conn.execute("UPDATE publishing_targets SET label=?,chat_id=?,enabled=? WHERE id=?",
-                                  (label, chat_id, int(enabled), int(target_id)))
+            cursor = conn.execute("""UPDATE publishing_targets SET label=?,chat_id=?,enabled=?,description=?,
+                connection_status=CASE WHEN chat_id=? THEN connection_status ELSE 'unknown' END,
+                connection_detail=CASE WHEN chat_id=? THEN connection_detail ELSE '' END,
+                checked_at=CASE WHEN chat_id=? THEN checked_at ELSE NULL END WHERE id=?""",
+                (label, chat_id, int(enabled), description, chat_id, chat_id, chat_id, int(target_id)))
             if not cursor.rowcount:
                 raise ValueError("Target not found")
         conn.commit()
@@ -96,7 +113,8 @@ def save_target(label, chat_id, enabled=True, target_id=None):
 
 def save_rule(name, category, country, scope, target_id, priority=100,
               enabled=True, stop_on_match=True, rule_id=None, source_channel="",
-              origin_city="", destination_city="", min_price=None, max_price=None):
+              origin_city="", destination_city="", min_price=None, max_price=None,
+              filter_field="", filter_value=""):
     name, country = name.strip(), country.strip().upper()
     if not name or category not in CATEGORIES or scope not in SCOPES:
         raise ValueError("Invalid rule name, category, or country condition")
@@ -105,6 +123,10 @@ def save_rule(name, category, country, scope, target_id, priority=100,
     source_channel = str(source_channel or "").strip().lstrip("@").casefold()
     origin_city = str(origin_city or "").strip().casefold()
     destination_city = str(destination_city or "").strip().casefold()
+    filter_field = str(filter_field or "").strip()
+    filter_value = str(filter_value or "").strip().casefold()
+    if filter_field not in ("", *FILTER_FIELDS[category]) or (filter_value and not filter_field):
+        raise ValueError("Invalid category filter")
     min_price = float(min_price) if min_price not in (None, "") else None
     max_price = float(max_price) if max_price not in (None, "") else None
     if (min_price is not None and (not math.isfinite(min_price) or min_price < 0) or
@@ -119,16 +141,18 @@ def save_rule(name, category, country, scope, target_id, priority=100,
             raise ValueError("Target not found")
         values = (name, category, country, scope, source_channel, origin_city,
                   destination_city, min_price, max_price, int(target_id), int(priority),
-                  int(enabled), int(stop_on_match))
+                  int(enabled), int(stop_on_match), filter_field, filter_value)
         if rule_id is None:
             conn.execute("""INSERT INTO publishing_rules
                 (name,category,country,country_scope,source_channel,origin_city,
-                destination_city,min_price,max_price,target_id,priority,enabled,stop_on_match)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
+                destination_city,min_price,max_price,target_id,priority,enabled,stop_on_match,
+                filter_field,filter_value)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
         else:
             cursor = conn.execute("""UPDATE publishing_rules SET name=?,category=?,country=?,
                 country_scope=?,source_channel=?,origin_city=?,destination_city=?,
-                min_price=?,max_price=?,target_id=?,priority=?,enabled=?,stop_on_match=? WHERE id=?""",
+                min_price=?,max_price=?,target_id=?,priority=?,enabled=?,stop_on_match=?,
+                filter_field=?,filter_value=? WHERE id=?""",
                 values + (int(rule_id),))
             if not cursor.rowcount:
                 raise ValueError("Rule not found")
@@ -170,6 +194,9 @@ def matching_targets(record, rules):
             continue
         if rule["destination_city"] and str(record.get("destination_city") or "").strip().casefold() != rule["destination_city"]:
             continue
+        if rule.get("filter_field") and rule.get("filter_value"):
+            if str(record.get(rule["filter_field"]) or "").strip().casefold() != rule["filter_value"]:
+                continue
         if rule["min_price"] is not None or rule["max_price"] is not None:
             try:
                 price = float(record["price"])
@@ -254,13 +281,14 @@ def record_delivery(message_id, target_id, status, telegram_message_id=None, err
         conn.close()
 
 
-def recent_deliveries(limit=30):
+def recent_deliveries(limit=30, target_id=None):
     initialize()
     conn = get_connection()
     try:
         return [dict(row) for row in conn.execute("""SELECT d.*, t.label AS target_label
             FROM publishing_deliveries d JOIN publishing_targets t ON t.id=d.target_id
-            ORDER BY d.updated_at DESC LIMIT ?""", (int(limit),))]
+            WHERE (? IS NULL OR d.target_id=?)
+            ORDER BY d.updated_at DESC LIMIT ?""", (target_id, target_id, int(limit)))]
     finally:
         conn.close()
 
@@ -272,6 +300,23 @@ def retry_delivery(message_id, target_id):
         conn.execute("""UPDATE publishing_deliveries SET status='retry',error=NULL,
             updated_at=? WHERE message_id=? AND target_id=? AND status IN ('rejected','retry')""",
             (_now_iso(), int(message_id), int(target_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_target_connection(target_id, status, detail):
+    if status not in {"connected", "disconnected", "unknown"}:
+        raise ValueError("Invalid connection status")
+    initialize()
+    conn = get_connection()
+    try:
+        conn.execute("""UPDATE publishing_targets SET connection_status=?,connection_detail=?,checked_at=?
+            WHERE id=?""", (status, str(detail or "")[:500], _now_iso(), int(target_id)))
+        if status == "connected":
+            conn.execute("""UPDATE publishing_deliveries SET status='retry',error=NULL,updated_at=?
+                WHERE target_id=? AND status='rejected' AND error LIKE '%Telegram sendMessage HTTP 403%'""",
+                (_now_iso(), int(target_id)))
         conn.commit()
     finally:
         conn.close()

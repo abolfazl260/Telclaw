@@ -35,36 +35,43 @@ async def _transfer_publisher_loop(publisher):
 async def _run():
     database.initialize_db()
     backoffice_runner = None
+    backoffice_ready = False
     if config.BACKOFFICE_ENABLED:
-        url = urlparse(config.BACKOFFICE_PUBLIC_URL)
-        if url.scheme != "https" or not url.netloc:
-            raise RuntimeError("Back office requires TELCLAW_BACKOFFICE_PUBLIC_URL with HTTPS")
-        if not config.TELEGRAM_BOT_TOKEN:
-            raise RuntimeError("Back office requires TELCLAW_TELEGRAM_BOT_TOKEN")
-        backoffice_runner = web.AppRunner(create_app())
-        await backoffice_runner.setup()
         try:
+            url = urlparse(config.BACKOFFICE_PUBLIC_URL)
+            if url.scheme != "https" or not url.netloc or url.path not in {"", "/"}:
+                raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be an HTTPS origin")
+            if not config.TELEGRAM_BOT_TOKEN:
+                raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
+            backoffice_runner = web.AppRunner(create_app())
+            await backoffice_runner.setup()
             await web.TCPSite(backoffice_runner, config.BACKOFFICE_HOST, config.BACKOFFICE_PORT).start()
-        except Exception:
-            await backoffice_runner.cleanup()
-            raise
-        logger.info("Back office listening at %s:%s", config.BACKOFFICE_HOST, config.BACKOFFICE_PORT)
+            backoffice_ready = True
+            logger.info("Back office listening at %s:%s", config.BACKOFFICE_HOST, config.BACKOFFICE_PORT)
+        except Exception as exc:
+            if backoffice_runner:
+                await backoffice_runner.cleanup()
+                backoffice_runner = None
+            logger.exception("Back office disabled; Telegram monitoring will still start: %s", exc)
+            print(f"[BACK OFFICE] Unavailable: {exc}. Telegram monitoring will still start.")
     monitor = get_telegram_monitor()
     install_transfer_live_command(monitor)
     await monitor.start()
+    if not monitor.enabled:
+        print("[TELEGRAM MONITOR] Disabled. Set TELCLAW_TELEGRAM_MONITOR_ENABLED=true and a bot token in .env.")
 
     transfer_publisher = None
     transfer_task = None
-    if config.BACKOFFICE_ENABLED or config.TRANSFER_TELEGRAM_PUBLISH_ENABLED:
+    if backoffice_ready or (not config.BACKOFFICE_ENABLED and config.TRANSFER_TELEGRAM_PUBLISH_ENABLED):
         try:
-            transfer_publisher = RoutedPublisher() if config.BACKOFFICE_ENABLED else TelegramTransferPublisher()
+            transfer_publisher = RoutedPublisher() if backoffice_ready else TelegramTransferPublisher()
             transfer_task = asyncio.create_task(
                 _transfer_publisher_loop(transfer_publisher),
                 name="telegram-transfer-publisher",
             )
             logger.info(
                 "Telegram transfer publisher started | channel=%s | interval=%sm",
-                'managed rules' if config.BACKOFFICE_ENABLED else config.TRANSFER_TELEGRAM_CHANNEL,
+                'managed rules' if backoffice_ready else config.TRANSFER_TELEGRAM_CHANNEL,
                 config.TRANSFER_TELEGRAM_INTERVAL_MINUTES,
             )
         except TransferTelegramPublishError as exc:

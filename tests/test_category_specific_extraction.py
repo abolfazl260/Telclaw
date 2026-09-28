@@ -130,7 +130,7 @@ def test_transfer_disabled_skips_without_provider_call(monkeypatch):
     monkeypatch.setattr(config, "AI_EXTRACTION_ENABLED", True)
     monkeypatch.setitem(config.AI_EXTRACTION_CATEGORY_ENABLED, "transferlist", False)
     service = AIProcessingService(repository=repo, extractor=FakeExtractor())
-    stats = service._process([{"id": 1, "message_id": 10, "channel_username": "test", "cleaned_text": "cargo"}])
+    stats = service._process([{"id": 1, "message_id": 10, "channel_username": "test", "classification_category": "transferlist", "cleaned_text": "cargo"}])
 
     assert stats[0] == 0  # processed
     assert stats[1] == 0  # failed

@@ -34,7 +34,7 @@ def provider():
 
 
 def test_cloudflare_missing_credentials_fail_clearly():
-    with pytest.raises(RuntimeError, match="CLOUDFLARE_ACCOUNT_ID"):
+    with pytest.raises(RuntimeError, match="missing account_id, api_token, model"):
         CloudflareProvider("", "", "")
 
 

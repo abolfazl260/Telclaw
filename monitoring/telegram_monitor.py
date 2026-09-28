@@ -201,8 +201,17 @@ class TelegramMonitor:
             if not self._is_admin_chat(subscriber.get("chat_id")): continue
             try: await self._send(int(subscriber["chat_id"]),text)
             except Exception: logger.warning("Telegram monitor delivery failed for subscriber %s",subscriber["chat_id"])
-    async def error(self,level,source,message): await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
+    async def error(self,level,source,message):
+        try:
+            database.record_system_activity("error",level,source,str(message)[:4000])
+        except Exception:
+            logger.exception("Failed to persist system error activity")
+        await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
     async def report(self,kind,stats):
+        try:
+            database.record_system_activity(kind,"INFO","telegram_monitor",f"{kind} report",stats)
+        except Exception:
+            logger.exception("Failed to persist %s report activity",kind)
         titles={"crawl":"📥 CRAWL REPORT","processing":"⚙️ PROCESSING REPORT","classification":"🏷️ AI CLASSIFICATION REPORT","ai":"🤖 AI REPORT","advertio":"📤 ADVERTIO REPORT"}; lines=[f"<b>{titles.get(kind,kind.upper()+' REPORT')}</b>",f"🕐 <b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran"]
         for key,value in stats.items():lines.append(f"<b>{html.escape(str(key))}:</b> {html.escape(str(value))}")
         await self.broadcast("\n".join(lines))

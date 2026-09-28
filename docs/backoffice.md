@@ -97,8 +97,10 @@ its destination, including sends made by another rule for that destination.
 Expand **Matching ads** to browse 20 at a time and read the full ad preview. New rules default
 to **Manual selection**: click **Send this ad** on an individual match to publish it.
 Existing rules retain automatic delivery until switched to manual in **Edit rule**.
-Already sent ads cannot be resent from the selector. **Delete rule** removes only
-the rule, leaving past delivery history intact.
+Already delivered ads show **Send again** in **Matching ads**. Resending requires an
+explicit browser confirmation, keeps the original successful delivery unchanged, and
+stores each resend attempt separately in delivery history as a `resend` entry.
+**Delete rule** removes only the rule, leaving past delivery history intact.
 
 If Telegram returns HTTP 429, publication pauses for the `retry_after` time returned
 by Telegram, including after process restarts. The affected ad remains retryable and

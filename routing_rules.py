@@ -203,9 +203,15 @@ def pending(limit=100):
         while len(result) < limit:
             rows = conn.execute("""SELECT id AS message_row_id, ai_category,channel_username,
                 message_id AS telegram_source_id, sender_username
-                FROM messages WHERE ai_status='processed'
+                FROM messages m WHERE ai_status='processed'
                 AND ai_category IN ('transferlist','housinglist','joblist')
-                ORDER BY id LIMIT 200 OFFSET ?""", (offset,)).fetchall()
+                AND EXISTS (SELECT 1 FROM publishing_rules r
+                    JOIN publishing_targets target ON target.id=r.target_id
+                    WHERE r.enabled=1 AND target.enabled=1 AND r.category=m.ai_category
+                    AND NOT EXISTS (SELECT 1 FROM publishing_deliveries d
+                        WHERE d.message_id=m.id AND d.target_id=r.target_id
+                        AND d.status IN ('sent','rejected')))
+                ORDER BY m.id LIMIT 200 OFFSET ?""", (offset,)).fetchall()
             if not rows:
                 break
             offset += len(rows)

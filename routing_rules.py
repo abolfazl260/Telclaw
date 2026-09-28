@@ -398,10 +398,14 @@ def selected_pair(rule_id, message_id, allow_sent=False):
 
 
 def selected_resend_pair(rule_id, message_id):
-    record, rule = selected_pair(rule_id, message_id, allow_sent=True)
-    if record.get("delivery_status") != "sent":
+    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    if (not rule["enabled"] or not rule["target_enabled"]
+            or rule["connection_status"] == "disconnected" or not records
+            or records[0].get("delivery_status") != "sent"):
         raise ValueError("Only a delivered ad can be sent again")
-    return record, rule
+    if is_rate_limited():
+        raise ValueError("Telegram rate limit active; wait before sending")
+    return records[0], rule
 
 
 def claim_delivery(message_id, target_id):

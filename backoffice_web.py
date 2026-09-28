@@ -39,14 +39,31 @@ def initialize_auth():
         conn.close()
 
 
+def public_origin():
+    """Return the external HTTPS origin, optionally adding its public proxy port."""
+    base = config.BACKOFFICE_PUBLIC_URL.rstrip("/")
+    parsed = urlparse(base)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError("Invalid back office public URL port") from exc
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be a public HTTPS URL")
+    public_port = config.BACKOFFICE_PUBLIC_PORT
+    if public_port:
+        if port and port != public_port:
+            raise RuntimeError("Public URL port conflicts with TELCLAW_BACKOFFICE_PUBLIC_PORT")
+        hostname = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        base = f"https://{hostname}:{public_port}"
+    return base
+
+
 def issue_link(admin_id):
     """Issue a five-minute, single-use link only to approved Telegram admins."""
     if int(admin_id) not in ADMIN_USER_IDS:
         raise PermissionError("Not an admin")
-    base = config.BACKOFFICE_PUBLIC_URL.rstrip("/")
-    parsed = urlparse(base)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be a public HTTPS URL")
+    base = public_origin()
     initialize_auth()
     token = secrets.token_urlsafe(32)
     conn = get_connection()

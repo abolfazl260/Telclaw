@@ -147,3 +147,46 @@ async def test_publisher_sends_only_once_per_destination(rule_db, monkeypatch):
     assert (await publisher.publish_pending())["sent"] == 1
     assert (await publisher.publish_pending())["sent"] == 0
     assert [item["chat_id"] for item in posted] == ["@turkeychannel"]
+
+
+@pytest.mark.asyncio
+async def test_channel_history_and_category_filter(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel", description="Transport ads")
+    routing_rules.save_rule("Origin", "transferlist", "", "either", 1,
+                            filter_field="origin_country", filter_value="TR")
+    assert len(routing_rules.pending()) == 1
+    routing_rules.record_delivery(1, 1, "rejected", error="Telegram sendMessage HTTP 403: forbidden")
+    assert len(routing_rules.recent_deliveries(target_id=1)) == 1
+    assert routing_rules.pending() == []
+    routing_rules.update_target_connection(1, "connected", "Bot can post")
+    assert len(routing_rules.pending()) == 1
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "Transport ads" in response.text
+    assert "Delivery history" in response.text
+    assert "origin_country" in response.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_403_marks_destination_disconnected(rule_db, monkeypatch):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("All", "transferlist", "", "either", 1)
+
+    class Response:
+        status = 403
+        ok = False
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def json(self, **kwargs):
+            return {"ok": False, "description": "Forbidden: bot is not a member of the channel chat"}
+
+    class Session:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def post(self, *args, **kwargs): return Response()
+
+    monkeypatch.setattr(routed_publisher.aiohttp, "ClientSession", Session)
+    publisher = routed_publisher.RoutedPublisher(token="fake-token")
+    assert (await publisher.publish_pending())["rejected"] == 1
+    assert routing_rules.list_targets()[0]["connection_status"] == "disconnected"
+    assert routing_rules.recent_deliveries(target_id=1)[0]["status"] == "rejected"

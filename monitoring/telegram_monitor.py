@@ -29,7 +29,7 @@ class TelegramMonitor:
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -100,6 +100,16 @@ class TelegramMonitor:
         elif command == "/source": await self._send_source_chunks(chat_id)
         elif command == "/down_errors": await self._download_errors(chat_id)
         elif command == "/database": await self._download_database(chat_id)
+        elif command == "/backoffice":
+            if not config.BACKOFFICE_ENABLED:
+                await self._send(chat_id,"Back office is not enabled on this server."); return
+            try:
+                from backoffice_web import issue_link
+                url = issue_link(message["from"]["id"])
+            except (RuntimeError, PermissionError) as exc:
+                logger.error("Back office link unavailable: %s", exc)
+                await self._send(chat_id,"Back office link is unavailable; check server configuration."); return
+            await self._send(chat_id,f'<a href="{html.escape(url, quote=True)}">Open private back office</a>\\nThis link expires in 5 minutes and works once.')
     def _tehran_timestamp(self,value):
         if not value:return "هنوز ثبت نشده"
         try:

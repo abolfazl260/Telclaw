@@ -63,6 +63,8 @@ BACKOFFICE_PUBLIC_URL = os.getenv("TELCLAW_BACKOFFICE_PUBLIC_URL", "").strip()
 BACKOFFICE_PUBLIC_PORT = _int_env("TELCLAW_BACKOFFICE_PUBLIC_PORT", 0, minimum=0)
 BACKOFFICE_HOST = os.getenv("TELCLAW_BACKOFFICE_HOST", "127.0.0.1").strip()
 BACKOFFICE_PORT = _int_env("TELCLAW_BACKOFFICE_PORT", 8787, minimum=1)
+BACKOFFICE_TLS_CERT = os.getenv("TELCLAW_BACKOFFICE_TLS_CERT", "").strip()
+BACKOFFICE_TLS_KEY = os.getenv("TELCLAW_BACKOFFICE_TLS_KEY", "").strip()
 
 # AI providers are evaluated strictly in this order.
 _SUPPORTED_AI_PROVIDERS = {"groq", "cloudflare"}

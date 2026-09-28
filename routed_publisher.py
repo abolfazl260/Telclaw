@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def _plain_ad(record):
     """Format any structured non-transfer category without topic-specific branching."""
     category = record.get("ai_category")
-    if category not in routing_rules.CATEGORIES:
+    if category not in routing_rules.categories():
         raise ValueError("Unsupported category")
     fields = routing_rules.category_fields(category)
     preferred = ("title", "job_title", "name", "description", "company", "location", "city",

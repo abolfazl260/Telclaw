@@ -5,6 +5,7 @@ from aiohttp import web
 
 import backoffice_web
 import routing_rules
+import routed_publisher
 
 
 @pytest.fixture
@@ -81,3 +82,34 @@ async def test_backoffice_link_is_admin_only_and_single_use(rule_db, monkeypatch
     assert first.value.cookies["telclaw_admin"]["secure"]
     with pytest.raises(web.HTTPForbidden):
         await backoffice_web.login(Request())
+
+
+@pytest.mark.asyncio
+async def test_publisher_sends_only_once_per_destination(rule_db, monkeypatch):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("Turkey", "transferlist", "TR", "either", 1)
+    monkeypatch.setattr(routed_publisher.config, "TELEGRAM_BOT_TOKEN", "fake-token")
+    posted = []
+
+    class Response:
+        ok = True
+        status = 200
+
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def json(self, **kwargs):
+            return {"ok": True, "result": {"message_id": 900}}
+
+    class Session:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def post(self, url, **kwargs):
+            posted.append(kwargs["json"])
+            return Response()
+
+    monkeypatch.setattr(routed_publisher.aiohttp, "ClientSession", Session)
+    publisher = routed_publisher.RoutedPublisher()
+    assert (await publisher.publish_pending())["sent"] == 1
+    assert (await publisher.publish_pending())["sent"] == 0
+    assert [item["chat_id"] for item in posted] == ["@turkeychannel"]

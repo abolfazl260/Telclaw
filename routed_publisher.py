@@ -31,8 +31,14 @@ class RoutedPublisher:
     async def publish_pending(self, limit=50):
         pairs = routing_rules.pending(limit)
         result = {"found": len(pairs), "sent": 0, "failed": 0, "rejected": 0}
+        blocked_targets = {}
         for record, rule in pairs:
             message_id, target_id = record["message_row_id"], rule["target_id"]
+            if target_id in blocked_targets:
+                routing_rules.record_delivery(message_id, target_id, "rejected",
+                                              error=blocked_targets[target_id][:1000])
+                result["rejected"] += 1
+                continue
             try:
                 if record["ai_category"] == "transferlist":
                     text = TelegramTransferPublisher.format_ad(record, record)
@@ -52,6 +58,14 @@ class RoutedPublisher:
                                             json=payload) as response:
                         body = await response.json(content_type=None)
                         if not response.ok or not body.get("ok"):
+                            if response.status == 403:
+                                error = f"Telegram sendMessage HTTP 403: {body.get('description', '')}"
+                                blocked_targets[target_id] = error
+                                routing_rules.update_target_connection(target_id, "disconnected", error)
+                                routing_rules.record_delivery(message_id, target_id, "rejected", error=error[:1000])
+                                result["rejected"] += 1
+                                logger.warning("Publishing destination %s unavailable: %s", target_id, error)
+                                continue
                             raise RuntimeError(f"Telegram sendMessage HTTP {response.status}: {body.get('description', '')}")
                 routing_rules.record_delivery(message_id, target_id, "sent",
                                               body["result"].get("message_id"))

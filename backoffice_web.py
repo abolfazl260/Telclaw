@@ -164,6 +164,29 @@ async def login(request):
     raise response
 
 
+def _format_bytes(value):
+    if value is None:
+        return "—"
+    size = float(value)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return "—"
+
+
+def _format_duration(seconds):
+    total = max(0, int(seconds or 0))
+    days, total = divmod(total, 86400)
+    hours, total = divmod(total, 3600)
+    minutes, seconds = divmod(total, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m {seconds}s"
+
+
 def _escape(value):
     return html.escape(str(value or ""), quote=True)
 
@@ -184,6 +207,7 @@ async def index(request):
         f'<span class="hint">priority #{int(item["priority"])} · {int(item["credential_count"])} credential(s)</span></span>'
         for item in overview["providers"]
     ) or '<span class="hint">No AI providers configured.</span>'
+    system = backoffice_health.snapshot()["system"]
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
     rows = []
     for target in targets:
@@ -276,6 +300,16 @@ async def index(request):
       <div class="overview-card"><span>AI extraction</span><strong>{'Enabled' if overview["provider_enabled"] else 'Disabled'}</strong></div>
     </div>
     <div><strong>AI Providers:</strong> {provider_rows}</div></section>
+    <section><h2>System Health</h2>
+    <div class="overview-grid">
+      <div class="overview-card"><span>Daily ads</span><strong>{int(system["daily_ads"]):,}</strong></div>
+      <div class="overview-card"><span>CPU</span><strong>{system["cpu_percent"]:.1f}%</strong></div>
+      <div class="overview-card"><span>RAM</span><strong>{_format_bytes(system["ram_bytes"])}</strong></div>
+      <div class="overview-card"><span>DB size</span><strong>{_format_bytes(system["db_size_bytes"])}</strong></div>
+      <div class="overview-card"><span>Queue size</span><strong>{int(system["queue_size"]):,}</strong></div>
+      <div class="overview-card"><span>Error rate</span><strong>{system["error_rate"]:.1f}%</strong></div>
+      <div class="overview-card"><span>Uptime</span><strong>{_format_duration(system["uptime_seconds"])}</strong></div>
+    </div></section>
     <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add channel / group</button>
     <div class="grid">{''.join(rows) or '<p>No publishing channels or groups yet.</p>'}</div>
     <dialog id="target-new"><button type="button" data-close>Close</button><h2>New channel or group</h2>

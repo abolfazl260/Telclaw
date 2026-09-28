@@ -199,6 +199,25 @@ class TelegramMonitor:
         payload={"chat_id":chat_id,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}
         if reply_markup is not None: payload["reply_markup"]=reply_markup
         await self._api("sendMessage",payload)
+    async def broadcast_transfer_live(self):
+        """Send the existing /transferlive report once to every active subscriber."""
+        if not self.enabled:
+            return
+
+        from monitoring.transfer_live import _send_transfer_live
+
+        for subscriber in database.get_monitor_subscribers():
+            chat_id = subscriber.get("chat_id")
+            if not self._is_admin_chat(chat_id):
+                continue
+            try:
+                await _send_transfer_live(self, int(chat_id))
+            except Exception:
+                logger.exception(
+                    "Automatic transfer-live delivery failed for subscriber %s",
+                    chat_id,
+                )
+
     async def broadcast(self,text):
         if not self.enabled:return
         for subscriber in database.get_monitor_subscribers():

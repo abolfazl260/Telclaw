@@ -123,7 +123,7 @@ async def _security(request, handler):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'unsafe-inline'; "
+    response.headers["Content-Security-Policy"] = ("default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; "
         f"script-src 'nonce-{request['csp_nonce']}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     return response
 
@@ -176,6 +176,8 @@ async def index(request):
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
     rows = []
     for target in targets:
+        assigned = [rule for rule in rules if rule["target_id"] == target["id"]]
+        rule_rows = "".join(_rule_form(rule, target, csrf) for rule in assigned)
         history = routing_rules.recent_deliveries(30, target['id'])
         history_rows = ''.join(f'''<tr><td>#{item['message_id']}</td><td>{_escape(item['status'])}</td>
             <td>{_escape(item['telegram_message_id'] or '—')}</td><td>{_escape(item['updated_at'])}</td>
@@ -185,43 +187,42 @@ async def index(request):
             <input type="hidden" name="target_id" value="{target['id']}"><button>Retry</button></form>'''
             if item['status'] in {'retry', 'rejected'} else '') + '</td></tr>' for item in history)
         state = target.get('connection_status') or 'unknown'
-        rows.append(f'''<article class="card"><h3>{_escape(target['label'])} <span class="badge {state}">{_escape(state)}</span></h3>
-            <p><code>{_escape(target['chat_id'])}</code></p><p class="hint">{_escape(target.get('description'))}</p>
+        opened = str(getattr(request, 'query', {}).get('channel', '')) == str(target['id'])
+        rows.append(f'''<details class="channel" id="channel-{target['id']}" {'open' if opened else ''}><summary>
+            <span class="channel-name">{_escape(target['label'])}</span>
+            <code>{_escape(target['chat_id'])}</code>
+            <span class="badge {state}">{_escape(state)}</span>
+            <span class="hint">{len(assigned)} rules · {len(history)} deliveries</span></summary>
+            <div class="channel-body"><p class="hint">{_escape(target.get('description'))}</p>
             <p class="hint">{_escape(target.get('connection_detail') or 'Connection not checked')}
             · checked: {_escape(target.get('checked_at') or 'never')}</p>
             <form method="post" action="/target/check" class="inline"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="target_id" value="{target['id']}"><button>Check connection</button></form>
-            <button type="button" data-open="target-{target['id']}">Edit & details</button>
-            <button type="button" data-open="history-{target['id']}">Delivery history ({len(history)})</button>
-            <dialog id="target-{target['id']}"><button type="button" data-close>Close</button><h2>Channel details</h2>
+            <details class="subsection"><summary>Edit channel details</summary>
             <form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="id" value="{target['id']}">
             <label>Name<input name="label" value="{_escape(target['label'])}" required></label>
             <label>Telegram ID or username<input name="chat_id" value="{_escape(target['chat_id'])}" required></label>
             <label>Purpose / notes<textarea name="description" maxlength="500" rows="3">{_escape(target.get('description'))}</textarea></label>
             <label><input type="checkbox" name="enabled" {"checked" if target['enabled'] else ""}> Enabled</label>
-            <button>Save destination</button></form></dialog>
-            <dialog id="history-{target['id']}" class="wide"><button type="button" data-close>Close</button>
-            <h2>{_escape(target['label'])} · Delivery history</h2><div class="scroll"><table>
+            <button>Save destination</button></form></details>
+            <div class="subsection"><h3>Publishing rules</h3>{rule_rows or '<p>No rules for this channel yet.</p>'}
+            <details><summary>Add a rule for this channel</summary>{_rule_form(None, target, csrf)}</details></div>
+            <details class="subsection"><summary>Delivery history ({len(history)})</summary><div class="scroll"><table>
             <thead><tr><th>Message</th><th>Status</th><th>Telegram ID</th><th>Updated (UTC)</th><th>Error</th><th></th></tr></thead>
-            <tbody>{history_rows or '<tr><td colspan="6">No deliveries yet.</td></tr>'}</tbody></table></div></dialog></article>''')
-    rule_rows = []
-    for rule in rules:
-        rule_rows.append(_rule_form(rule, targets, csrf))
-    delivery_rows = []
-    for item in routing_rules.recent_deliveries():
-        retry = (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
-            <input type="hidden" name="message_id" value="{item['message_id']}">
-            <input type="hidden" name="target_id" value="{item['target_id']}"><button>Retry</button></form>'''
-            if item['status'] in {'retry', 'rejected'} else '')
-        delivery_rows.append(f'''<p>Message #{item['message_id']} → {_escape(item['target_label'])}:
-            <strong>{_escape(item['status'])}</strong> {_escape(item['error'])}{retry}</p>''')
+            <tbody>{history_rows or '<tr><td colspan="6">No deliveries yet.</td></tr>'}</tbody></table></div></details>
+            </div></details>''')
     body = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw back office</title>
     <style>*{{box-sizing:border-box}}body{{font:15px/1.55 system-ui;max-width:1150px;margin:0 auto;padding:2rem 1rem;background:#f3f6fb;color:#192333}}
     section{{background:white;padding:1.5rem;margin:1.3rem 0;border:1px solid #e1e7ef;border-radius:16px;box-shadow:0 5px 22px #182b4510}}
-    .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin:1rem 0}}
-    .card{{border:1px solid #dce4ef;border-radius:12px;padding:1rem;background:#fbfcff;min-width:0}}
+    .grid{{display:block;margin:1rem 0}}
+    .channel{{border:1px solid #dce4ef;border-radius:12px;background:#fbfcff;margin:.7rem 0;overflow:hidden}}
+    .channel>summary{{display:flex;gap:1rem;align-items:center;flex-wrap:wrap;padding:1rem;cursor:pointer;list-style:none}}
+    .channel>summary::-webkit-details-marker{{display:none}}.channel>summary:before{{content:'▸';color:#1957b8}}
+    .channel[open]>summary:before{{content:'▾'}}.channel-name{{font-weight:700;min-width:140px}}
+    .channel-body{{padding:0 1rem 1rem;border-top:1px solid #e3e8ef}}.subsection{{border-top:1px solid #e3e8ef;padding:.8rem 0}}
+    .subsection>summary{{cursor:pointer;color:#1957b8;font-weight:600}}.subsection h3{{margin:.4rem 0}}
     form{{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;border-bottom:1px solid #ddd;padding:.8rem 0}}
     dialog form{{display:grid}}.inline{{display:inline-flex;border:0;padding:0}}form input,form select,form textarea{{min-width:120px}}
     input,select,textarea,button{{font:inherit;padding:.55rem;max-width:100%;border-radius:7px}}
@@ -230,7 +231,7 @@ async def index(request):
     dialog.wide{{width:900px}}dialog::backdrop{{background:#182b4590}}.scroll{{overflow:auto}}table{{border-collapse:collapse;min-width:650px;width:100%}}
     th,td{{padding:.6rem;text-align:left;border-bottom:1px solid #e3e8ef;overflow-wrap:anywhere}}code{{overflow-wrap:anywhere}}
     .badge{{font-size:.8rem;border-radius:30px;padding:.2rem .55rem;background:#e9eef5}}.badge.connected{{background:#d8f4e6;color:#16653e}}
-    .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}details{{width:100%}}
+    .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     <p class="hint">Rules run by priority. Unmatched ads are not published. Check that the bot can post to each destination.</p>
     <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add destination</button>
@@ -241,40 +242,45 @@ async def index(request):
     <label>Telegram ID or username<input name="chat_id" placeholder="@channel or -100..." required></label>
     <label>Purpose / notes<textarea name="description" maxlength="500" rows="3"></textarea></label>
     <label><input type="checkbox" name="enabled" checked> Enabled</label><button>Save</button></form></dialog></section>
-    <section><h2>Rules</h2>{''.join(rule_rows) if rule_rows else '<p>No rules yet.</p>'}
-    <h3>Add rule</h3>{_rule_form(None, targets, csrf)}</section>
-    <section><h2>Recent deliveries</h2>{''.join(delivery_rows) if delivery_rows else '<p>No deliveries yet.</p>'}</section>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}"><button>Log out</button></form>
     <script nonce="{request['csp_nonce']}">
     const fields={json.dumps({key: list(value) for key,value in routing_rules.FILTER_FIELDS.items()})};
     document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.open).showModal()));
     document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
     document.querySelectorAll('select[name="category"]').forEach(category=>{{
-      const field=category.closest('form').querySelector('select[name="filter_field"]');
-      const saved=field.dataset.selected;
-      function update(selected){{field.replaceChildren();for(const value of ['',...(fields[category.value]||[])]){{
-        const option=document.createElement('option');option.value=value;option.textContent=value?value.replaceAll('_',' '):'No category field';field.append(option);
-      }}field.value=selected||'';}}
-      category.addEventListener('change',()=>update(''));update(saved);
+      const form=category.closest('form');const field=form.querySelector('select[name="filter_field"]');
+      const value=form.querySelector('select[name="filter_value"]');
+      const savedField=field.dataset.selected;const savedValue=value.dataset.selected;
+      async function updateValues(selected){{value.replaceChildren();
+        const add=(v,label)=>{{const opt=document.createElement('option');opt.value=v;opt.textContent=label;value.append(opt);}};
+        add('','Any value');if(!field.value) return;
+        try{{const url='/filter-values?category='+encodeURIComponent(category.value)+'&field='+encodeURIComponent(field.value);
+          const response=await fetch(url,{{credentials:'same-origin'}});if(!response.ok) throw Error('Fetch failed');
+          const values=await response.json();for(const v of values) add(v,v);
+          if(selected && !values.includes(selected)) add(selected,selected+' (saved)');value.value=selected||'';
+        }}catch(error){{add('','Values unavailable');if(selected){{add(selected,selected+' (saved)');value.value=selected;}}}}
+      }}
+      function updateFields(selected){{field.replaceChildren();for(const v of ['',...(fields[category.value]||[])]){{
+        const option=document.createElement('option');option.value=v;option.textContent=v?v.replaceAll('_',' '):'All values';field.append(option);
+      }}field.value=selected||'';updateValues(selected?savedValue:'');}}
+      category.addEventListener('change',()=>updateFields(''));field.addEventListener('change',()=>updateValues(''));
+      updateFields(savedField);
     }});
     </script>
     </body></html>'''
     return web.Response(text=body, content_type="text/html")
 
 
-def _rule_form(rule, targets, csrf):
-    if not targets:
-        return "<p>Add a destination first.</p>"
+def _rule_form(rule, target, csrf):
     rule = rule or {}
-    options = "".join(f'<option value="{t["id"]}" {"selected" if t["id"]==rule.get("target_id") else ""}>{_escape(t["label"])}</option>' for t in targets)
     return f'''<form method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="id" value="{rule.get('id','')}">
+        <input type="hidden" name="target_id" value="{target['id']}">
         <input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required>
         {_select('category', routing_rules.CATEGORIES, rule.get('category','transferlist'))}
         <label>Category field <select name="filter_field" data-selected="{_escape(rule.get('filter_field'))}"></select></label>
-        <input name="filter_value" placeholder="Field value (e.g. TR)" value="{_escape(rule.get('filter_value'))}">
+        <label>Stored value <select name="filter_value" data-selected="{_escape(rule.get('filter_value'))}"><option value="">Any value</option></select></label>
         <input name="source_channel" placeholder="Source @channel" value="{_escape(rule.get('source_channel'))}">
-        <select name="target_id">{options}</select>
         <input name="priority" type="number" value="{rule.get('priority',100)}" required>
         <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
         <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue</label>
@@ -300,6 +306,7 @@ async def save_target(request):
                   if target["chat_id"] == data.get("chat_id", "").strip()), None)
     if saved:
         await _check_target_connection(saved)
+        raise web.HTTPSeeOther(f"/?channel={saved['id']}#channel-{saved['id']}")
     raise web.HTTPSeeOther("/")
 
 
@@ -316,7 +323,17 @@ async def save_rule(request):
                                 data.get("filter_value", ""))
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
-    raise web.HTTPSeeOther("/")
+    target_id = int(data.get("target_id"))
+    raise web.HTTPSeeOther(f"/?channel={target_id}#channel-{target_id}")
+
+
+async def filter_values(request):
+    try:
+        values = routing_rules.distinct_filter_values(
+            request.query.get("category", ""), request.query.get("field", ""))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    return web.json_response(values)
 
 
 async def logout(request):
@@ -338,7 +355,8 @@ async def retry_delivery(request):
         routing_rules.retry_delivery(data.get("message_id"), data.get("target_id"))
     except (TypeError, ValueError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
-    raise web.HTTPSeeOther("/")
+    target_id = int(data.get("target_id"))
+    raise web.HTTPSeeOther(f"/?channel={target_id}#channel-{target_id}")
 
 
 async def check_target(request):
@@ -351,7 +369,7 @@ async def check_target(request):
     if target is None:
         raise web.HTTPNotFound(text="Destination not found")
     await _check_target_connection(target)
-    raise web.HTTPSeeOther("/")
+    raise web.HTTPSeeOther(f"/?channel={target_id}#channel-{target_id}")
 
 
 async def _check_target_connection(target):
@@ -391,6 +409,7 @@ def create_app():
     initialize_auth()
     app = web.Application(middlewares=[_security])
     app.add_routes([web.get("/login", login), web.get("/", index),
+                    web.get("/filter-values", filter_values),
                     web.post("/target", save_target), web.post("/rule", save_rule),
                     web.post("/retry", retry_delivery), web.post("/target/check", check_target),
                     web.post("/logout", logout)])

@@ -416,6 +416,10 @@ class SystemConsoleUI(ConsoleUI):
         self.clear_screen()
         self.show_banner()
         self.show_section_header("Send Transfer Ads")
+        if config.BACKOFFICE_ENABLED:
+            self.show_message("Rule-based publishing is active. Manage destinations in the back office.", Fore.YELLOW)
+            await self.pause()
+            return
         try:
             status = get_transfer_queue_status()
             available = status["waiting"] + status["failed"]

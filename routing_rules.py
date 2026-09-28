@@ -222,7 +222,8 @@ def pending(limit=100):
         rules = [dict(row) for row in conn.execute("""SELECT r.*, t.chat_id,
             t.enabled AS target_enabled FROM publishing_rules r
             JOIN publishing_targets t ON t.id=r.target_id
-            WHERE r.enabled=1 AND t.enabled=1 ORDER BY r.priority,r.id""")]
+            WHERE r.enabled=1 AND t.enabled=1 AND t.connection_status!='disconnected'
+            ORDER BY r.priority,r.id""")]
         if not rules:
             return []
         result = []
@@ -234,7 +235,8 @@ def pending(limit=100):
                 AND ai_category IN ('transferlist','housinglist','joblist')
                 AND EXISTS (SELECT 1 FROM publishing_rules r
                     JOIN publishing_targets target ON target.id=r.target_id
-                    WHERE r.enabled=1 AND target.enabled=1 AND r.category=m.ai_category
+                    WHERE r.enabled=1 AND target.enabled=1 AND target.connection_status!='disconnected'
+                    AND r.category=m.ai_category
                     AND NOT EXISTS (SELECT 1 FROM publishing_deliveries d
                         WHERE d.message_id=m.id AND d.target_id=r.target_id
                         AND d.status IN ('sent','rejected')))

@@ -25,14 +25,16 @@ def rule_db(tmp_path, monkeypatch):
     conn = connection()
     conn.executescript("""CREATE TABLE messages (
         id INTEGER PRIMARY KEY, ai_category TEXT, ai_status TEXT,
-        message_id INTEGER, sender_username TEXT, channel_username TEXT);
+        processing_status TEXT, message_id INTEGER, sender_username TEXT,
+        channel_username TEXT, message_link TEXT);
         CREATE TABLE transferlist (id INTEGER PRIMARY KEY,
         processed_message_id INTEGER UNIQUE, origin_city TEXT,
-        destination_city TEXT, origin_country TEXT, destination_country TEXT, price REAL);
+        destination_city TEXT, origin_country TEXT, destination_country TEXT,
+        price REAL, departure_date TEXT);
         CREATE TABLE housinglist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         CREATE TABLE joblist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
-        INSERT INTO messages VALUES(1,'transferlist','processed',11,'alice','test');
-        INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150);""")
+        INSERT INTO messages VALUES(1,'transferlist','processed','processed',11,'alice','test','');
+        INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150,'2026-10-01');""")
     conn.commit()
     conn.close()
     return connection

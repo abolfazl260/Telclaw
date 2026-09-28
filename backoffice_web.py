@@ -2,11 +2,14 @@
 import hashlib
 import html
 import ipaddress
+import json
 import secrets
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from aiohttp import web
+import aiohttp
 
 import config
 import routing_rules
@@ -103,6 +106,7 @@ def _session(request):
 
 @web.middleware
 async def _security(request, handler):
+    request["csp_nonce"] = secrets.token_urlsafe(16)
     try:
         if request.path != "/login":
             session = _session(request)
@@ -119,7 +123,8 @@ async def _security(request, handler):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    response.headers["Content-Security-Policy"] = ("default-src 'none'; style-src 'unsafe-inline'; "
+        f"script-src 'nonce-{request['csp_nonce']}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     return response
 
 
@@ -169,46 +174,90 @@ def _select(name, values, selected):
 async def index(request):
     csrf = _escape(request["session"]["csrf"])
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
-    deliveries = routing_rules.recent_deliveries()
     rows = []
     for target in targets:
-        rows.append(f'''<form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
+        history = routing_rules.recent_deliveries(30, target['id'])
+        history_rows = ''.join(f'''<tr><td>#{item['message_id']}</td><td>{_escape(item['status'])}</td>
+            <td>{_escape(item['telegram_message_id'] or '—')}</td><td>{_escape(item['updated_at'])}</td>
+            <td>{_escape(item['error'])}</td><td>'''
+            + (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="message_id" value="{item['message_id']}">
+            <input type="hidden" name="target_id" value="{target['id']}"><button>Retry</button></form>'''
+            if item['status'] in {'retry', 'rejected'} else '') + '</td></tr>' for item in history)
+        state = target.get('connection_status') or 'unknown'
+        rows.append(f'''<article class="card"><h3>{_escape(target['label'])} <span class="badge {state}">{_escape(state)}</span></h3>
+            <p><code>{_escape(target['chat_id'])}</code></p><p class="hint">{_escape(target.get('description'))}</p>
+            <p class="hint">{_escape(target.get('connection_detail') or 'Connection not checked')}
+            · checked: {_escape(target.get('checked_at') or 'never')}</p>
+            <form method="post" action="/target/check" class="inline"><input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="target_id" value="{target['id']}"><button>Check connection</button></form>
+            <button type="button" data-open="target-{target['id']}">Edit & details</button>
+            <button type="button" data-open="history-{target['id']}">Delivery history ({len(history)})</button>
+            <dialog id="target-{target['id']}"><button type="button" data-close>Close</button><h2>Channel details</h2>
+            <form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="id" value="{target['id']}">
-            <input name="label" value="{_escape(target['label'])}" required>
-            <input name="chat_id" value="{_escape(target['chat_id'])}" required>
+            <label>Name<input name="label" value="{_escape(target['label'])}" required></label>
+            <label>Telegram ID or username<input name="chat_id" value="{_escape(target['chat_id'])}" required></label>
+            <label>Purpose / notes<textarea name="description" maxlength="500" rows="3">{_escape(target.get('description'))}</textarea></label>
             <label><input type="checkbox" name="enabled" {"checked" if target['enabled'] else ""}> Enabled</label>
-            <button>Save destination</button></form>''')
+            <button>Save destination</button></form></dialog>
+            <dialog id="history-{target['id']}" class="wide"><button type="button" data-close>Close</button>
+            <h2>{_escape(target['label'])} · Delivery history</h2><div class="scroll"><table>
+            <thead><tr><th>Message</th><th>Status</th><th>Telegram ID</th><th>Updated (UTC)</th><th>Error</th><th></th></tr></thead>
+            <tbody>{history_rows or '<tr><td colspan="6">No deliveries yet.</td></tr>'}</tbody></table></div></dialog></article>''')
     rule_rows = []
     for rule in rules:
         rule_rows.append(_rule_form(rule, targets, csrf))
     delivery_rows = []
-    for item in deliveries:
-        retry = ""
-        if item["status"] in {"retry", "rejected"}:
-            retry = f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
-                <input type="hidden" name="message_id" value="{item['message_id']}">
-                <input type="hidden" name="target_id" value="{item['target_id']}"><button>Retry</button></form>'''
+    for item in routing_rules.recent_deliveries():
+        retry = (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="message_id" value="{item['message_id']}">
+            <input type="hidden" name="target_id" value="{item['target_id']}"><button>Retry</button></form>'''
+            if item['status'] in {'retry', 'rejected'} else '')
         delivery_rows.append(f'''<p>Message #{item['message_id']} → {_escape(item['target_label'])}:
             <strong>{_escape(item['status'])}</strong> {_escape(item['error'])}{retry}</p>''')
     body = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw back office</title>
-    <style>body{{font:16px system-ui;max-width:1000px;margin:2rem auto;padding:0 1rem;background:#f6f7fb;color:#192333}}
-    section{{background:white;padding:1.3rem;margin:1.3rem 0;border-radius:12px}}
+    <style>*{{box-sizing:border-box}}body{{font:15px/1.55 system-ui;max-width:1150px;margin:0 auto;padding:2rem 1rem;background:#f3f6fb;color:#192333}}
+    section{{background:white;padding:1.5rem;margin:1.3rem 0;border:1px solid #e1e7ef;border-radius:16px;box-shadow:0 5px 22px #182b4510}}
+    .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin:1rem 0}}
+    .card{{border:1px solid #dce4ef;border-radius:12px;padding:1rem;background:#fbfcff;min-width:0}}
     form{{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;border-bottom:1px solid #ddd;padding:.8rem 0}}
-    input,select,button{{font:inherit;padding:.55rem;max-width:100%}}button{{cursor:pointer;background:#1957b8;color:white;border:0;border-radius:6px}}
-    input[name=country]{{width:4rem}}input[name=priority]{{width:5rem}}
-    .hint{{color:#526174}} </style></head><body><h1>Telclaw · Publishing rules</h1>
-    <p class="hint">Rules run by priority (smallest number first). First match wins unless Continue is checked.
-    An ad without a matching rule is not published. Countries use two-letter codes, e.g. TR.
-    Filled conditions in one rule must all match. Jobs do not have structured countries or route cities.</p>
-    <section><h2>Destinations</h2>{''.join(rows)}
-    <h3>Add destination</h3><form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
-    <input name="label" placeholder="Name" required><input name="chat_id" placeholder="@channel or -100..." required>
-    <label><input type="checkbox" name="enabled" checked> Enabled</label><button>Add</button></form></section>
+    dialog form{{display:grid}}.inline{{display:inline-flex;border:0;padding:0}}form input,form select,form textarea{{min-width:120px}}
+    input,select,textarea,button{{font:inherit;padding:.55rem;max-width:100%;border-radius:7px}}
+    input,select,textarea{{border:1px solid #c8d3e2}}button{{cursor:pointer;background:#1957b8;color:white;border:0;margin:.2rem}}
+    dialog{{border:0;border-radius:16px;max-height:85vh;width:min(520px,calc(100vw - 2rem));max-width:calc(100vw - 2rem);box-shadow:0 20px 70px #182b4560}}
+    dialog.wide{{width:900px}}dialog::backdrop{{background:#182b4590}}.scroll{{overflow:auto}}table{{border-collapse:collapse;min-width:650px;width:100%}}
+    th,td{{padding:.6rem;text-align:left;border-bottom:1px solid #e3e8ef;overflow-wrap:anywhere}}code{{overflow-wrap:anywhere}}
+    .badge{{font-size:.8rem;border-radius:30px;padding:.2rem .55rem;background:#e9eef5}}.badge.connected{{background:#d8f4e6;color:#16653e}}
+    .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}details{{width:100%}}
+    </style></head><body><h1>Telclaw · Publishing rules</h1>
+    <p class="hint">Rules run by priority. Unmatched ads are not published. Check that the bot can post to each destination.</p>
+    <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add destination</button>
+    <div class="grid">{''.join(rows) or '<p>No destinations yet.</p>'}</div>
+    <dialog id="target-new"><button type="button" data-close>Close</button><h2>New channel or group</h2>
+    <form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
+    <label>Name<input name="label" placeholder="Name" required></label>
+    <label>Telegram ID or username<input name="chat_id" placeholder="@channel or -100..." required></label>
+    <label>Purpose / notes<textarea name="description" maxlength="500" rows="3"></textarea></label>
+    <label><input type="checkbox" name="enabled" checked> Enabled</label><button>Save</button></form></dialog></section>
     <section><h2>Rules</h2>{''.join(rule_rows) if rule_rows else '<p>No rules yet.</p>'}
     <h3>Add rule</h3>{_rule_form(None, targets, csrf)}</section>
     <section><h2>Recent deliveries</h2>{''.join(delivery_rows) if delivery_rows else '<p>No deliveries yet.</p>'}</section>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}"><button>Log out</button></form>
+    <script nonce="{request['csp_nonce']}">
+    const fields={json.dumps({key: list(value) for key,value in routing_rules.FILTER_FIELDS.items()})};
+    document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.open).showModal()));
+    document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
+    document.querySelectorAll('select[name="category"]').forEach(category=>{{
+      const field=category.closest('form').querySelector('select[name="filter_field"]');
+      const saved=field.dataset.selected;
+      function update(selected){{field.replaceChildren();for(const value of ['',...(fields[category.value]||[])]){{
+        const option=document.createElement('option');option.value=value;option.textContent=value?value.replaceAll('_',' '):'No category field';field.append(option);
+      }}field.value=selected||'';}}
+      category.addEventListener('change',()=>update(''));update(saved);
+    }});
+    </script>
     </body></html>'''
     return web.Response(text=body, content_type="text/html")
 
@@ -222,17 +271,20 @@ def _rule_form(rule, targets, csrf):
         <input type="hidden" name="id" value="{rule.get('id','')}">
         <input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required>
         {_select('category', routing_rules.CATEGORIES, rule.get('category','transferlist'))}
-        <input name="country" maxlength="2" placeholder="TR" value="{_escape(rule.get('country'))}">
-        {_select('scope', routing_rules.SCOPES, rule.get('country_scope','either'))}
+        <label>Category field <select name="filter_field" data-selected="{_escape(rule.get('filter_field'))}"></select></label>
+        <input name="filter_value" placeholder="Field value (e.g. TR)" value="{_escape(rule.get('filter_value'))}">
         <input name="source_channel" placeholder="Source @channel" value="{_escape(rule.get('source_channel'))}">
-        <input name="origin_city" placeholder="Origin city" value="{_escape(rule.get('origin_city'))}">
-        <input name="destination_city" placeholder="Destination city" value="{_escape(rule.get('destination_city'))}">
-        <input name="min_price" type="number" step="any" min="0" placeholder="Min price" value="{_escape(rule.get('min_price'))}">
-        <input name="max_price" type="number" step="any" min="0" placeholder="Max price" value="{_escape(rule.get('max_price'))}">
         <select name="target_id">{options}</select>
         <input name="priority" type="number" value="{rule.get('priority',100)}" required>
         <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
         <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue</label>
+        <details><summary>Existing country, city and price filters</summary>
+        <input name="country" maxlength="2" placeholder="Country code (TR)" value="{_escape(rule.get('country'))}">
+        {_select('scope', routing_rules.SCOPES, rule.get('country_scope','either'))}
+        <input name="origin_city" placeholder="Origin city" value="{_escape(rule.get('origin_city'))}">
+        <input name="destination_city" placeholder="Destination city" value="{_escape(rule.get('destination_city'))}">
+        <input name="min_price" type="number" step="any" min="0" placeholder="Min price" value="{_escape(rule.get('min_price'))}">
+        <input name="max_price" type="number" step="any" min="0" placeholder="Max price" value="{_escape(rule.get('max_price'))}"></details>
         <button>Save rule</button></form>'''
 
 
@@ -240,9 +292,14 @@ async def save_target(request):
     data = await request.post()
     try:
         routing_rules.save_target(data.get("label", ""), data.get("chat_id", ""),
-                                  "enabled" in data, data.get("id") or None)
-    except (ValueError, TypeError) as exc:
+                                  "enabled" in data, data.get("id") or None,
+                                  data.get("description", ""))
+    except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
+    saved = next((target for target in routing_rules.list_targets()
+                  if target["chat_id"] == data.get("chat_id", "").strip()), None)
+    if saved:
+        await _check_target_connection(saved)
     raise web.HTTPSeeOther("/")
 
 
@@ -255,7 +312,8 @@ async def save_rule(request):
                                 "enabled" in data, "continue" not in data, data.get("id") or None,
                                 data.get("source_channel", ""), data.get("origin_city", ""),
                                 data.get("destination_city", ""), data.get("min_price"),
-                                data.get("max_price"))
+                                data.get("max_price"), data.get("filter_field", ""),
+                                data.get("filter_value", ""))
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
     raise web.HTTPSeeOther("/")
@@ -283,11 +341,57 @@ async def retry_delivery(request):
     raise web.HTTPSeeOther("/")
 
 
+async def check_target(request):
+    data = await request.post()
+    try:
+        target_id = int(data.get("target_id", ""))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text="Invalid destination") from exc
+    target = next((t for t in routing_rules.list_targets() if t["id"] == target_id), None)
+    if target is None:
+        raise web.HTTPNotFound(text="Destination not found")
+    await _check_target_connection(target)
+    raise web.HTTPSeeOther("/")
+
+
+async def _check_target_connection(target):
+    target_id = target["id"]
+    async def telegram(method, payload=None):
+        async with session.post(f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/{method}",
+                                json=payload or {}) as response:
+            body = await response.json(content_type=None)
+            if not response.ok or not body.get("ok"):
+                raise RuntimeError(str(body.get("description") or f"Telegram HTTP {response.status}"))
+            return body["result"]
+
+    status, detail = "unknown", "Unable to check Telegram"
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=12)) as session:
+            bot = await telegram("getMe")
+            chat = await telegram("getChat", {"chat_id": target["chat_id"]})
+            membership = await telegram("getChatMember", {"chat_id": target["chat_id"], "user_id": bot["id"]})
+            role = membership.get("status")
+            can_send = (role in {"creator", "administrator", "member"} and
+                        (chat.get("type") != "channel" or role in {"creator", "administrator"}) and
+                        membership.get("can_post_messages", True) is not False and
+                        membership.get("can_send_messages", True) is not False and
+                        membership.get("is_member", True) is not False)
+            status = "connected" if can_send else "disconnected"
+            detail = (f"{chat.get('title') or target['chat_id']} · {role or 'unknown role'}"
+                      if can_send else "Bot is not a member or lacks permission to post")
+    except (aiohttp.ClientError, TimeoutError) as exc:
+        detail = f"Telegram connection failed: {exc.__class__.__name__}"
+    except (RuntimeError, ValueError) as exc:
+        status, detail = "disconnected", str(exc)
+    routing_rules.update_target_connection(target_id, status, detail)
+
+
 def create_app():
     routing_rules.initialize()
     initialize_auth()
     app = web.Application(middlewares=[_security])
     app.add_routes([web.get("/login", login), web.get("/", index),
                     web.post("/target", save_target), web.post("/rule", save_rule),
-                    web.post("/retry", retry_delivery), web.post("/logout", logout)])
+                    web.post("/retry", retry_delivery), web.post("/target/check", check_target),
+                    web.post("/logout", logout)])
     return app

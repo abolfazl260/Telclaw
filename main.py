@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import ssl
 
 from aiohttp import web
 
@@ -40,9 +41,16 @@ async def _run():
             public_origin()
             if not config.TELEGRAM_BOT_TOKEN:
                 raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
+            if bool(config.BACKOFFICE_TLS_CERT) != bool(config.BACKOFFICE_TLS_KEY):
+                raise RuntimeError("Both back office TLS certificate and key must be set")
+            ssl_context = None
+            if config.BACKOFFICE_TLS_CERT:
+                ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+                ssl_context.load_cert_chain(config.BACKOFFICE_TLS_CERT, config.BACKOFFICE_TLS_KEY)
             backoffice_runner = web.AppRunner(create_app())
             await backoffice_runner.setup()
-            await web.TCPSite(backoffice_runner, config.BACKOFFICE_HOST, config.BACKOFFICE_PORT).start()
+            await web.TCPSite(backoffice_runner, config.BACKOFFICE_HOST, config.BACKOFFICE_PORT, ssl_context=ssl_context).start()
             backoffice_ready = True
             logger.info("Back office listening at %s:%s", config.BACKOFFICE_HOST, config.BACKOFFICE_PORT)
         except Exception as exc:

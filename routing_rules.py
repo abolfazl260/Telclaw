@@ -1,5 +1,6 @@
 """SQLite-backed publishing rules and per-destination delivery state."""
 from datetime import datetime, timezone
+import math
 import re
 
 from storage.database import get_connection
@@ -20,6 +21,10 @@ def initialize():
             id INTEGER PRIMARY KEY, name TEXT NOT NULL,
             category TEXT NOT NULL, country TEXT NOT NULL DEFAULT '',
             country_scope TEXT NOT NULL DEFAULT 'either',
+            source_channel TEXT NOT NULL DEFAULT '',
+            origin_city TEXT NOT NULL DEFAULT '',
+            destination_city TEXT NOT NULL DEFAULT '',
+            min_price REAL, max_price REAL,
             target_id INTEGER NOT NULL REFERENCES publishing_targets(id),
             priority INTEGER NOT NULL DEFAULT 100,
             enabled INTEGER NOT NULL DEFAULT 1,
@@ -34,6 +39,15 @@ def initialize():
         );
         CREATE INDEX IF NOT EXISTS idx_publishing_deliveries_status ON publishing_deliveries(status);
         """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(publishing_rules)")}
+        for name, definition in {
+            "source_channel": "TEXT NOT NULL DEFAULT ''",
+            "origin_city": "TEXT NOT NULL DEFAULT ''",
+            "destination_city": "TEXT NOT NULL DEFAULT ''",
+            "min_price": "REAL", "max_price": "REAL",
+        }.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE publishing_rules ADD COLUMN {name} {definition}")
         conn.commit()
     finally:
         conn.close()
@@ -81,27 +95,40 @@ def save_target(label, chat_id, enabled=True, target_id=None):
 
 
 def save_rule(name, category, country, scope, target_id, priority=100,
-              enabled=True, stop_on_match=True, rule_id=None):
+              enabled=True, stop_on_match=True, rule_id=None, source_channel="",
+              origin_city="", destination_city="", min_price=None, max_price=None):
     name, country = name.strip(), country.strip().upper()
     if not name or category not in CATEGORIES or scope not in SCOPES:
         raise ValueError("Invalid rule name, category, or country condition")
     if country and (len(country) != 2 or not country.isascii() or not country.isalpha()):
         raise ValueError("Country must be an ISO 3166-1 two-letter code, such as TR")
+    source_channel = str(source_channel or "").strip().lstrip("@").casefold()
+    origin_city = str(origin_city or "").strip().casefold()
+    destination_city = str(destination_city or "").strip().casefold()
+    min_price = float(min_price) if min_price not in (None, "") else None
+    max_price = float(max_price) if max_price not in (None, "") else None
+    if (min_price is not None and (not math.isfinite(min_price) or min_price < 0) or
+            max_price is not None and (not math.isfinite(max_price) or max_price < 0) or
+            min_price is not None and max_price is not None and min_price > max_price):
+        raise ValueError("Invalid price range")
     initialize()
     conn = get_connection()
     try:
         target = conn.execute("SELECT id FROM publishing_targets WHERE id=?", (int(target_id),)).fetchone()
         if not target:
             raise ValueError("Target not found")
-        values = (name, category, country, scope, int(target_id), int(priority),
+        values = (name, category, country, scope, source_channel, origin_city,
+                  destination_city, min_price, max_price, int(target_id), int(priority),
                   int(enabled), int(stop_on_match))
         if rule_id is None:
             conn.execute("""INSERT INTO publishing_rules
-                (name,category,country,country_scope,target_id,priority,enabled,stop_on_match)
-                VALUES(?,?,?,?,?,?,?,?)""", values)
+                (name,category,country,country_scope,source_channel,origin_city,
+                destination_city,min_price,max_price,target_id,priority,enabled,stop_on_match)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
         else:
             cursor = conn.execute("""UPDATE publishing_rules SET name=?,category=?,country=?,
-                country_scope=?,target_id=?,priority=?,enabled=?,stop_on_match=? WHERE id=?""",
+                country_scope=?,source_channel=?,origin_city=?,destination_city=?,
+                min_price=?,max_price=?,target_id=?,priority=?,enabled=?,stop_on_match=? WHERE id=?""",
                 values + (int(rule_id),))
             if not cursor.rowcount:
                 raise ValueError("Rule not found")
@@ -137,6 +164,21 @@ def matching_targets(record, rules):
             if not ((scope in {"either", "origin"} and origin == country) or
                     (scope in {"either", "destination"} and destination == country)):
                 continue
+        if rule["source_channel"] and str(record.get("channel_username") or "").strip().lstrip("@").casefold() != rule["source_channel"]:
+            continue
+        if rule["origin_city"] and str(record.get("origin_city") or record.get("city") or "").strip().casefold() != rule["origin_city"]:
+            continue
+        if rule["destination_city"] and str(record.get("destination_city") or "").strip().casefold() != rule["destination_city"]:
+            continue
+        if rule["min_price"] is not None or rule["max_price"] is not None:
+            try:
+                price = float(record["price"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if rule["min_price"] is not None and price < rule["min_price"]:
+                continue
+            if rule["max_price"] is not None and price > rule["max_price"]:
+                continue
         if rule["target_id"] not in seen:
             targets.append(rule)
             seen.add(rule["target_id"])
@@ -159,7 +201,7 @@ def pending(limit=100):
         result = []
         offset = 0
         while len(result) < limit:
-            rows = conn.execute("""SELECT id AS message_row_id, ai_category,
+            rows = conn.execute("""SELECT id AS message_row_id, ai_category,channel_username,
                 message_id AS telegram_source_id, sender_username
                 FROM messages WHERE ai_status='processed'
                 AND ai_category IN ('transferlist','housinglist','joblist')

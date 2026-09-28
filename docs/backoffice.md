@@ -61,6 +61,20 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
 
 ## Rules
 
+Add each destination through the channel dialog, including its Telegram username or
+negative chat ID and an optional description. The bot checks membership and posting
+permission when you save; use **Check connection** to refresh the result. Channels
+require the bot to be an administrator with permission to post. The **Delivery history**
+button shows the last 30 attempts for that destination, including Telegram message IDs,
+errors, and a retry action. A Telegram 403 pauses further attempts for that destination
+until its permission is fixed and the connection check succeeds, which requeues rejected
+403 deliveries.
+
+For a rule, select the advertisement category and then select one of that category's
+fields in **Category field**. Enter the exact value to match, ignoring case (for example,
+`origin_country` with `TR`). The previous country, city and price conditions remain in
+the expandable section for existing rules; conditions in a rule all have to match.
+
 First create a destination using its `@channel_username` or a numeric Telegram
 group/channel chat ID such as `-100...`. Then create a rule:
 

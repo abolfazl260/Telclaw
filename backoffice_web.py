@@ -12,6 +12,7 @@ from aiohttp import web
 import aiohttp
 
 import config
+import backoffice_data
 import routing_rules
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 from monitoring.telegram_monitor import ADMIN_USER_IDS
@@ -240,7 +241,11 @@ async def index(request):
     .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
     .ad-row p{{margin:.3rem 0}}.ad-row form{{display:inline-flex;padding:0}}
     .ad-row pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;background:#f5f7fb;padding:.7rem}}
+    .tabs{{display:flex;gap:.6rem;margin:1rem 0}}.tabs a{{padding:.5rem .9rem;border-radius:8px;background:white;color:#1957b8;text-decoration:none}}
+    .tabs a.active{{background:#1957b8;color:white}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
+    <a href="/data">Database</a></nav>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Check that the bot can post to each destination.</p>
@@ -433,6 +438,167 @@ async def filter_values(request):
     return web.json_response(values)
 
 
+_DATA_CSS = """
+* {box-sizing:border-box}
+body {font:15px/1.5 system-ui,sans-serif;background:#f3f6fb;color:#192333;
+      max-width:1500px;margin:0 auto;padding:1.5rem}
+h1 {margin:.2rem 0}.muted {color:#536479}
+.tabs,.table-tabs,.pagination {display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:1rem 0}
+.tabs a,.table-tabs a,.pagination a {padding:.5rem .8rem;background:white;color:#1957b8;
+      text-decoration:none;border-radius:8px;border:1px solid #d9e2ee}
+.tabs .active,.table-tabs .active {background:#1957b8;color:white}
+section {padding:1rem;background:white;border:1px solid #dce4ef;border-radius:14px}
+.scroll {overflow:auto;max-height:75vh}
+table {border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
+th,td {padding:.55rem .7rem;border-bottom:1px solid #e7edf4;border-right:1px solid #edf1f6;
+       vertical-align:top;min-width:120px;max-width:340px;overflow-wrap:anywhere}
+th {position:sticky;top:0;background:#eaf0f9;text-align:left;z-index:2}
+td:first-child,th:first-child {position:sticky;left:0;z-index:1;background:#f7f9fd;min-width:64px}
+th:first-child {z-index:3;background:#eaf0f9}
+.edit-cell {display:block;border:0;background:transparent;color:#164e91;text-align:left;
+            cursor:pointer;font:inherit;width:100%;padding:0;overflow-wrap:anywhere}
+.edit-cell:hover {text-decoration:underline}
+.readonly {color:#4e5e70}.null {color:#79869a;font-style:italic}
+.cell-editor {display:grid;gap:.45rem;min-width:230px}
+.cell-editor textarea {font:inherit;min-height:80px;width:100%;resize:vertical}
+.cell-editor button {border:0;border-radius:6px;padding:.35rem .6rem;background:#1957b8;color:white;cursor:pointer}
+.cell-editor .cancel {background:#e8eef7;color:#254360}
+.cell-editor label {font-size:.9rem}.error {color:#ad302b}
+"""
+
+
+_DATA_SCRIPT = r"""
+const csrf = document.querySelector('meta[name="csrf-token"]').content;
+const table = document.querySelector('[data-table]').dataset.table;
+function preview(value) {
+  if (value === null) return 'NULL';
+  const text = String(value);
+  if (!text) return '(empty)';
+  return text.replace(/\s+/g, ' ').slice(0, 110) + (text.length > 110 ? '…' : '');
+}
+document.querySelectorAll('button.edit-cell').forEach(button => button.addEventListener('click', async () => {
+  const td = button.closest('td');
+  if (td.querySelector('.cell-editor')) return;
+  button.disabled = true;
+  const url = '/data/cell?table=' + encodeURIComponent(table) + '&id=' + encodeURIComponent(td.dataset.id)
+              + '&column=' + encodeURIComponent(td.dataset.column);
+  try {
+    const response = await fetch(url, {credentials:'same-origin'});
+    if (!response.ok) throw Error(await response.text());
+    const original = (await response.json()).value;
+    const form = document.createElement('form'); form.className = 'cell-editor';
+    const input = document.createElement('textarea'); input.value = original === null ? '' : String(original);
+    input.setAttribute('aria-label', 'Edit ' + td.dataset.column + ' for row ' + td.dataset.id);
+    const nullLabel = document.createElement('label');
+    const clear = document.createElement('input'); clear.type = 'checkbox';
+    nullLabel.append(clear, document.createTextNode(' Save as NULL'));
+    const controls = document.createElement('div');
+    const save = document.createElement('button'); save.type='submit';save.textContent='Save';
+    const cancel = document.createElement('button');cancel.type='button';cancel.className='cancel';cancel.textContent='Cancel';
+    controls.append(save,cancel);
+    const error = document.createElement('span');error.className='error';error.setAttribute('role','alert');
+    form.append(input,nullLabel,controls,error);td.append(form);
+    cancel.addEventListener('click', () => {form.remove();button.disabled=false;});
+    clear.addEventListener('change', () => {input.disabled=clear.checked;});
+    form.addEventListener('submit', async event => {
+      event.preventDefault();save.disabled=true;error.textContent='';
+      const payload = new URLSearchParams({csrf, table, id:td.dataset.id, column:td.dataset.column,
+        expected:JSON.stringify(original), value:input.value, make_null:clear.checked?'1':'0'});
+      try {
+        const result = await fetch('/data/cell',{method:'POST',body:payload,credentials:'same-origin'});
+        if (!result.ok) throw Error(await result.text());
+        const updated = (await result.json()).value;
+        button.textContent=preview(updated);button.classList.toggle('null',updated===null);
+        form.remove();button.disabled=false;
+      } catch (exc) {error.textContent=exc.message;save.disabled=false;}
+    });
+    input.focus();
+  } catch (exc) {button.disabled=false;window.alert('Unable to open cell: '+exc.message);}
+}));
+"""
+
+
+async def data_page(request):
+    table = request.query.get("table", "messages")
+    try:
+        result = backoffice_data.page(table, request.query.get("page", "1"))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    names = list(result["columns"])
+    editable = set(result["editable"])
+    cells = []
+    for row in result["rows"]:
+        columns = []
+        for name in names:
+            value = row[name]
+            label = "NULL" if value is None else str(value).replace("\n", " ")[:110]
+            if value is not None and len(str(value)) > 110:
+                label += "…"
+            if value == "":
+                label = "(empty)"
+            label = _escape(label)
+            if name in editable:
+                columns.append(f'''<td data-id="{row['id']}" data-column="{_escape(name)}">
+                    <button type="button" class="edit-cell {'null' if value is None else ''}"
+                    title="Edit this cell">{label}</button></td>''')
+            else:
+                columns.append(f'<td class="readonly">{label}</td>')
+        cells.append('<tr>' + ''.join(columns) + '</tr>')
+    nav = []
+    for name in backoffice_data.TABLES:
+        nav.append(f'''<a href="/data?table={name}" {'class="active"' if name == table else ''}>
+            {name}</a>''')
+    pagination = []
+    for title, number in (("First", 1), ("Previous", result["page"]-1),
+                          ("Next", result["page"]+1), ("Last", result["pages"])):
+        if 1 <= number <= result["pages"] and number != result["page"]:
+            pagination.append(f'<a href="/data?table={table}&page={number}">{title}</a>')
+    csrf = _escape(request["session"]["csrf"])
+    content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
+    <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
+    <a class="active" href="/data">Database</a></nav>
+    <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
+    <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
+    <section data-table="{table}"><p>{result['total']} rows · Page {result['page']} of {result['pages']}
+    · {backoffice_data.PAGE_SIZE} per page. Click a blue cell to edit it.</p>
+    <div class="scroll"><table><thead><tr>{''.join(f'<th>{_escape(name)}</th>' for name in names)}</tr></thead>
+    <tbody>{''.join(cells) or f'<tr><td colspan="{len(names)}">No rows in this table.</td></tr>'}</tbody>
+    </table></div><nav class="pagination">{''.join(pagination)}</nav></section>
+    <script nonce="{request['csp_nonce']}">{_DATA_SCRIPT}</script></body></html>'''
+    return web.Response(text=content, content_type="text/html")
+
+
+async def data_cell(request):
+    try:
+        result = backoffice_data.cell(request.query.get("table", ""), request.query.get("id", ""),
+                                      request.query.get("column", ""))
+    except backoffice_data.ConflictError as exc:
+        raise web.HTTPNotFound(text=str(exc)) from exc
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    return web.json_response(result)
+
+
+async def save_data_cell(request):
+    data = await request.post()
+    try:
+        expected = json.loads(data.get("expected", ""))
+        if expected is not None and not isinstance(expected, (str, int, float)):
+            raise ValueError("Invalid previous cell value")
+        value = backoffice_data.update_cell(
+            data.get("table", ""), data.get("id", ""), data.get("column", ""),
+            data.get("value", ""), expected, request["session"]["admin_id"],
+            make_null=data.get("make_null") == "1")
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        if isinstance(exc, backoffice_data.ConflictError):
+            raise web.HTTPConflict(text=str(exc)) from exc
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    return web.json_response({"value": value})
+
+
 async def logout(request):
     conn = get_connection()
     try:
@@ -504,8 +670,11 @@ async def _check_target_connection(target):
 def create_app():
     routing_rules.initialize()
     initialize_auth()
+    backoffice_data.initialize()
     app = web.Application(middlewares=[_security])
     app.add_routes([web.get("/login", login), web.get("/", index),
+                    web.get("/data", data_page), web.get("/data/cell", data_cell),
+                    web.post("/data/cell", save_data_cell),
                     web.get("/filter-values", filter_values),
                     web.post("/target", save_target), web.post("/rule", save_rule),
                     web.post("/rule/delete", delete_rule), web.post("/rule/send", send_selected),

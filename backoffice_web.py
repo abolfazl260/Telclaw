@@ -45,7 +45,7 @@ def issue_link(admin_id):
         raise PermissionError("Not an admin")
     base = config.BACKOFFICE_PUBLIC_URL.rstrip("/")
     parsed = urlparse(base)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
         raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be a public HTTPS URL")
     initialize_auth()
     token = secrets.token_urlsafe(32)

@@ -1,5 +1,5 @@
 """SQLite-backed publishing rules and per-destination delivery state."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import math
 import re
 
@@ -19,7 +19,8 @@ def initialize():
             id INTEGER PRIMARY KEY, label TEXT NOT NULL,
             chat_id TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 1,
             description TEXT NOT NULL DEFAULT '', connection_status TEXT NOT NULL DEFAULT 'unknown',
-            connection_detail TEXT NOT NULL DEFAULT '', checked_at TEXT
+            connection_detail TEXT NOT NULL DEFAULT '', checked_at TEXT,
+            rate_limited_until TEXT
         );
         CREATE TABLE IF NOT EXISTS publishing_rules (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL,
@@ -33,7 +34,8 @@ def initialize():
             priority INTEGER NOT NULL DEFAULT 100,
             enabled INTEGER NOT NULL DEFAULT 1,
             stop_on_match INTEGER NOT NULL DEFAULT 1,
-            filter_field TEXT NOT NULL DEFAULT '', filter_value TEXT NOT NULL DEFAULT ''
+            filter_field TEXT NOT NULL DEFAULT '', filter_value TEXT NOT NULL DEFAULT '',
+            delivery_mode TEXT NOT NULL DEFAULT 'auto'
         );
         CREATE TABLE IF NOT EXISTS publishing_deliveries (
             message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -48,7 +50,7 @@ def initialize():
         for name, definition in {"description": "TEXT NOT NULL DEFAULT ''",
                                  "connection_status": "TEXT NOT NULL DEFAULT 'unknown'",
                                  "connection_detail": "TEXT NOT NULL DEFAULT ''",
-                                 "checked_at": "TEXT"}.items():
+                                 "checked_at": "TEXT", "rate_limited_until": "TEXT"}.items():
             if name not in target_columns:
                 conn.execute(f"ALTER TABLE publishing_targets ADD COLUMN {name} {definition}")
         columns = {row[1] for row in conn.execute("PRAGMA table_info(publishing_rules)")}
@@ -58,6 +60,7 @@ def initialize():
             "destination_city": "TEXT NOT NULL DEFAULT ''",
             "min_price": "REAL", "max_price": "REAL",
             "filter_field": "TEXT NOT NULL DEFAULT ''", "filter_value": "TEXT NOT NULL DEFAULT ''",
+            "delivery_mode": "TEXT NOT NULL DEFAULT 'auto'",
         }.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE publishing_rules ADD COLUMN {name} {definition}")
@@ -130,7 +133,7 @@ def save_target(label, chat_id, enabled=True, target_id=None, description=""):
 def save_rule(name, category, country, scope, target_id, priority=100,
               enabled=True, stop_on_match=True, rule_id=None, source_channel="",
               origin_city="", destination_city="", min_price=None, max_price=None,
-              filter_field="", filter_value=""):
+              filter_field="", filter_value="", delivery_mode="auto"):
     name, country = name.strip(), country.strip().upper()
     if not name or category not in CATEGORIES or scope not in SCOPES:
         raise ValueError("Invalid rule name, category, or country condition")
@@ -143,6 +146,8 @@ def save_rule(name, category, country, scope, target_id, priority=100,
     filter_value = str(filter_value or "").strip().casefold()
     if filter_field not in ("", *FILTER_FIELDS[category]) or bool(filter_value) != bool(filter_field):
         raise ValueError("Invalid category filter")
+    if delivery_mode not in {"auto", "manual"}:
+        raise ValueError("Invalid delivery mode")
     min_price = float(min_price) if min_price not in (None, "") else None
     max_price = float(max_price) if max_price not in (None, "") else None
     if (min_price is not None and (not math.isfinite(min_price) or min_price < 0) or
@@ -157,22 +162,58 @@ def save_rule(name, category, country, scope, target_id, priority=100,
             raise ValueError("Target not found")
         values = (name, category, country, scope, source_channel, origin_city,
                   destination_city, min_price, max_price, int(target_id), int(priority),
-                  int(enabled), int(stop_on_match), filter_field, filter_value)
+                  int(enabled), int(stop_on_match), filter_field, filter_value, delivery_mode)
         if rule_id is None:
             conn.execute("""INSERT INTO publishing_rules
                 (name,category,country,country_scope,source_channel,origin_city,
                 destination_city,min_price,max_price,target_id,priority,enabled,stop_on_match,
-                filter_field,filter_value)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
+                filter_field,filter_value,delivery_mode)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
         else:
             cursor = conn.execute("""UPDATE publishing_rules SET name=?,category=?,country=?,
                 country_scope=?,source_channel=?,origin_city=?,destination_city=?,
                 min_price=?,max_price=?,target_id=?,priority=?,enabled=?,stop_on_match=?,
-                filter_field=?,filter_value=? WHERE id=?""",
+                filter_field=?,filter_value=?,delivery_mode=? WHERE id=?""",
                 values + (int(rule_id),))
             if not cursor.rowcount:
                 raise ValueError("Rule not found")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_rule(rule_id, target_id):
+    initialize()
+    conn = get_connection()
+    try:
+        cursor = conn.execute("DELETE FROM publishing_rules WHERE id=? AND target_id=?",
+                              (int(rule_id), int(target_id)))
+        if cursor.rowcount != 1:
+            raise ValueError("Rule not found for this channel")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_rate_limit(seconds):
+    """Telegram rate limits apply to the bot; pause all destinations persistently."""
+    seconds = min(max(int(seconds), 1), 3600)
+    until = (datetime.now(timezone.utc) + timedelta(seconds=seconds + 1)).isoformat()
+    initialize()
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE publishing_targets SET rate_limited_until=?", (until,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def is_rate_limited():
+    initialize()
+    conn = get_connection()
+    try:
+        return conn.execute("SELECT 1 FROM publishing_targets WHERE rate_limited_until>? LIMIT 1",
+                            (_now_iso(),)).fetchone() is not None
     finally:
         conn.close()
 
@@ -230,15 +271,119 @@ def matching_targets(record, rules):
     return targets
 
 
+def rule_matches(rule_id, limit=25, offset=0, message_id=None):
+    """Count and preview ads matching one rule, including their delivery state."""
+    initialize()
+    conn = get_connection()
+    try:
+        rule_row = conn.execute("""SELECT r.*,t.chat_id,t.enabled AS target_enabled,
+            t.connection_status,t.rate_limited_until FROM publishing_rules r
+            JOIN publishing_targets t ON t.id=r.target_id WHERE r.id=?""",
+            (int(rule_id),)).fetchone()
+        if rule_row is None:
+            raise ValueError("Rule not found")
+        rule = dict(rule_row)
+        category = rule["category"]
+        if category not in CATEGORIES:
+            raise ValueError("Invalid category")
+        where = ["m.ai_status='processed'", "m.ai_category=?"]
+        params = [category]
+        if message_id is not None:
+            where.append("m.id=?")
+            params.append(int(message_id))
+        if rule["country"]:
+            origin = "COALESCE(NULLIF(c.origin_country,''),'')" if category == "transferlist" else (
+                "COALESCE(c.country_code,'')" if category == "housinglist" else "''")
+            dest = "COALESCE(c.destination_country,'')" if category == "transferlist" else "''"
+            fields = [expression for scope, expression in (("origin", origin), ("destination", dest))
+                      if rule["country_scope"] in ("either", scope)]
+            where.append("(" + " OR ".join(f"UPPER(TRIM({expression}))=?" for expression in fields) + ")")
+            params.extend([rule["country"]] * len(fields))
+        if rule["source_channel"]:
+            where.append("LOWER(LTRIM(TRIM(m.channel_username),'@'))=?")
+            params.append(rule["source_channel"])
+        if rule["origin_city"]:
+            field = "origin_city" if category == "transferlist" else "city" if category == "housinglist" else None
+            where.append(f"LOWER(TRIM(COALESCE(c.{field},'')))=?" if field else "0")
+            if field: params.append(rule["origin_city"])
+        if rule["destination_city"]:
+            where.append("LOWER(TRIM(COALESCE(c.destination_city,'')))=?" if category == "transferlist" else "0")
+            if category == "transferlist": params.append(rule["destination_city"])
+        if rule["filter_field"] and rule["filter_value"]:
+            if rule["filter_field"] not in FILTER_FIELDS[category]:
+                raise ValueError("Invalid category filter")
+            where.append(f"LOWER(TRIM(CAST(c.{rule['filter_field']} AS TEXT)))=?")
+            params.append(rule["filter_value"])
+        if rule["min_price"] is not None or rule["max_price"] is not None:
+            if category == "joblist":
+                where.append("0")
+            else:
+                if rule["min_price"] is not None:
+                    where.append("c.price>=?")
+                    params.append(rule["min_price"])
+                if rule["max_price"] is not None:
+                    where.append("c.price<=?")
+                    params.append(rule["max_price"])
+        joins = (f"FROM messages m JOIN {category} c ON c.processed_message_id=m.id "
+                 "LEFT JOIN publishing_deliveries d ON d.message_id=m.id AND d.target_id=?")
+        args = [rule["target_id"], *params]
+        clause = " AND ".join(where)
+        counts = conn.execute(f"""SELECT COUNT(*) AS total,
+            COUNT(CASE WHEN d.status='sent' THEN 1 END) AS sent
+            {joins} WHERE {clause}""", args).fetchone()
+        rows = conn.execute(f"""SELECT m.id AS message_row_id,m.message_id AS telegram_source_id,
+            m.*,c.*,d.status AS delivery_status
+            {joins} WHERE {clause} ORDER BY m.id DESC LIMIT ? OFFSET ?""",
+            [*args, min(max(int(limit), 1), 100), max(int(offset), 0)]).fetchall()
+        return rule, dict(counts), [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def selected_pair(rule_id, message_id):
+    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    if (rule["delivery_mode"] != "manual" or not rule["enabled"] or not rule["target_enabled"]
+            or rule["connection_status"] == "disconnected" or not records
+            or records[0]["delivery_status"] in {"sent", "sending"}):
+        raise ValueError("This ad is unavailable for manual publishing")
+    if is_rate_limited():
+        raise ValueError("Telegram rate limit active; wait before sending")
+    return records[0], rule
+
+
+def claim_delivery(message_id, target_id):
+    initialize()
+    conn = get_connection()
+    try:
+        now = _now_iso()
+        conn.execute("""UPDATE publishing_deliveries SET status='retry',error='Interrupted send; retry pending',
+            updated_at=? WHERE message_id=? AND target_id=? AND status='sending' AND updated_at<?""",
+            (now, int(message_id), int(target_id),
+             (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()))
+        cursor = conn.execute("""INSERT INTO publishing_deliveries
+            (message_id,target_id,status,telegram_message_id,error,updated_at)
+            VALUES(?,?,'sending',NULL,NULL,?) ON CONFLICT(message_id,target_id) DO UPDATE SET
+            status='sending',error=NULL,updated_at=excluded.updated_at
+            WHERE publishing_deliveries.status IN ('retry','rejected')""",
+            (int(message_id), int(target_id), now))
+        conn.commit()
+        return cursor.rowcount == 1
+    finally:
+        conn.close()
+
+
 def pending(limit=100):
     """Yield only unsent message-target pairs; disabled or unmatched rules publish nothing."""
     initialize()
+    if is_rate_limited():
+        return []
     conn = get_connection()
     try:
         rules = [dict(row) for row in conn.execute("""SELECT r.*, t.chat_id,
             t.enabled AS target_enabled FROM publishing_rules r
             JOIN publishing_targets t ON t.id=r.target_id
-            WHERE r.enabled=1 AND t.enabled=1 AND t.connection_status!='disconnected'
+            WHERE r.enabled=1 AND r.delivery_mode='auto' AND t.enabled=1
+            AND t.connection_status!='disconnected'
             ORDER BY r.priority,r.id""")]
         if not rules:
             return []
@@ -251,7 +396,8 @@ def pending(limit=100):
                 AND ai_category IN ('transferlist','housinglist','joblist')
                 AND EXISTS (SELECT 1 FROM publishing_rules r
                     JOIN publishing_targets target ON target.id=r.target_id
-                    WHERE r.enabled=1 AND target.enabled=1 AND target.connection_status!='disconnected'
+                    WHERE r.enabled=1 AND r.delivery_mode='auto' AND target.enabled=1
+                    AND target.connection_status!='disconnected'
                     AND r.category=m.ai_category
                     AND NOT EXISTS (SELECT 1 FROM publishing_deliveries d
                         WHERE d.message_id=m.id AND d.target_id=r.target_id

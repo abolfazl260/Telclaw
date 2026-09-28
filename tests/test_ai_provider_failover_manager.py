@@ -81,6 +81,7 @@ def test_highest_priority_provider_recovers_after_cooldown():
     service = manager(first, second)
     service.active_index = 1
     service._unavailable_until[0] = 0.0
+    service._last_recovery_check = -1e9
 
     assert service.classify_batch([{"message_id": 1, "text": "room"}]) == {1: "housinglist"}
     assert service.active_index == 0

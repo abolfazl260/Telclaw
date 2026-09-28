@@ -176,6 +176,14 @@ def _select(name, values, selected):
 
 async def index(request):
     csrf = _escape(request["session"]["csrf"])
+    overview = backoffice_health.snapshot()["overview"]
+    provider_rows = "".join(
+        f'<span class="provider-status"><strong>{_escape(item["name"].title())}</strong> '
+        f'<span class="badge {"connected" if item["status"] == "READY" else "disconnected"}">'
+        f'{_escape(item["status"])}</span> '
+        f'<span class="hint">priority #{int(item["priority"])} · {int(item["credential_count"])} credential(s)</span></span>'
+        for item in overview["providers"]
+    ) or '<span class="hint">No AI providers configured.</span>'
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
     rows = []
     for target in targets:
@@ -245,6 +253,11 @@ async def index(request):
     .condition-row{{display:grid;grid-template-columns:90px minmax(140px,1fr) 140px minmax(150px,1fr) auto;gap:.45rem;align-items:center;margin:.45rem 0}}
     .condition-row:first-child .condition-join{{visibility:hidden}}@media(max-width:760px){{.condition-row{{grid-template-columns:1fr}}.condition-row:first-child .condition-join{{display:none}}}}
     .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
+    .overview-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem;margin:1rem 0}}
+    .overview-card{{padding:1rem;border:1px solid #dce4ef;border-radius:12px;background:#f8faff}}
+    .overview-card span{{display:block;color:#526174;font-size:.84rem}}
+    .overview-card strong{{display:block;font-size:1.55rem;margin-top:.2rem}}
+    .provider-status{{display:inline-flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin:.2rem .8rem .2rem 0}}
     .ad-row p{{margin:.3rem 0}}.ad-row form{{display:inline-flex;padding:0}}
     .ad-row pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;background:#f5f7fb;padding:.7rem}}
     .tabs{{display:flex;gap:.6rem;margin:1rem 0}}.tabs a{{padding:.5rem .9rem;border-radius:8px;background:white;color:#1957b8;text-decoration:none}}
@@ -255,6 +268,14 @@ async def index(request):
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
+    <section><h2>Overview · {_escape(overview["date"])}</h2>
+    <div class="overview-grid">
+      <div class="overview-card"><span>New messages today</span><strong>{int(overview["new_messages"]):,}</strong></div>
+      <div class="overview-card"><span>Duplicates removed today</span><strong>{int(overview["duplicates"]):,}</strong></div>
+      <div class="overview-card"><span>Ads ready to publish</span><strong>{int(overview["ready_ads"]):,}</strong></div>
+      <div class="overview-card"><span>AI extraction</span><strong>{'Enabled' if overview["provider_enabled"] else 'Disabled'}</strong></div>
+    </div>
+    <div><strong>AI Providers:</strong> {provider_rows}</div></section>
     <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add channel / group</button>
     <div class="grid">{''.join(rows) or '<p>No publishing channels or groups yet.</p>'}</div>
     <dialog id="target-new"><button type="button" data-close>Close</button><h2>New channel or group</h2>

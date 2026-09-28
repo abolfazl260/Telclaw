@@ -181,7 +181,8 @@ async def index(request):
         assigned = [rule for rule in rules if rule["target_id"] == target["id"]]
         rule_rows = "".join(_rule_panel(rule, target, csrf, request) for rule in assigned)
         history = routing_rules.recent_deliveries(30, target['id'])
-        history_rows = ''.join(f'''<tr><td>#{item['message_id']}</td><td>{_escape(item['status'])}</td>
+        history_rows = ''.join(f'''<tr><td>#{item['message_id']}</td>
+            <td>{_escape(item.get('delivery_kind') or 'original')}</td><td>{_escape(item['status'])}</td>
             <td>{_escape(item['telegram_message_id'] or '—')}</td><td>{_escape(item['updated_at'])}</td>
             <td>{_escape(item['error'])}</td><td>'''
             + (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
@@ -189,7 +190,8 @@ async def index(request):
             <input type="hidden" name="target_id" value="{target['id']}"><button
             {'data-confirm="Telegram may already have posted this ad. Check the channel before retrying."' if item['status']=='uncertain' else ''}
             >{'Review and retry' if item['status']=='uncertain' else 'Retry'}</button></form>'''
-            if item['status'] in {'retry', 'rejected', 'uncertain'} else '') + '</td></tr>' for item in history)
+            if item.get('delivery_kind') == 'original' and item['status'] in {'retry', 'rejected', 'uncertain'} else '')
+            + '</td></tr>' for item in history)
         state = target.get('connection_status') or 'unknown'
         opened = str(getattr(request, 'query', {}).get('channel', '')) == str(target['id'])
         rows.append(f'''<details class="channel" id="channel-{target['id']}" {'open' if opened else ''}><summary>
@@ -213,8 +215,8 @@ async def index(request):
             <div class="subsection"><h3>Publishing rules</h3>{rule_rows or '<p>No rules for this channel yet.</p>'}
             <details><summary>Add a rule for this channel</summary>{_rule_form(None, target, csrf)}</details></div>
             <details class="subsection"><summary>Delivery history ({len(history)})</summary><div class="scroll"><table>
-            <thead><tr><th>Message</th><th>Status</th><th>Telegram ID</th><th>Updated (UTC)</th><th>Error</th><th></th></tr></thead>
-            <tbody>{history_rows or '<tr><td colspan="6">No deliveries yet.</td></tr>'}</tbody></table></div></details>
+            <thead><tr><th>Message</th><th>Attempt</th><th>Status</th><th>Telegram ID</th><th>Updated (UTC)</th><th>Error</th><th></th></tr></thead>
+            <tbody>{history_rows or '<tr><td colspan="7">No deliveries yet.</td></tr>'}</tbody></table></div></details>
             </div></details>''')
     body = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw back office</title>
@@ -347,6 +349,13 @@ def _rule_panel(rule, target, csrf, request):
             <input type="hidden" name="rule_id" value="{rule['id']}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
             <button>Send this ad</button></form>''' if can_send else "")
+        can_resend = (status == "sent" and rule["enabled"] and target["enabled"]
+                      and target["connection_status"] != "disconnected" and not paused)
+        resend = (f'''<form method="post" action="/rule/resend"><input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="rule_id" value="{rule['id']}">
+            <input type="hidden" name="message_id" value="{record['message_row_id']}">
+            <button data-confirm="This ad was already delivered to this channel. Send another copy?">Send again</button>
+            </form>''' if can_resend else "")
         uncertain = (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
             <input type="hidden" name="target_id" value="{target['id']}">
@@ -355,7 +364,7 @@ def _rule_panel(rule, target, csrf, request):
         entries.append(f'''<div class="ad-row"><strong>Ad #{record['message_row_id']}</strong>
             · {_escape(record.get('channel_username') or '')} · {_escape(status)}
             <p>{_escape(snippet)}</p><details><summary>Full ad preview</summary>
-            <pre>{_escape(preview[:4000])}</pre></details>{send}{uncertain}</div>''')
+            <pre>{_escape(preview[:4000])}</pre></details>{send}{resend}{uncertain}</div>''')
     nav = ""
     for label, p in (("Previous", page - 1), ("Next", page + 1)):
         if p >= 0 and p * 20 < counts["total"] and (p != page):
@@ -427,6 +436,20 @@ async def send_selected(request):
     result = await RoutedPublisher().publish_pending(pairs=[(record, rule)])
     notice = "&notice=rate_limited" if result.get("rate_limited") else ""
     raise web.HTTPSeeOther(f"/?channel={rule['target_id']}&rule={rule['id']}{notice}#rule-{rule['id']}")
+
+
+async def resend_selected(request):
+    data = await request.post()
+    try:
+        record, rule = routing_rules.selected_resend_pair(data.get("rule_id"), data.get("message_id"))
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    from routed_publisher import RoutedPublisher
+    result = await RoutedPublisher().publish_pending(
+        pairs=[(record, rule)], resend=True, requested_by=request["session"]["admin_id"])
+    notice = "&notice=rate_limited" if result.get("rate_limited") else ""
+    raise web.HTTPSeeOther(
+        f"/?channel={rule['target_id']}&rule={rule['id']}{notice}#rule-{rule['id']}")
 
 
 async def filter_values(request):
@@ -678,6 +701,7 @@ def create_app():
                     web.get("/filter-values", filter_values),
                     web.post("/target", save_target), web.post("/rule", save_rule),
                     web.post("/rule/delete", delete_rule), web.post("/rule/send", send_selected),
+                    web.post("/rule/resend", resend_selected),
                     web.post("/retry", retry_delivery), web.post("/target/check", check_target),
                     web.post("/logout", logout)])
     return app

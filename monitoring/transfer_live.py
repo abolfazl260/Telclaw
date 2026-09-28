@@ -262,7 +262,7 @@ def install_transfer_live_command(monitor):
         if command != "/transferlive":
             return await original_handle_update(update)
 
-        if chat_id is None:
+        if not self._is_admin_private_chat(chat, message.get("from")):
             return
         if not self._is_subscribed(chat_id):
             await self._send(chat_id, "⛔ ابتدا با /start دریافت گزارش‌های Telclaw را فعال کنید.")
@@ -281,6 +281,7 @@ def install_transfer_live_command(monitor):
             {"command": "source", "description": "نمایش کانال‌ها و گروه‌های تحت کرال"},
             {"command": "down_errors", "description": "Download crawler error log"},
             {"command": "database", "description": "Download full SQLite database"},
+            {"command": "backoffice", "description": "Open private publishing back office"},
             {"command": "transferlive", "description": "نمایش آگهی‌های فعال حمل‌ونقل"},
         ]
         try:

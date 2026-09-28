@@ -59,6 +59,24 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## System Health tab
+
+The **System Health** tab is a read-only operational dashboard. It shows SQLite
+integrity and size, tracked table row counts, current processing/classification/AI/
+Advertio queues and failures, recent crawl totals by day, and every configured or
+observed crawl channel with its first/last stored message and failure count.
+
+Crawler, processing, classification, AI and Advertio reports emitted by the Telegram
+monitor are now persisted in the `system_activity` table before they are broadcast.
+System errors are persisted there as well, so the health tab keeps a recent activity
+timeline across browser refreshes and process restarts. The page also reports Telegram
+monitor runtime state, active report subscribers, publishing delivery/resend totals,
+and recent audited database edits. Configured channels that have never produced a
+stored message are shown as **not crawled** instead of silently disappearing.
+
+The dashboard only reads operational state; it does not start, stop or retry pipeline
+jobs. Use the page's **Refresh** link to request a fresh snapshot.
+
 ## Database tab
 
 The **Database** tab shows `messages`, `transferlist`, `housinglist`, and `joblist`

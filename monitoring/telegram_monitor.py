@@ -28,6 +28,10 @@ class TelegramMonitor:
     async def start(self):
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
+    def runtime_status(self):
+        task=self._task
+        return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
+                "offset":int(self._offset or 0)}
     async def _register_commands(self):
         commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")

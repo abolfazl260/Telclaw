@@ -141,51 +141,215 @@ class SchedulerService:
                 stats[name] = getattr(result, name)
         return stats or {"status": "completed"}
 
-    async def _run_forever(self, client, channel_username, interval_minutes, from_date, to_date, crawl_mode, start_delay_minutes=0):
-        if start_delay_minutes > 0:
-            print(f"[SCHEDULER] @{channel_username} starts in {start_delay_minutes:g} minute(s) to preserve channel spacing.")
-            await asyncio.sleep(start_delay_minutes * 60)
+    async def _run_cycle(
+        self,
+        client,
+        channels,
+        interval_minutes,
+        from_date,
+        to_date,
+        crawl_mode,
+        channel_interval_minutes=0,
+    ):
+        """Run one complete multi-channel cycle before waiting for the next cycle.
+
+        All selected channels are crawled first. Only after the final channel
+        finishes do the processing/AI stages run and the transfer-live summary
+        get sent once. The scheduler then waits for the next cycle.
+        """
         first_cycle = True
         next_run_at = time.monotonic()
+
         while True:
             try:
                 if first_cycle:
                     cycle_from_date, cycle_to_date = from_date, to_date
-                    print(f"[SCHEDULER] @{channel_username} initial historical crawl: {cycle_from_date} -> {cycle_to_date}")
+                    print(
+                        f"[SCHEDULER] Initial full crawl cycle: "
+                        f"{cycle_from_date} -> {cycle_to_date}"
+                    )
                 else:
                     today = date.today()
                     cycle_from_date, cycle_to_date = max(from_date, today), today
-                    print(f"[SCHEDULER] @{channel_username} live crawl: {cycle_from_date} -> {cycle_to_date}")
-                crawl_result = await self.crawl_job.run_channel(client, channel_username, cycle_from_date, cycle_to_date, crawl_mode=crawl_mode, should_stop=lambda: self.stage_control.is_skip_requested("crawl"))
-                await self._run_post_crawl_pipeline(client, channel_username, crawl_result)
+                    print(
+                        f"[SCHEDULER] New full crawl cycle: "
+                        f"{cycle_from_date} -> {cycle_to_date}"
+                    )
+
+                completed = 0
+                total = len(channels)
+
+                for index, channel_username in enumerate(channels, start=1):
+                    if index > 1 and channel_interval_minutes > 0:
+                        print(
+                            f"[SCHEDULER] Waiting {channel_interval_minutes:g} minute(s) "
+                            f"before channel {index}/{total}: @{channel_username}"
+                        )
+                        await asyncio.sleep(channel_interval_minutes * 60)
+
+                    print(
+                        f"[SCHEDULER] Crawling channel {index}/{total}: "
+                        f"@{channel_username}"
+                    )
+                    crawl_result = await self.crawl_job.run_channel(
+                        client,
+                        channel_username,
+                        cycle_from_date,
+                        cycle_to_date,
+                        crawl_mode=crawl_mode,
+                        should_stop=lambda: self.stage_control.is_skip_requested("crawl"),
+                    )
+
+                    crawl_stats = self._normalize_crawl_stats(crawl_result)
+                    crawl_stats.setdefault("channel", f"@{channel_username}")
+                    await self.monitor.report("crawl", crawl_stats)
+                    self.stage_control.consume_skip("crawl")
+                    completed += 1
+
+                    if isinstance(crawl_result, dict) and crawl_result.get("stopped"):
+                        print(
+                            f"{Fore.YELLOW}⚠️ CRAWL STOPPED BY OPERATOR: "
+                            f"@{channel_username}"
+                        )
+                        break
+
+                print(
+                    f"{Fore.GREEN}✅ FULL CRAWL CYCLE COMPLETED: "
+                    f"{completed}/{total} channel(s)"
+                )
+
+                if completed == total:
+                    await self._run_post_crawl_pipeline(
+                        client,
+                        f"{total} channels",
+                        {"status": "completed", "channels": total},
+                    )
+                    print(f"{Fore.CYAN}▸ Sending automatic transfer-live summary...")
+                    try:
+                        await self.monitor.broadcast_transfer_live()
+                        print(f"{Fore.GREEN}✅ Automatic transfer-live summary sent.")
+                    except Exception as exc:
+                        await self.monitor.error(
+                            "ERROR",
+                            "services.scheduler_service",
+                            f"Automatic transfer-live report failed: {exc}",
+                        )
+                else:
+                    print(
+                        f"{Fore.YELLOW}⚠️ Full crawl cycle was incomplete; "
+                        "automatic transfer-live summary was not sent."
+                    )
+
                 first_cycle = False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                print(f"[COLLECTION] Pipeline failed for {channel_username}: {exc}")
-                await self.monitor.error("ERROR", "services.scheduler_service", f"Pipeline failed for @{channel_username}: {exc}")
+                print(f"[COLLECTION] Full crawl cycle failed: {exc}")
+                await self.monitor.error(
+                    "ERROR",
+                    "services.scheduler_service",
+                    f"Full crawl cycle failed: {exc}",
+                )
                 first_cycle = False
+
             next_run_at += interval_minutes * 60
             sleep_seconds = max(0, next_run_at - time.monotonic())
-            print(f"[COLLECTION] Next check for {channel_username} in {sleep_seconds / 60:g} minute(s).")
+            print(
+                f"[COLLECTION] Next full crawl cycle in "
+                f"{sleep_seconds / 60:g} minute(s)."
+            )
             await asyncio.sleep(sleep_seconds)
 
-    def schedule_channel(self, client, channel_username, from_date, to_date, interval_minutes=None, start_delay_minutes=None, crawl_mode=CRAWL_MODE_ALL):
+    def schedule_cycle(
+        self,
+        client,
+        channels,
+        from_date,
+        to_date,
+        interval_minutes=None,
+        channel_interval_minutes=0,
+        crawl_mode=CRAWL_MODE_ALL,
+    ):
         if from_date > to_date:
-            raise ValueError("Start date cannot be later than end date")
-        interval = float(interval_minutes if interval_minutes is not None else config.CRAWL_INTERVAL_MINUTES)
+            raise ValueError("Start date cannot be later than To date")
+
+        normalized_channels = []
+        seen = set()
+        for channel in channels or []:
+            username = str(channel or "").strip()
+            key = username.lower().lstrip("@")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            normalized_channels.append(username)
+
+        if not normalized_channels:
+            raise ValueError("At least one channel must be selected")
+
+        interval = float(
+            interval_minutes
+            if interval_minutes is not None
+            else config.CRAWL_INTERVAL_MINUTES
+        )
         if interval <= 0:
             raise ValueError("Crawler interval must be greater than zero")
-        stagger = float(start_delay_minutes if start_delay_minutes is not None else 0)
-        if stagger < 0:
-            raise ValueError("Channel start delay cannot be negative")
-        key = self._task_key(client, channel_username, from_date, to_date, crawl_mode)
+
+        spacing = float(channel_interval_minutes or 0)
+        if spacing < 0:
+            raise ValueError("Channel interval cannot be negative")
+
+        session = getattr(getattr(client, "session", None), "filename", None)
+        session_name = session or str(getattr(client, "session", client))
+        key = (
+            f"{session_name}:cycle:{','.join(c.lower().lstrip('@') for c in normalized_channels)}:"
+            f"{from_date}:{to_date}:{crawl_mode}"
+        )
         existing = self._tasks.get(key)
         if existing and not existing.done():
             return existing
-        task = asyncio.create_task(self._run_forever(client, channel_username, interval, from_date, to_date, crawl_mode, start_delay_minutes=stagger))
+
+        task = asyncio.create_task(
+            self._run_cycle(
+                client,
+                normalized_channels,
+                interval,
+                from_date,
+                to_date,
+                crawl_mode,
+                channel_interval_minutes=spacing,
+            )
+        )
         self._tasks[key] = task
         return task
+
+    def schedule_channel(
+        self,
+        client,
+        channel_username,
+        from_date=None,
+        to_date=None,
+        interval_minutes=None,
+        start_delay_minutes=None,
+        crawl_mode=CRAWL_MODE_ALL,
+    ):
+        """Legacy single-channel scheduler API.
+
+        It remains available for compatibility. New multi-channel scheduling
+        should use schedule_cycle() so one report is emitted per full cycle.
+        """
+        if from_date is None or to_date is None:
+            today = date.today()
+            from_date = from_date or today
+            to_date = to_date or today
+        return self.schedule_cycle(
+            client,
+            [channel_username],
+            from_date,
+            to_date,
+            interval_minutes=interval_minutes,
+            channel_interval_minutes=0,
+            crawl_mode=crawl_mode,
+        )
 
     def active_jobs(self):
         return {k: v for k, v in self._tasks.items() if not v.done()}

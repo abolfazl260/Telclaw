@@ -753,7 +753,7 @@ async def health_page(request):
     <th>Messages</th><th>First</th><th>Last</th><th>Failed</th><th>State</th></tr></thead>
     <tbody>{channel_rows or '<tr><td colspan="9">No configured or crawled channels.</td></tr>'}</tbody></table></div></section>
 
-    <section><h2>Robot & system activity</h2><p class="muted">Crawler, processing, AI and error reports are persisted here from now on.</p>
+    <section><h2>Robot &amp; system activity</h2><p class="muted">Crawler, processing, AI and error reports are persisted here from now on.</p>
     <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Kind</th><th>Level</th><th>Source</th><th>Message</th><th>Details</th></tr></thead>
     <tbody>{activity_rows or '<tr><td colspan="6">No persisted activity yet.</td></tr>'}</tbody></table></div></section>
 

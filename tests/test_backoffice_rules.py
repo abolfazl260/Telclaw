@@ -6,6 +6,7 @@ from aiohttp import web
 import backoffice_web
 import routing_rules
 import routed_publisher
+from delivery import telegram_transfer_publisher
 
 
 @pytest.fixture
@@ -19,6 +20,8 @@ def rule_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(routing_rules, "get_connection", connection)
     monkeypatch.setattr(backoffice_web, "get_connection", connection)
+    monkeypatch.setattr(routed_publisher, "get_connection", connection)
+    monkeypatch.setattr(telegram_transfer_publisher.database, "get_connection", connection)
     conn = connection()
     conn.executescript("""CREATE TABLE messages (
         id INTEGER PRIMARY KEY, ai_category TEXT, ai_status TEXT,

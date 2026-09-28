@@ -1,5 +1,6 @@
 """SQLite-backed publishing rules and per-destination delivery state."""
 from datetime import datetime, timezone
+import re
 
 from storage.database import get_connection
 
@@ -60,8 +61,8 @@ def list_rules():
 
 def save_target(label, chat_id, enabled=True, target_id=None):
     label, chat_id = label.strip(), chat_id.strip()
-    if not label or not chat_id or not (chat_id.startswith('@') or
-                                     (chat_id.lstrip('-').isdigit() and chat_id.startswith('-'))):
+    if not label or not (re.fullmatch(r'@[A-Za-z0-9_]{5,32}', chat_id) or
+                         re.fullmatch(r'-[0-9]{5,}', chat_id)):
         raise ValueError("A label and a @channel username or negative Telegram chat ID are required")
     initialize()
     conn = get_connection()

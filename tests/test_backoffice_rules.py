@@ -98,6 +98,27 @@ async def test_backoffice_link_is_admin_only_and_single_use(rule_db, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_direct_http_ip_link_allows_new_admin_login(rule_db, monkeypatch):
+    config = backoffice_web.config
+    monkeypatch.setattr(config, "BACKOFFICE_PUBLIC_URL", "http://192.0.2.10:8787")
+    monkeypatch.setattr(config, "BACKOFFICE_PUBLIC_PORT", 0)
+    monkeypatch.setattr(config, "BACKOFFICE_HOST", "0.0.0.0")
+    monkeypatch.setattr(config, "BACKOFFICE_PORT", 8787)
+    monkeypatch.setattr(config, "BACKOFFICE_TLS_CERT", "")
+    monkeypatch.setattr(config, "BACKOFFICE_TLS_KEY", "")
+    url = backoffice_web.issue_link(106056586)
+    assert url.startswith("http://192.0.2.10:8787/login?token=")
+
+    class Request:
+        query = {"token": url.split("token=", 1)[1]}
+
+    with pytest.raises(web.HTTPSeeOther) as result:
+        await backoffice_web.login(Request())
+    assert "telclaw_admin" in result.value.cookies
+    assert not result.value.cookies["telclaw_admin"]["secure"]
+
+
+@pytest.mark.asyncio
 async def test_publisher_sends_only_once_per_destination(rule_db, monkeypatch):
     routing_rules.save_target("Turkey", "@turkeychannel")
     routing_rules.save_rule("Turkey", "transferlist", "TR", "either", 1)

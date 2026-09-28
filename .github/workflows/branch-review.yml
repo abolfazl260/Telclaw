@@ -10,6 +10,9 @@ jobs:
   test:
     name: Run pytest
     runs-on: ubuntu-latest
+    env:
+      TELEGRAM_API_ID: '12345'
+      TELEGRAM_API_HASH: ci-placeholder
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,4 +28,4 @@ jobs:
           python -m pip install -r requirements.txt pytest
 
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q tests

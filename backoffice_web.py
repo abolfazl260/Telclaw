@@ -138,6 +138,7 @@ def _select(name, values, selected):
 async def index(request):
     csrf = _escape(request["session"]["csrf"])
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
+    deliveries = routing_rules.recent_deliveries()
     rows = []
     for target in targets:
         rows.append(f'''<form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
@@ -149,6 +150,15 @@ async def index(request):
     rule_rows = []
     for rule in rules:
         rule_rows.append(_rule_form(rule, targets, csrf))
+    delivery_rows = []
+    for item in deliveries:
+        retry = ""
+        if item["status"] in {"retry", "rejected"}:
+            retry = f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
+                <input type="hidden" name="message_id" value="{item['message_id']}">
+                <input type="hidden" name="target_id" value="{item['target_id']}"><button>Retry</button></form>'''
+        delivery_rows.append(f'''<p>Message #{item['message_id']} → {_escape(item['target_label'])}:
+            <strong>{_escape(item['status'])}</strong> {_escape(item['error'])}{retry}</p>''')
     body = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw back office</title>
     <style>body{{font:16px system-ui;max-width:1000px;margin:2rem auto;padding:0 1rem;background:#f6f7fb;color:#192333}}
@@ -165,6 +175,7 @@ async def index(request):
     <label><input type="checkbox" name="enabled" checked> Enabled</label><button>Add</button></form></section>
     <section><h2>Rules</h2>{''.join(rule_rows) if rule_rows else '<p>No rules yet.</p>'}
     <h3>Add rule</h3>{_rule_form(None, targets, csrf)}</section>
+    <section><h2>Recent deliveries</h2>{''.join(delivery_rows) if delivery_rows else '<p>No deliveries yet.</p>'}</section>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}"><button>Log out</button></form>
     </body></html>'''
     return web.Response(text=body, content_type="text/html")
@@ -223,11 +234,20 @@ async def logout(request):
     raise response
 
 
+async def retry_delivery(request):
+    data = await request.post()
+    try:
+        routing_rules.retry_delivery(data.get("message_id"), data.get("target_id"))
+    except (TypeError, ValueError) as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+    raise web.HTTPSeeOther("/")
+
+
 def create_app():
     routing_rules.initialize()
     initialize_auth()
     app = web.Application(middlewares=[_security])
     app.add_routes([web.get("/login", login), web.get("/", index),
                     web.post("/target", save_target), web.post("/rule", save_rule),
-                    web.post("/logout", logout)])
+                    web.post("/retry", retry_delivery), web.post("/logout", logout)])
     return app

@@ -94,7 +94,11 @@ class RoutedPublisher:
                     LIMIT ?""",
                 (today, target["id"], int(limit)),
             ).fetchall()
-            rule = dict(target)\n            rule["target_id"] = target["id"]\n            rule["target_enabled"] = target["enabled"]\n            rule["category"] = "transferlist"\n            return [(dict(row), rule) for row in rows]
+            rule = dict(target)
+            rule["target_id"] = target["id"]
+            rule["target_enabled"] = target["enabled"]
+            rule["category"] = "transferlist"
+            return [(dict(row), rule) for row in rows]
         finally:
             conn.close()
 

@@ -11,14 +11,30 @@ logger = logging.getLogger(__name__)
 
 
 def _plain_ad(record):
-    category = record["ai_category"]
-    if category == "housinglist":
-        fields = ("title", "description", "city", "province", "price", "currency")
-    elif category == "joblist":
-        fields = ("job_title", "company", "location", "salary", "salary_currency", "description")
-    else:
+    """Format any structured non-transfer category without topic-specific branching."""
+    category = record.get("ai_category")
+    if category not in routing_rules.CATEGORIES:
         raise ValueError("Unsupported category")
-    return "\n".join(str(record[field]).strip() for field in fields if record.get(field) is not None and str(record[field]).strip())[:4000]
+    fields = routing_rules.category_fields(category)
+    preferred = ("title", "job_title", "name", "description", "company", "location", "city",
+                 "province", "price", "currency", "salary", "salary_currency", "contact")
+    ordered = [field for field in preferred if field in fields]
+    ordered.extend(field for field in fields if field not in ordered)
+    lines = []
+    for field in ordered:
+        value = record.get(field)
+        if value is None or not str(value).strip():
+            continue
+        text = str(value).strip()
+        if field in {"title", "job_title", "name", "description"}:
+            lines.append(text)
+        else:
+            lines.append(f"{field.replace('_', ' ').title()}: {text}")
+    if not lines:
+        fallback = str(record.get("cleaned_text") or record.get("raw_text") or "").strip()
+        if fallback:
+            lines.append(fallback)
+    return "\n".join(lines)[:4000]
 
 
 class RoutedPublisher:

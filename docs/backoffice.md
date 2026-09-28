@@ -59,6 +59,18 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## Database tab
+
+The **Database** tab shows `messages`, `transferlist`, `housinglist`, and `joblist`
+as paginated tables (25 rows per page, newest IDs first). Scroll horizontally to
+inspect every column. Click a blue cell to edit its complete value or set it to
+`NULL`, then save. Updates are checked against the value loaded when the cell was
+opened; if the crawler changed it meanwhile, reload the cell before saving again.
+Every successful edit is recorded in `backoffice_data_edits` with the admin ID.
+IDs, foreign keys, pipeline status fields, and authentication tables cannot be
+edited here. Changes to ad fields are immediately available to publishing rules;
+already sent ads are not automatically resent.
+
 ## Rules
 
 Add each destination through the channel dialog, including its Telegram username or

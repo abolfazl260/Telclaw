@@ -218,6 +218,20 @@ def is_rate_limited():
         conn.close()
 
 
+def mark_incomplete_deliveries():
+    """Surface interrupted sends for human review; Telegram has no send idempotency key."""
+    initialize()
+    conn = get_connection()
+    try:
+        conn.execute("""UPDATE publishing_deliveries SET status='uncertain',
+            error='Send interrupted. Check the channel before retrying; it may have been delivered.',
+            updated_at=? WHERE status='sending' AND updated_at<?""",
+            (_now_iso(), (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def set_enabled(table, item_id, enabled):
     if table not in {"publishing_rules", "publishing_targets"}:
         raise ValueError("Invalid table")
@@ -252,7 +266,8 @@ def matching_targets(record, rules):
         if rule["destination_city"] and str(record.get("destination_city") or "").strip().casefold() != rule["destination_city"]:
             continue
         if rule.get("filter_field") and rule.get("filter_value"):
-            if str(record.get(rule["filter_field"]) or "").strip().casefold() != rule["filter_value"]:
+            value = record.get(rule["filter_field"])
+            if str(value if value is not None else "").strip().casefold() != rule["filter_value"]:
                 continue
         if rule["min_price"] is not None or rule["max_price"] is not None:
             try:
@@ -273,6 +288,7 @@ def matching_targets(record, rules):
 
 def rule_matches(rule_id, limit=25, offset=0, message_id=None):
     """Count and preview ads matching one rule, including their delivery state."""
+    mark_incomplete_deliveries()
     initialize()
     conn = get_connection()
     try:
@@ -344,7 +360,7 @@ def selected_pair(rule_id, message_id):
     rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
     if (rule["delivery_mode"] != "manual" or not rule["enabled"] or not rule["target_enabled"]
             or rule["connection_status"] == "disconnected" or not records
-            or records[0]["delivery_status"] in {"sent", "sending"}):
+            or records[0]["delivery_status"] in {"sent", "sending", "uncertain"}):
         raise ValueError("This ad is unavailable for manual publishing")
     if is_rate_limited():
         raise ValueError("Telegram rate limit active; wait before sending")
@@ -356,10 +372,6 @@ def claim_delivery(message_id, target_id):
     conn = get_connection()
     try:
         now = _now_iso()
-        conn.execute("""UPDATE publishing_deliveries SET status='retry',error='Interrupted send; retry pending',
-            updated_at=? WHERE message_id=? AND target_id=? AND status='sending' AND updated_at<?""",
-            (now, int(message_id), int(target_id),
-             (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()))
         cursor = conn.execute("""INSERT INTO publishing_deliveries
             (message_id,target_id,status,telegram_message_id,error,updated_at)
             VALUES(?,?,'sending',NULL,NULL,?) ON CONFLICT(message_id,target_id) DO UPDATE SET
@@ -374,6 +386,7 @@ def claim_delivery(message_id, target_id):
 
 def pending(limit=100):
     """Yield only unsent message-target pairs; disabled or unmatched rules publish nothing."""
+    mark_incomplete_deliveries()
     initialize()
     if is_rate_limited():
         return []
@@ -446,6 +459,7 @@ def record_delivery(message_id, target_id, status, telegram_message_id=None, err
 
 
 def recent_deliveries(limit=30, target_id=None):
+    mark_incomplete_deliveries()
     initialize()
     conn = get_connection()
     try:
@@ -462,7 +476,7 @@ def retry_delivery(message_id, target_id):
     conn = get_connection()
     try:
         conn.execute("""UPDATE publishing_deliveries SET status='retry',error=NULL,
-            updated_at=? WHERE message_id=? AND target_id=? AND status IN ('rejected','retry')""",
+            updated_at=? WHERE message_id=? AND target_id=? AND status IN ('rejected','retry','uncertain')""",
             (_now_iso(), int(message_id), int(target_id)))
         conn.commit()
     finally:

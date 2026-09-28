@@ -44,7 +44,21 @@ def initialize():
             error TEXT, updated_at TEXT NOT NULL,
             PRIMARY KEY(message_id, target_id)
         );
+        CREATE TABLE IF NOT EXISTS publishing_resends (
+            id INTEGER PRIMARY KEY,
+            message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            target_id INTEGER NOT NULL REFERENCES publishing_targets(id),
+            requested_by INTEGER,
+            status TEXT NOT NULL,
+            telegram_message_id INTEGER,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_publishing_deliveries_status ON publishing_deliveries(status);
+        CREATE INDEX IF NOT EXISTS idx_publishing_resends_target
+            ON publishing_resends(target_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_publishing_resends_status ON publishing_resends(status);
         """)
         target_columns = {row[1] for row in conn.execute("PRAGMA table_info(publishing_targets)")}
         for name, definition in {"description": "TEXT NOT NULL DEFAULT ''",
@@ -96,8 +110,8 @@ def distinct_filter_values(category, field, limit=120):
     conn = get_connection()
     try:
         rows = conn.execute(f"""SELECT DISTINCT TRIM(CAST(c.{field} AS TEXT)) AS value
-            FROM {category} c JOIN messages m ON m.id=c.processed_message_id
-            WHERE m.ai_status='processed' AND c.{field} IS NOT NULL
+            FROM {category} c
+            WHERE c.{field} IS NOT NULL
               AND LENGTH(TRIM(CAST(c.{field} AS TEXT))) BETWEEN 1 AND 80
             ORDER BY value COLLATE NOCASE LIMIT ?""", (min(max(int(limit), 1), 200),))
         return [row["value"] for row in rows]
@@ -223,10 +237,14 @@ def mark_incomplete_deliveries():
     initialize()
     conn = get_connection()
     try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        now = _now_iso()
         conn.execute("""UPDATE publishing_deliveries SET status='uncertain',
             error='Send interrupted. Check the channel before retrying; it may have been delivered.',
-            updated_at=? WHERE status='sending' AND updated_at<?""",
-            (_now_iso(), (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()))
+            updated_at=? WHERE status='sending' AND updated_at<?""", (now, cutoff))
+        conn.execute("""UPDATE publishing_resends SET status='uncertain',
+            error='Manual resend interrupted. Check the channel before sending another copy.',
+            updated_at=? WHERE status='sending' AND updated_at<?""", (now, cutoff))
         conn.commit()
     finally:
         conn.close()
@@ -302,8 +320,10 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
         category = rule["category"]
         if category not in CATEGORIES:
             raise ValueError("Invalid category")
-        where = ["m.ai_status='processed'", "m.ai_category=?"]
-        params = [category]
+        # The category table is the source of truth for previews. Rows can exist there
+        # before the message pipeline flips ai_status to "processed".
+        where = []
+        params = []
         if message_id is not None:
             where.append("m.id=?")
             params.append(int(message_id))
@@ -340,10 +360,10 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
                 if rule["max_price"] is not None:
                     where.append("c.price<=?")
                     params.append(rule["max_price"])
-        joins = (f"FROM messages m JOIN {category} c ON c.processed_message_id=m.id "
+        joins = (f"FROM {category} c JOIN messages m ON m.id=c.processed_message_id "
                  "LEFT JOIN publishing_deliveries d ON d.message_id=m.id AND d.target_id=?")
         args = [rule["target_id"], *params]
-        clause = " AND ".join(where)
+        clause = " AND ".join(where) or "1"
         counts = conn.execute(f"""SELECT COUNT(*) AS total,
             COUNT(CASE WHEN d.status='sent' THEN 1 END) AS sent
             {joins} WHERE {clause}""", args).fetchone()
@@ -351,20 +371,37 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
             m.*,c.*,d.status AS delivery_status
             {joins} WHERE {clause} ORDER BY m.id DESC LIMIT ? OFFSET ?""",
             [*args, min(max(int(limit), 1), 100), max(int(offset), 0)]).fetchall()
-        return rule, dict(counts), [dict(row) for row in rows]
+        records = []
+        for row in rows:
+            record = dict(row)
+            # A category-table row is sufficient to identify its formatter even when
+            # messages.ai_category has not been finalized yet.
+            record["ai_category"] = category
+            records.append(record)
+        return rule, dict(counts), records
     finally:
         conn.close()
 
 
-def selected_pair(rule_id, message_id):
+def selected_pair(rule_id, message_id, allow_sent=False):
     rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    blocked = {"sending", "uncertain"}
+    if not allow_sent:
+        blocked.add("sent")
     if (rule["delivery_mode"] != "manual" or not rule["enabled"] or not rule["target_enabled"]
             or rule["connection_status"] == "disconnected" or not records
-            or records[0]["delivery_status"] in {"sent", "sending", "uncertain"}):
+            or records[0]["delivery_status"] in blocked):
         raise ValueError("This ad is unavailable for manual publishing")
     if is_rate_limited():
         raise ValueError("Telegram rate limit active; wait before sending")
     return records[0], rule
+
+
+def selected_resend_pair(rule_id, message_id):
+    record, rule = selected_pair(rule_id, message_id, allow_sent=True)
+    if record.get("delivery_status") != "sent":
+        raise ValueError("Only a delivered ad can be sent again")
+    return record, rule
 
 
 def claim_delivery(message_id, target_id):
@@ -380,6 +417,31 @@ def claim_delivery(message_id, target_id):
             (int(message_id), int(target_id), now))
         conn.commit()
         return cursor.rowcount == 1
+    finally:
+        conn.close()
+
+
+def claim_resend(message_id, target_id, requested_by=None):
+    """Create one append-only manual resend attempt without changing the original delivery."""
+    initialize()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute("""SELECT 1 FROM publishing_resends
+            WHERE message_id=? AND target_id=? AND status='sending' LIMIT 1""",
+            (int(message_id), int(target_id))).fetchone()
+        if active is not None:
+            conn.rollback()
+            return None
+        now = _now_iso()
+        cursor = conn.execute("""INSERT INTO publishing_resends
+            (message_id,target_id,requested_by,status,telegram_message_id,error,created_at,updated_at)
+            VALUES(?,?,?,'sending',NULL,NULL,?,?)""",
+            (int(message_id), int(target_id),
+             int(requested_by) if requested_by is not None else None, now, now))
+        resend_id = cursor.lastrowid
+        conn.commit()
+        return resend_id
     finally:
         conn.close()
 
@@ -458,15 +520,37 @@ def record_delivery(message_id, target_id, status, telegram_message_id=None, err
         conn.close()
 
 
+def record_resend(resend_id, status, telegram_message_id=None, error=None):
+    initialize()
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""UPDATE publishing_resends SET status=?,telegram_message_id=?,
+            error=?,updated_at=? WHERE id=?""",
+            (status, telegram_message_id, error, _now_iso(), int(resend_id)))
+        if cursor.rowcount != 1:
+            raise ValueError("Manual resend attempt not found")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def recent_deliveries(limit=30, target_id=None):
     mark_incomplete_deliveries()
     initialize()
     conn = get_connection()
     try:
-        return [dict(row) for row in conn.execute("""SELECT d.*, t.label AS target_label
-            FROM publishing_deliveries d JOIN publishing_targets t ON t.id=d.target_id
-            WHERE (? IS NULL OR d.target_id=?)
-            ORDER BY d.updated_at DESC LIMIT ?""", (target_id, target_id, int(limit)))]
+        return [dict(row) for row in conn.execute("""SELECT h.*, t.label AS target_label
+            FROM (
+                SELECT NULL AS resend_id,message_id,target_id,status,telegram_message_id,error,
+                       updated_at,NULL AS requested_by,'original' AS delivery_kind
+                FROM publishing_deliveries
+                UNION ALL
+                SELECT id AS resend_id,message_id,target_id,status,telegram_message_id,error,
+                       updated_at,requested_by,'resend' AS delivery_kind
+                FROM publishing_resends
+            ) h JOIN publishing_targets t ON t.id=h.target_id
+            WHERE (? IS NULL OR h.target_id=?)
+            ORDER BY h.updated_at DESC LIMIT ?""", (target_id, target_id, int(limit)))]
     finally:
         conn.close()
 

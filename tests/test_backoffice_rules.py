@@ -243,6 +243,79 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
     assert routing_rules.list_rules() == []
 
 
+def test_matching_ads_include_category_rows_before_ai_status_processed(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("All Turkey", "transferlist", "", "either", 1,
+                            filter_field="origin_country", filter_value="TR",
+                            delivery_mode="manual")
+    conn = rule_db()
+    conn.execute("INSERT INTO messages VALUES(2,NULL,'pending',12,'bob','test')")
+    conn.execute("""INSERT INTO transferlist
+        (id,processed_message_id,origin_city,destination_city,origin_country,destination_country,price)
+        VALUES(2,2,'Ankara','Tehran','TR','IR',175)""")
+    conn.commit()
+    conn.close()
+
+    _, counts, records = routing_rules.rule_matches(1)
+    assert counts == {"total": 2, "sent": 0}
+    assert [record["message_row_id"] for record in records] == [2, 1]
+    assert all(record["ai_category"] == "transferlist" for record in records)
+
+
+@pytest.mark.asyncio
+async def test_sent_ad_can_be_manually_resent_without_overwriting_original(rule_db, monkeypatch):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("Auto rule", "transferlist", "", "either", 1)
+    routing_rules.record_delivery(1, 1, "sent", 900)
+
+    page = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "Send again" in page.text
+    assert "This ad was already delivered to this channel" in page.text
+
+    monkeypatch.setattr(routed_publisher.config, "TELEGRAM_BOT_TOKEN", "fake-token")
+    posted = []
+
+    class Response:
+        ok = True
+        status = 200
+
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def json(self, **kwargs):
+            return {"ok": True, "result": {"message_id": 901}}
+
+    class Session:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def post(self, url, **kwargs):
+            posted.append(kwargs["json"])
+            return Response()
+
+    monkeypatch.setattr(routed_publisher.aiohttp, "ClientSession", Session)
+
+    class Request(dict):
+        async def post(self):
+            return {"rule_id": "1", "message_id": "1"}
+
+    request = Request({"session": {"admin_id": 1485409432}})
+    with pytest.raises(web.HTTPSeeOther):
+        await backoffice_web.resend_selected(request)
+
+    conn = rule_db()
+    original = conn.execute("""SELECT status,telegram_message_id
+        FROM publishing_deliveries WHERE message_id=1 AND target_id=1""").fetchone()
+    resend = conn.execute("""SELECT requested_by,status,telegram_message_id
+        FROM publishing_resends WHERE message_id=1 AND target_id=1""").fetchone()
+    conn.close()
+    assert tuple(original) == ("sent", 900)
+    assert tuple(resend) == (1485409432, "sent", 901)
+    assert posted[0]["chat_id"] == "@turkeychannel"
+    history = routing_rules.recent_deliveries(target_id=1)
+    assert any(item["delivery_kind"] == "resend" and item["telegram_message_id"] == 901
+               for item in history)
+
+
 @pytest.mark.asyncio
 async def test_telegram_429_pauses_bot_without_repeated_sends(rule_db, monkeypatch):
     routing_rules.save_target("Turkey", "@turkeychannel")

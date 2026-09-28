@@ -16,7 +16,7 @@ def update(user_id, *, chat_id=None, chat_type="private", command="/start"):
 
 
 @pytest.mark.asyncio
-async def test_only_three_admin_ids_can_subscribe(monkeypatch):
+async def test_only_admin_ids_can_subscribe(monkeypatch):
     monitor = TelegramMonitor()
     subscriptions = []
     requests = []
@@ -29,13 +29,13 @@ async def test_only_three_admin_ids_can_subscribe(monkeypatch):
 
     monkeypatch.setattr(monitor, "_api", fake_api)
 
-    assert ADMIN_USER_IDS == {1485409432, 266809220, 7469291969}
+    assert ADMIN_USER_IDS == {1485409432, 266809220, 7469291969, 106056586}
     for user_id in ADMIN_USER_IDS:
         await monitor._handle_update(update(user_id))
     await monitor._handle_update(update(123456789))
 
     assert {item[0] for item in subscriptions} == ADMIN_USER_IDS
-    assert len(requests) == 3
+    assert len(requests) == 4
 
 
 @pytest.mark.asyncio

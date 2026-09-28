@@ -28,8 +28,10 @@ class RoutedPublisher:
             raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
         routing_rules.initialize()
 
-    async def publish_pending(self, limit=50):
-        pairs = routing_rules.pending(limit)
+    async def publish_pending(self, limit=50, pairs=None):
+        if routing_rules.is_rate_limited():
+            return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
+        pairs = routing_rules.pending(limit) if pairs is None else pairs
         result = {"found": len(pairs), "sent": 0, "failed": 0, "rejected": 0}
         blocked_targets = {}
         for record, rule in pairs:
@@ -38,6 +40,8 @@ class RoutedPublisher:
                 routing_rules.record_delivery(message_id, target_id, "rejected",
                                               error=blocked_targets[target_id][:1000])
                 result["rejected"] += 1
+                continue
+            if not routing_rules.claim_delivery(message_id, target_id):
                 continue
             try:
                 if record["ai_category"] == "transferlist":
@@ -58,6 +62,19 @@ class RoutedPublisher:
                                             json=payload) as response:
                         body = await response.json(content_type=None)
                         if not response.ok or not body.get("ok"):
+                            if response.status == 429:
+                                retry_after = (body.get("parameters") or {}).get("retry_after", 60)
+                                try:
+                                    seconds = min(max(int(retry_after), 1), 3600)
+                                except (ValueError, TypeError):
+                                    seconds = 60
+                                routing_rules.set_rate_limit(seconds)
+                                routing_rules.record_delivery(message_id, target_id, "retry",
+                                                              error=f"Telegram rate limit: retry after {seconds}s")
+                                result["failed"] += 1
+                                result["rate_limited"] = True
+                                logger.warning("Telegram rate limit reached; publishing paused for %ss", seconds)
+                                return result
                             if response.status == 403:
                                 error = f"Telegram sendMessage HTTP 403: {body.get('description', '')}"
                                 blocked_targets[target_id] = error

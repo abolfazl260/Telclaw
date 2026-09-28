@@ -653,7 +653,7 @@ async def data_page(request):
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
     <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a class="active" href="/data">Database</a></nav>
+    <a class="active" href="/data">Database</a><a href="/health">System Health</a></nav>
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
     <section data-table="{table}"><p>{result['total']} rows · Page {result['page']} of {result['pages']}
@@ -665,6 +665,179 @@ async def data_page(request):
     <tbody>{''.join(cells) or f'<tr><td colspan="{len(names)}">No rows match these filters.</td></tr>'}</tbody>
     </table></div></form><nav class="pagination">{''.join(pagination)}</nav></section>
     <script nonce="{request['csp_nonce']}">{_DATA_SCRIPT}</script></body></html>'''
+    return web.Response(text=content, content_type="text/html")
+
+
+def _fmt_bytes(value):
+    if value is None:
+        return "Unavailable"
+    size = float(value)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _health_badge(state):
+    value = str(state or "unknown").lower()
+    css = "ok" if value in {"healthy", "running", "connected", "ok", "enabled", "polling"} else (
+        "bad" if value in {"failed", "error", "disconnected", "corrupt", "stopped"} else "warn")
+    return f'<span class="health-badge {css}">{_escape(state)}</span>'
+
+
+def _activity_details(value):
+    if value in (None, "", {}):
+        return "—"
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, ensure_ascii=False, default=str, indent=2)
+    return _escape(str(value)[:5000])
+
+
+async def health_page(request):
+    report = backoffice_health.snapshot()
+    monitor = get_telegram_monitor().runtime_status()
+    db = report["database"]
+    pipeline = report["pipeline"]
+    bot = report["bot"]
+    publishing = report["publishing"]
+
+    failures = (pipeline["processing_failed"] + pipeline["classification_failed"]
+                + pipeline["ai_failed"] + pipeline["advertio_failed"])
+    backlog = (pipeline["processing_pending"] + pipeline["classification_pending"]
+               + pipeline["ai_pending"] + pipeline["advertio_pending"])
+    overall = "HEALTHY" if db["healthy"] and failures == 0 else "WARNING"
+
+    pipeline_cards = "".join(
+        f'''<div class="metric"><span>{_escape(label)}</span><strong>{int(value):,}</strong></div>'''
+        for label, value in (
+            ("Total messages", pipeline["total"]),
+            ("Crawled channels", pipeline["channels"]),
+            ("Pipeline backlog", backlog),
+            ("Failed items", failures),
+            ("Processing pending", pipeline["processing_pending"]),
+            ("Classification pending", pipeline["classification_pending"]),
+            ("AI pending", pipeline["ai_pending"]),
+            ("Advertio pending", pipeline["advertio_pending"]),
+        )
+    )
+    stage_rows = "".join(
+        f"<tr><th>{_escape(label)}</th><td>{int(pending):,}</td><td>{int(failed):,}</td><td>{_escape(last or '—')}</td></tr>"
+        for label, pending, failed, last in (
+            ("Processing", pipeline["processing_pending"], pipeline["processing_failed"], pipeline["last_processing"]),
+            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_processing"]),
+            ("AI extraction", pipeline["ai_pending"], pipeline["ai_failed"], pipeline["last_ai"]),
+            ("Advertio", pipeline["advertio_pending"], pipeline["advertio_failed"], pipeline["last_advertio"]),
+        )
+    )
+    database_rows = "".join(
+        f"<tr><td>{_escape(name)}</td><td>{int(count):,}</td></tr>"
+        for name, count in db["row_counts"].items()
+    )
+    daily_rows = "".join(
+        f"""<tr><td>{_escape(row.get('day') or '—')}</td><td>{int(row.get('crawled') or 0):,}</td>
+        <td>{int(row.get('processed') or 0):,}</td><td>{int(row.get('classified') or 0):,}</td>
+        <td>{int(row.get('ai_processed') or 0):,}</td><td>{int(row.get('advertio_sent') or 0):,}</td>
+        <td>{int(row.get('failed') or 0):,}</td></tr>"""
+        for row in report["daily"]
+    )
+    channel_rows = "".join(
+        f"""<tr><td>@{_escape(row.get('channel_username') or '')}</td>
+        <td>{_escape(row.get('configured_name') or row.get('channel_name') or '—')}</td>
+        <td>{_escape(row.get('configured_category') or '—')}</td>
+        <td>{'yes' if row.get('configured') else 'no'}</td>
+        <td>{int(row.get('messages') or 0):,}</td>
+        <td>{_escape(row.get('first_message') or '—')}</td>
+        <td>{_escape(row.get('last_message') or '—')}</td>
+        <td>{int(row.get('failed') or 0):,}</td>
+        <td>{_health_badge(row.get('crawl_state') or 'unknown')}</td></tr>"""
+        for row in report["channels"]
+    )
+    activity_rows = "".join(
+        f"""<tr><td>{_escape(row.get('created_at') or '—')}</td><td>{_escape(row.get('kind') or '—')}</td>
+        <td>{_health_badge(row.get('level') or 'INFO')}</td><td>{_escape(row.get('source') or '—')}</td>
+        <td>{_escape(row.get('message') or '—')}</td><td><pre>{_activity_details(row.get('details_data'))}</pre></td></tr>"""
+        for row in report["activity"]
+    )
+    edit_rows = "".join(
+        f"""<tr><td>{_escape(row.get('edited_at') or '—')}</td><td>{_escape(row.get('admin_id'))}</td>
+        <td>{_escape(row.get('table_name'))} #{_escape(row.get('row_id'))}</td><td>{_escape(row.get('column_name'))}</td>
+        <td>{_escape(str(row.get('old_value'))[:180] if row.get('old_value') is not None else 'NULL')}</td>
+        <td>{_escape(str(row.get('new_value'))[:180] if row.get('new_value') is not None else 'NULL')}</td></tr>"""
+        for row in report["edits"]
+    )
+    publish_rows = "".join(
+        f"<tr><td>{_escape(kind)}</td><td>{_escape(status)}</td><td>{int(count):,}</td></tr>"
+        for kind, statuses in (("delivery", publishing["deliveries"]), ("resend", publishing["resends"]))
+        for status, count in statuses.items()
+    )
+    runtime_rows = "".join(
+        f"<tr><th>{_escape(label)}</th><td>{_health_badge(value)}</td></tr>"
+        for label, value in (
+            ("Overall", overall),
+            ("Database integrity", "OK" if db["healthy"] else db["quick_check"]),
+            ("Telegram monitor", "POLLING" if monitor["polling"] else ("ENABLED" if monitor["enabled"] else "STOPPED")),
+            ("Telegram token", "configured" if bot["token_configured"] else "missing"),
+            ("Back office", "enabled" if bot["backoffice_enabled"] else "disabled"),
+            ("Classification", "enabled" if bot["classification_enabled"] else "disabled"),
+            ("AI extraction", "enabled" if bot["extraction_enabled"] else "disabled"),
+            ("Advertio", "enabled" if bot["advertio_enabled"] else "disabled"),
+        )
+    )
+
+    content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · System Health</title>
+    <style>{_DATA_CSS}
+    body{{max-width:1500px}}.health-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.8rem}}
+    .metric{{padding:1rem;border:1px solid #dde5ef;border-radius:12px;background:#f8faff}}
+    .metric span{{display:block;color:#536479;font-size:.85rem}}.metric strong{{display:block;font-size:1.5rem;margin-top:.25rem}}
+    .health-badge{{display:inline-block;padding:.2rem .55rem;border-radius:999px;background:#e8edf4;font-size:.82rem}}
+    .health-badge.ok{{background:#d9f4e5;color:#17633e}}.health-badge.warn{{background:#fff1c8;color:#755300}}
+    .health-badge.bad{{background:#ffe0da;color:#9b2c1f}}.health-sections{{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:1rem}}
+    .health-sections section{{margin:0}}section{{margin:1rem 0}}pre{{white-space:pre-wrap;max-width:560px;margin:0;font:12px/1.45 ui-monospace,monospace}}
+    .refresh{{float:right}}@media(max-width:700px){{.health-sections{{grid-template-columns:1fr}}}}
+    </style></head><body><h1>Telclaw · System Health</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
+    <a href="/data">Database</a><a class="active" href="/health">System Health</a></nav>
+    <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational reports from SQLite and the running Telegram monitor.</p>
+    <div class="health-grid">{pipeline_cards}</div>
+
+    <div class="health-sections">
+    <section><h2>Runtime & bot</h2><table><tbody>{runtime_rows}
+    <tr><th>Monitor subscribers</th><td>{int(bot['active_subscribers']):,}</td></tr>
+    <tr><th>Monitor update offset</th><td>{int(monitor['offset']):,}</td></tr></tbody></table></section>
+    <section><h2>Database</h2><p>SQLite quick check: {_health_badge(db['quick_check'])}</p>
+    <p>Database file: <strong>{_fmt_bytes(db['file_size'])}</strong> · allocated: <strong>{_fmt_bytes(db['allocated_bytes'])}</strong></p>
+    <div class="scroll"><table><thead><tr><th>Table</th><th>Rows</th></tr></thead><tbody>
+    {database_rows or '<tr><td colspan="2">No tracked tables.</td></tr>'}</tbody></table></div></section>
+    </div>
+
+    <section><h2>Pipeline queues & failures</h2><p>Last crawl: <strong>{_escape(pipeline['last_crawl'] or '—')}</strong></p>
+    <div class="scroll"><table><thead><tr><th>Stage</th><th>Pending</th><th>Failed</th><th>Last activity</th></tr></thead>
+    <tbody>{stage_rows}</tbody></table></div></section>
+
+    <section><h2>Crawl reports · recent days</h2>
+    <div class="scroll"><table><thead><tr><th>Date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
+    <th>AI processed</th><th>Advertio sent</th><th>Failed</th></tr></thead>
+    <tbody>{daily_rows or '<tr><td colspan="7">No crawl data yet.</td></tr>'}</tbody></table></div></section>
+
+    <section><h2>Crawled channels</h2><p class="muted">Configured sources are included even when no message has been stored yet.</p>
+    <div class="scroll"><table><thead><tr><th>Channel</th><th>Name</th><th>Source group</th><th>Configured</th>
+    <th>Messages</th><th>First</th><th>Last</th><th>Failed</th><th>State</th></tr></thead>
+    <tbody>{channel_rows or '<tr><td colspan="9">No configured or crawled channels.</td></tr>'}</tbody></table></div></section>
+
+    <section><h2>Robot &amp; system activity</h2><p class="muted">Crawler, processing, AI and error reports are persisted here from now on.</p>
+    <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Kind</th><th>Level</th><th>Source</th><th>Message</th><th>Details</th></tr></thead>
+    <tbody>{activity_rows or '<tr><td colspan="6">No persisted activity yet.</td></tr>'}</tbody></table></div></section>
+
+    <div class="health-sections">
+    <section><h2>Publishing activity</h2><p>{publishing['targets']} destinations · {publishing['rules']} rules</p>
+    <table><thead><tr><th>Type</th><th>Status</th><th>Count</th></tr></thead>
+    <tbody>{publish_rows or '<tr><td colspan="3">No publishing attempts.</td></tr>'}</tbody></table></section>
+    <section><h2>Recent database edits</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Admin</th><th>Row</th><th>Column</th><th>Before</th><th>After</th></tr></thead>
+    <tbody>{edit_rows or '<tr><td colspan="6">No back-office edits yet.</td></tr>'}</tbody></table></div></section>
+    </div>
+    </body></html>'''
     return web.Response(text=content, content_type="text/html")
 
 

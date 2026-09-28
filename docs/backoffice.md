@@ -50,5 +50,5 @@ the new rules, including historical records. Review those records before enablin
 any broad rule if you do not intend to publish older messages.
 
 Each message and destination has a separate delivery record. A successful send is
-not repeated for the same destination. Failed sends are retried on later cycles.
+not repeated for the same destination. Failed sends are retried on later cycles. The page lists recent delivery results; rejected items can be retried manually after the underlying issue is fixed.
 Telegram posting must be enabled by granting the bot posting rights at each target.

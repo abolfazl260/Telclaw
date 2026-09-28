@@ -203,3 +203,30 @@ def record_delivery(message_id, target_id, status, telegram_message_id=None, err
         conn.commit()
     finally:
         conn.close()
+
+
+def recent_deliveries(limit=30):
+    initialize()
+    conn = get_connection()
+    try:
+        return [dict(row) for row in conn.execute("""SELECT d.*, t.label AS target_label
+            FROM publishing_deliveries d JOIN publishing_targets t ON t.id=d.target_id
+            ORDER BY d.updated_at DESC LIMIT ?""", (int(limit),))]
+    finally:
+        conn.close()
+
+
+def retry_delivery(message_id, target_id):
+    initialize()
+    conn = get_connection()
+    try:
+        conn.execute("""UPDATE publishing_deliveries SET status='retry',error=NULL,
+            updated_at=? WHERE message_id=? AND target_id=? AND status IN ('rejected','retry')""",
+            (_now_iso(), int(message_id), int(target_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()

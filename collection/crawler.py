@@ -12,6 +12,8 @@ from telethon import errors
 
 from processing.normalizer import normalize_channel_username, normalize_date
 from services.message_service import MessageService
+from storage.content_duplicate import ensure_duplicate_schema, find_duplicate, store_content_hash
+from storage.database import get_connection
 
 init(autoreset=True)
 
@@ -136,6 +138,7 @@ async def crawl_channel(
 
     repository = MessageService()
     saved_count = 0
+    duplicate_skipped_count = 0
     skipped_count = 0
     filtered_count = 0
     bot_filtered_count = 0
@@ -143,7 +146,12 @@ async def crawl_channel(
     weak_text_count = 0
     media_metadata_count = 0
     stopped = False
+    duplicate_conn = None
     try:
+        repository.initialize()
+        duplicate_conn = get_connection()
+        ensure_duplicate_schema(duplicate_conn)
+
         entity = await client.get_input_entity(channel_username)
         await asyncio.sleep(random.randint(30, 60))
 
@@ -188,6 +196,16 @@ async def crawl_channel(
                 filtered_count += 1
                 continue
 
+            duplicate = find_duplicate(duplicate_conn, sender_id, raw_text)
+            if duplicate:
+                duplicate_skipped_count += 1
+                print(
+                    f"⏭ [DUPLICATE-SKIPPED] sender_id={sender_id} "
+                    f"current_message_id={message.id} "
+                    f"existing_message_id={duplicate['message_id']}"
+                )
+                continue
+
             _log_extracted_message(channel_username, message, raw_text, media_type, message_link)
             media_path = None
             if has_media:
@@ -221,6 +239,12 @@ async def crawl_channel(
                 )
                 if saved:
                     saved_count += 1
+                    row = duplicate_conn.execute(
+                        "SELECT id FROM messages WHERE channel_username=? AND message_id=?",
+                        (channel_username, message.id),
+                    ).fetchone()
+                    if row:
+                        store_content_hash(duplicate_conn, row["id"], raw_text)
                     print("   💾 [RAW-SAVED] SQLite")
                 else:
                     skipped_count += 1
@@ -234,6 +258,7 @@ async def crawl_channel(
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
         print(f"📅 Range: {from_date} → {to_date}")
         print(f"✅ Saved: {saved_count}")
+        print(f"⏭ Duplicates skipped: {duplicate_skipped_count}")
         print(f"🖼️ Media metadata saved: {media_metadata_count}")
         print("🖼️ Media downloaded during crawl: 0")
         print(f"🔍 Filtered by crawl mode: {filtered_count}")
@@ -241,16 +266,19 @@ async def crawl_channel(
         print(f"🤖 Bot messages skipped: {bot_filtered_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")
-        return {"saved": saved_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
+        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
     except errors.ChannelInvalidError:
         print(f"\n❌ Invalid channel: {channel_username}")
-        return {"status": "failed", "saved": saved_count, "stopped": stopped}
+        return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}
     except errors.ChannelPrivateError:
         print(f"\n❌ Private channel access denied: {channel_username}")
-        return {"status": "failed", "saved": saved_count, "stopped": stopped}
+        return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}
     except Exception as exc:
         print(f"\n❌ Crawl error ({channel_username}): {exc}")
-        return {"status": "failed", "saved": saved_count, "stopped": stopped}
+        return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}
+    finally:
+        if duplicate_conn is not None:
+            duplicate_conn.close()
 
 
 async def start_crawler(client, channel_username, from_date, to_date, crawl_mode=CRAWL_MODE_ALL, should_stop=None):

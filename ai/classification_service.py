@@ -9,7 +9,7 @@ import re
 import time
 
 import config
-from ai.category_classifier import GroqBatchCategoryClassifier
+from ai.provider_manager import AIProviderManager
 from ai.extractor import AIExtractionError
 from storage.message_repository import MessageRepository
 
@@ -19,9 +19,10 @@ logger = logging.getLogger("telclaw.ai.classification")
 class CategoryClassificationService:
     """Move cleaned messages from classification queue to extraction queue."""
 
-    def __init__(self, repository=None, classifier=None, batch_size=None):
+    def __init__(self, repository=None, provider_manager=None, classifier=None, batch_size=None):
         self.repository = repository or MessageRepository()
-        self.classifier = classifier or GroqBatchCategoryClassifier()
+        # classifier remains an injection alias for backwards-compatible callers.
+        self.provider_manager = provider_manager or AIProviderManager(provider=classifier)
         self.batch_size = int(batch_size or config.AI_CLASSIFICATION_BATCH_SIZE)
 
     @staticmethod
@@ -54,7 +55,7 @@ class CategoryClassificationService:
         invalid_json_attempts = 0
         while True:
             try:
-                return self.classifier.classify_batch(batch)
+                return self.provider_manager.classify_batch(batch)
             except AIExtractionError as exc:
                 if getattr(exc, "reason", None) == "invalid_provider_output":
                     if invalid_json_attempts >= config.GROQ_INVALID_JSON_MAX_RETRIES:

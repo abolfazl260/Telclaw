@@ -380,3 +380,62 @@ def test_zero_category_value_matches_preview_and_auto_delivery(rule_db):
                             filter_field="remote", filter_value="0")
     assert routing_rules.rule_matches(1)[1]["total"] == 1
     assert [record["message_row_id"] for record, _ in routing_rules.pending()] == [2]
+
+
+def test_generic_conditions_use_live_database_columns(rule_db):
+    conn = rule_db()
+    conn.execute("ALTER TABLE joblist ADD COLUMN department TEXT")
+    conn.execute("ALTER TABLE joblist ADD COLUMN remote INTEGER")
+    conn.execute("INSERT INTO messages VALUES(2,'joblist','processed',12,'bob','jobs_source')")
+    conn.execute("INSERT INTO joblist(processed_message_id,department,remote) VALUES(2,'Engineering',0)")
+    conn.commit()
+    conn.close()
+
+    routing_rules.save_target("Jobs", "@jobchannel")
+    routing_rules.save_rule(
+        "Engineering on site", "joblist", "", "either", 1, delivery_mode="manual",
+        conditions=[
+            {"field": "department", "operator": "eq", "value": "Engineering"},
+            {"join": "and", "field": "remote", "operator": "eq", "value": "0"},
+        ],
+    )
+
+    assert "department" in routing_rules.category_fields("joblist")
+    rule, counts, records = routing_rules.rule_matches(1)
+    assert counts["total"] == 1
+    assert records[0]["message_row_id"] == 2
+    assert [item["field"] for item in routing_rules.effective_conditions(rule)] == ["department", "remote"]
+
+    conn = rule_db()
+    conn.execute("UPDATE joblist SET department='Sales' WHERE processed_message_id=2")
+    conn.commit()
+    conn.close()
+    assert routing_rules.rule_matches(1)[1]["total"] == 0
+
+
+def test_generic_or_conditions_match_left_to_right(rule_db):
+    routing_rules.save_target("Routes", "@routechannel")
+    routing_rules.save_rule(
+        "Either side Turkey", "transferlist", "", "either", 1, delivery_mode="manual",
+        conditions=[
+            {"field": "origin_country", "operator": "eq", "value": "IR"},
+            {"join": "or", "field": "destination_country", "operator": "eq", "value": "IR"},
+            {"join": "and", "field": "price", "operator": "lte", "value": "200"},
+        ],
+    )
+    assert routing_rules.rule_matches(1)[1]["total"] == 1
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET price=250")
+    conn.commit()
+    conn.close()
+    assert routing_rules.rule_matches(1)[1]["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backoffice_uses_generic_rule_builder_copy(rule_db):
+    routing_rules.save_target("General", "@generalchannel")
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "+ Add channel / group" in response.text
+    assert "+ Add condition" in response.text
+    assert "Existing country, city and price filters" not in response.text
+    assert "+ Add destination" not in response.text

@@ -62,6 +62,17 @@ def initialize_db():
         for sql in ("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)","CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username,date)","CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)","CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)","CREATE INDEX IF NOT EXISTS idx_messages_classification_status ON messages(classification_status)","CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)","CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)","CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)","CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)","CREATE INDEX IF NOT EXISTS idx_messages_advertio_status ON messages(advertio_status)"): cursor.execute(sql)
         cursor.execute("CREATE TABLE IF NOT EXISTS crawler_settings (channel_username TEXT PRIMARY KEY,target_date TEXT NOT NULL,last_crawled_date TEXT)")
         cursor.execute("CREATE TABLE IF NOT EXISTS telegram_monitor_subscribers (chat_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, enabled INTEGER NOT NULL DEFAULT 1, first_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS system_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            level TEXT NOT NULL DEFAULT 'INFO',
+            source TEXT NOT NULL DEFAULT '',
+            message TEXT NOT NULL DEFAULT '',
+            details TEXT,
+            created_at TEXT NOT NULL
+        )""")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_created ON system_activity(created_at DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_kind ON system_activity(kind, created_at DESC)")
         _create_category_tables(cursor); conn.commit()
     finally: conn.close()
 
@@ -77,6 +88,54 @@ def get_monitor_subscribers():
     conn=get_connection()
     try: return [dict(r) for r in conn.execute("SELECT * FROM telegram_monitor_subscribers WHERE enabled=1 ORDER BY chat_id").fetchall()]
     finally: conn.close()
+
+def record_system_activity(kind, level="INFO", source="", message="", details=None):
+    """Persist one operational event for the back-office health timeline."""
+    kind=str(kind or "activity").strip()[:80]
+    level=str(level or "INFO").strip().upper()[:20]
+    source=str(source or "").strip()[:160]
+    message=str(message or "").strip()[:4000]
+    if details is None:
+        encoded=None
+    elif isinstance(details,str):
+        encoded=details[:12000]
+    else:
+        encoded=json.dumps(details,ensure_ascii=False,default=str)[:12000]
+    conn=get_connection()
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS system_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            level TEXT NOT NULL DEFAULT 'INFO',
+            source TEXT NOT NULL DEFAULT '',
+            message TEXT NOT NULL DEFAULT '',
+            details TEXT,
+            created_at TEXT NOT NULL
+        )""")
+        conn.execute("""INSERT INTO system_activity(kind,level,source,message,details,created_at)
+            VALUES(?,?,?,?,?,?)""",
+            (kind,level,source,message,encoded,datetime.now(timezone.utc).isoformat()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_recent_system_activity(limit=60):
+    conn=get_connection()
+    try:
+        conn.execute("""CREATE TABLE IF NOT EXISTS system_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            level TEXT NOT NULL DEFAULT 'INFO',
+            source TEXT NOT NULL DEFAULT '',
+            message TEXT NOT NULL DEFAULT '',
+            details TEXT,
+            created_at TEXT NOT NULL
+        )""")
+        return [dict(r) for r in conn.execute("""SELECT * FROM system_activity
+            ORDER BY id DESC LIMIT ?""",(min(max(int(limit),1),200),)).fetchall()]
+    finally:
+        conn.close()
 
 def get_pipeline_status():
     conn=get_connection()

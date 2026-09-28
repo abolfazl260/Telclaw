@@ -132,9 +132,9 @@ def test_transfer_disabled_skips_without_provider_call(monkeypatch):
     service = AIProcessingService(repository=repo, extractor=FakeExtractor())
     stats = service._process([{"id": 1, "message_id": 10, "channel_username": "test", "cleaned_text": "cargo"}])
 
-    assert stats["processed"] == 0
-    assert stats["failed"] == 0
-    assert stats["skipped"] == 1
+    assert stats[0] == 0  # processed
+    assert stats[1] == 0  # failed
+    assert stats[2] == 1  # skipped
     assert calls == []
     assert repo.skipped[0][2]["reason"] == "category_disabled:transferlist"
 

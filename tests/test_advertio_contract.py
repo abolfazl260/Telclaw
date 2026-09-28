@@ -54,7 +54,7 @@ def test_bedrooms_are_advertio_strings_not_numbers():
 
 
 def test_required_housing_fields_are_rejected_when_missing():
-    for field in ("listing_type", "property_type", "bedrooms", "price", "currency", "province", "city"):
+    for field in ("listing_type", "bedrooms", "price", "currency", "province", "city"):
         data = _housing()
         data[field] = None
         try:

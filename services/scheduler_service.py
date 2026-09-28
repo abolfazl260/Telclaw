@@ -158,8 +158,6 @@ class SchedulerService:
         get sent once. The scheduler then waits for the next cycle.
         """
         first_cycle = True
-        next_run_at = time.monotonic()
-
         while True:
             try:
                 if first_cycle:
@@ -241,6 +239,7 @@ class SchedulerService:
                     )
 
                 first_cycle = False
+                next_run_at = time.monotonic() + interval_minutes * 60
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -251,8 +250,8 @@ class SchedulerService:
                     f"Full crawl cycle failed: {exc}",
                 )
                 first_cycle = False
+                next_run_at = time.monotonic() + interval_minutes * 60
 
-            next_run_at += interval_minutes * 60
             sleep_seconds = max(0, next_run_at - time.monotonic())
             print(
                 f"[COLLECTION] Next full crawl cycle in "

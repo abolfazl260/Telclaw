@@ -1,14 +1,195 @@
 """SQLite-backed publishing rules and per-destination delivery state."""
 from datetime import datetime, timedelta, timezone
+import json
 import math
 import re
 
 from storage.database import CATEGORY_TABLES, get_connection
 
-CATEGORIES = ("transferlist", "housinglist", "joblist")
-SCOPES = ("either", "origin", "destination")
-FILTER_FIELDS = {category: tuple(fields) for category, fields in CATEGORY_TABLES.items()
-                 if category in CATEGORIES}
+# Categories follow the structured category tables used by the extraction pipeline.
+# Rule fields themselves are discovered from SQLite so adding a column does not
+# require a transport-specific rule change.
+CATEGORIES = tuple(CATEGORY_TABLES)
+SCOPES = ("either", "origin", "destination")  # legacy rule compatibility only
+FILTER_OPERATORS = ("eq", "ne", "contains", "not_contains", "gt", "gte", "lt", "lte",
+                    "empty", "not_empty")
+_NO_VALUE_OPERATORS = {"empty", "not_empty"}
+
+
+def category_fields(category):
+    """Return filterable fields from the real SQLite category table."""
+    if category not in CATEGORIES:
+        raise ValueError("Invalid category")
+    conn = get_connection()
+    try:
+        rows = conn.execute(f"PRAGMA table_info({category})").fetchall()
+        return tuple(row[1] for row in rows if row[1] not in {"id", "processed_message_id"})
+    finally:
+        conn.close()
+
+
+def filter_fields():
+    """Return the current database-backed field map used by the back office."""
+    return {category: category_fields(category) for category in CATEGORIES}
+
+
+def _normalize_conditions(category, conditions):
+    if conditions in (None, ""):
+        return []
+    if isinstance(conditions, str):
+        try:
+            conditions = json.loads(conditions)
+        except json.JSONDecodeError as exc:
+            raise ValueError("Invalid rule conditions") from exc
+    if not isinstance(conditions, list) or len(conditions) > 12:
+        raise ValueError("Rule conditions must be a list of at most 12 items")
+    allowed = set(category_fields(category))
+    normalized = []
+    for index, item in enumerate(conditions):
+        if not isinstance(item, dict):
+            raise ValueError("Invalid rule condition")
+        field = str(item.get("field") or "").strip()
+        operator = str(item.get("operator") or "eq").strip()
+        join = "and" if index == 0 else str(item.get("join") or "and").strip().lower()
+        value = "" if operator in _NO_VALUE_OPERATORS else str(item.get("value") or "").strip()
+        if field not in allowed or operator not in FILTER_OPERATORS or join not in {"and", "or"}:
+            raise ValueError("Invalid rule condition")
+        if operator not in _NO_VALUE_OPERATORS and value == "":
+            raise ValueError("Rule condition value is required")
+        if operator in {"gt", "gte", "lt", "lte"}:
+            try:
+                number = float(value)
+            except ValueError as exc:
+                raise ValueError("Numeric rule condition requires a number") from exc
+            if not math.isfinite(number):
+                raise ValueError("Numeric rule condition requires a finite number")
+            value = str(number)
+        normalized.append({"field": field, "operator": operator, "value": value, "join": join})
+    return normalized
+
+
+def _legacy_conditions(rule):
+    """Translate old transport-oriented columns into generic database conditions."""
+    category = rule["category"]
+    fields = set(category_fields(category))
+    conditions = []
+
+    def add(field, operator, value, join="and"):
+        if field in fields and value not in (None, ""):
+            conditions.append({"field": field, "operator": operator, "value": str(value),
+                               "join": "and" if not conditions else join})
+
+    country = str(rule.get("country") or "").strip()
+    if country:
+        scope = rule.get("country_scope") or "either"
+        if category == "transferlist":
+            if scope in {"either", "origin"}:
+                add("origin_country", "eq", country)
+            if scope in {"either", "destination"}:
+                add("destination_country", "eq", country, "or" if scope == "either" else "and")
+        elif category == "housinglist":
+            add("country_code", "eq", country)
+    origin_city = rule.get("origin_city")
+    if origin_city:
+        add("origin_city" if category == "transferlist" else "city", "eq", origin_city)
+    if rule.get("destination_city"):
+        add("destination_city", "eq", rule["destination_city"])
+    if rule.get("min_price") is not None:
+        add("price", "gte", rule["min_price"])
+    if rule.get("max_price") is not None:
+        add("price", "lte", rule["max_price"])
+    if rule.get("filter_field") and rule.get("filter_value"):
+        add(rule["filter_field"], "eq", rule["filter_value"])
+    return conditions
+
+
+def effective_conditions(rule):
+    """Return normalized generic conditions, falling back to old rule columns."""
+    raw = rule.get("conditions_json")
+    if raw:
+        try:
+            conditions = _normalize_conditions(rule["category"], raw)
+        except ValueError:
+            conditions = []
+        if conditions:
+            return conditions
+    return _legacy_conditions(rule)
+
+
+def _record_condition_matches(record, condition):
+    value = record.get(condition["field"])
+    operator = condition["operator"]
+    expected = condition["value"]
+    text = "" if value is None else str(value).strip()
+    if operator == "empty":
+        return text == ""
+    if operator == "not_empty":
+        return text != ""
+    if operator in {"gt", "gte", "lt", "lte"}:
+        try:
+            actual_number, expected_number = float(value), float(expected)
+        except (TypeError, ValueError):
+            return False
+        return {"gt": actual_number > expected_number, "gte": actual_number >= expected_number,
+                "lt": actual_number < expected_number, "lte": actual_number <= expected_number}[operator]
+    actual_fold, expected_fold = text.casefold(), str(expected).strip().casefold()
+    if operator == "eq":
+        return actual_fold == expected_fold
+    if operator == "ne":
+        return actual_fold != expected_fold
+    if operator == "contains":
+        return expected_fold in actual_fold
+    if operator == "not_contains":
+        return expected_fold not in actual_fold
+    return False
+
+
+def _record_matches_conditions(record, conditions):
+    result = None
+    for condition in conditions:
+        current = _record_condition_matches(record, condition)
+        if result is None:
+            result = current
+        elif condition.get("join") == "or":
+            result = result or current
+        else:
+            result = result and current
+    return True if result is None else result
+
+
+def _condition_sql(condition):
+    field = condition["field"]
+    operator = condition["operator"]
+    value = condition["value"]
+    column = f"c.{field}"
+    if operator == "empty":
+        return f"TRIM(COALESCE(CAST({column} AS TEXT),''))=''", []
+    if operator == "not_empty":
+        return f"TRIM(COALESCE(CAST({column} AS TEXT),''))<>''", []
+    if operator in {"gt", "gte", "lt", "lte"}:
+        sql_op = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[operator]
+        return f"CAST({column} AS REAL){sql_op}?", [float(value)]
+    normalized = f"LOWER(TRIM(COALESCE(CAST({column} AS TEXT),'')))"
+    if operator == "eq":
+        return f"{normalized}=?", [str(value).casefold()]
+    if operator == "ne":
+        return f"{normalized}<>?", [str(value).casefold()]
+    if operator == "contains":
+        return f"{normalized} LIKE ?", [f"%{str(value).casefold()}%"]
+    if operator == "not_contains":
+        return f"{normalized} NOT LIKE ?", [f"%{str(value).casefold()}%"]
+    raise ValueError("Invalid rule condition")
+
+
+def _conditions_sql(conditions):
+    expression = ""
+    params = []
+    for condition in conditions:
+        part, values = _condition_sql(condition)
+        expression = part if not expression else (
+            f"({expression} {condition.get('join', 'and').upper()} {part})")
+        params.extend(values)
+    return expression, params
 
 
 def initialize():
@@ -35,7 +216,8 @@ def initialize():
             enabled INTEGER NOT NULL DEFAULT 1,
             stop_on_match INTEGER NOT NULL DEFAULT 1,
             filter_field TEXT NOT NULL DEFAULT '', filter_value TEXT NOT NULL DEFAULT '',
-            delivery_mode TEXT NOT NULL DEFAULT 'auto'
+            delivery_mode TEXT NOT NULL DEFAULT 'auto',
+            conditions_json TEXT NOT NULL DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS publishing_deliveries (
             message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -75,6 +257,7 @@ def initialize():
             "min_price": "REAL", "max_price": "REAL",
             "filter_field": "TEXT NOT NULL DEFAULT ''", "filter_value": "TEXT NOT NULL DEFAULT ''",
             "delivery_mode": "TEXT NOT NULL DEFAULT 'auto'",
+            "conditions_json": "TEXT NOT NULL DEFAULT '[]'",
         }.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE publishing_rules ADD COLUMN {name} {definition}")
@@ -104,8 +287,8 @@ def list_rules():
 
 
 def distinct_filter_values(category, field, limit=120):
-    """Read stored category values for a rule dropdown; identifiers are whitelisted."""
-    if category not in FILTER_FIELDS or field not in FILTER_FIELDS[category]:
+    """Read stored category values for suggestions; identifiers come from SQLite."""
+    if category not in CATEGORIES or field not in category_fields(category):
         raise ValueError("Invalid category field")
     conn = get_connection()
     try:
@@ -147,7 +330,7 @@ def save_target(label, chat_id, enabled=True, target_id=None, description=""):
 def save_rule(name, category, country, scope, target_id, priority=100,
               enabled=True, stop_on_match=True, rule_id=None, source_channel="",
               origin_city="", destination_city="", min_price=None, max_price=None,
-              filter_field="", filter_value="", delivery_mode="auto"):
+              filter_field="", filter_value="", delivery_mode="auto", conditions=None):
     name, country = name.strip(), country.strip().upper()
     if not name or category not in CATEGORIES or scope not in SCOPES:
         raise ValueError("Invalid rule name, category, or country condition")
@@ -158,8 +341,9 @@ def save_rule(name, category, country, scope, target_id, priority=100,
     destination_city = str(destination_city or "").strip().casefold()
     filter_field = str(filter_field or "").strip()
     filter_value = str(filter_value or "").strip().casefold()
-    if filter_field not in ("", *FILTER_FIELDS[category]) or bool(filter_value) != bool(filter_field):
+    if filter_field not in ("", *category_fields(category)) or bool(filter_value) != bool(filter_field):
         raise ValueError("Invalid category filter")
+    normalized_conditions = _normalize_conditions(category, conditions)
     if delivery_mode not in {"auto", "manual"}:
         raise ValueError("Invalid delivery mode")
     min_price = float(min_price) if min_price not in (None, "") else None
@@ -174,20 +358,22 @@ def save_rule(name, category, country, scope, target_id, priority=100,
         target = conn.execute("SELECT id FROM publishing_targets WHERE id=?", (int(target_id),)).fetchone()
         if not target:
             raise ValueError("Target not found")
+        conditions_json = json.dumps(normalized_conditions, ensure_ascii=False, separators=(",", ":"))
         values = (name, category, country, scope, source_channel, origin_city,
                   destination_city, min_price, max_price, int(target_id), int(priority),
-                  int(enabled), int(stop_on_match), filter_field, filter_value, delivery_mode)
+                  int(enabled), int(stop_on_match), filter_field, filter_value, delivery_mode,
+                  conditions_json)
         if rule_id is None:
             conn.execute("""INSERT INTO publishing_rules
                 (name,category,country,country_scope,source_channel,origin_city,
                 destination_city,min_price,max_price,target_id,priority,enabled,stop_on_match,
-                filter_field,filter_value,delivery_mode)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
+                filter_field,filter_value,delivery_mode,conditions_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", values)
         else:
             cursor = conn.execute("""UPDATE publishing_rules SET name=?,category=?,country=?,
                 country_scope=?,source_channel=?,origin_city=?,destination_city=?,
                 min_price=?,max_price=?,target_id=?,priority=?,enabled=?,stop_on_match=?,
-                filter_field=?,filter_value=?,delivery_mode=? WHERE id=?""",
+                filter_field=?,filter_value=?,delivery_mode=?,conditions_json=? WHERE id=?""",
                 values + (int(rule_id),))
             if not cursor.rowcount:
                 raise ValueError("Rule not found")
@@ -269,33 +455,10 @@ def matching_targets(record, rules):
     for rule in rules:
         if not rule["enabled"] or not rule["target_enabled"] or rule["category"] != category:
             continue
-        country = rule["country"]
-        if country:
-            origin = str(record.get("origin_country") or record.get("country_code") or "").strip().upper()
-            destination = str(record.get("destination_country") or "").strip().upper()
-            scope = rule["country_scope"]
-            if not ((scope in {"either", "origin"} and origin == country) or
-                    (scope in {"either", "destination"} and destination == country)):
-                continue
         if rule["source_channel"] and str(record.get("channel_username") or "").strip().lstrip("@").casefold() != rule["source_channel"]:
             continue
-        if rule["origin_city"] and str(record.get("origin_city") or record.get("city") or "").strip().casefold() != rule["origin_city"]:
+        if not _record_matches_conditions(record, effective_conditions(rule)):
             continue
-        if rule["destination_city"] and str(record.get("destination_city") or "").strip().casefold() != rule["destination_city"]:
-            continue
-        if rule.get("filter_field") and rule.get("filter_value"):
-            value = record.get(rule["filter_field"])
-            if str(value if value is not None else "").strip().casefold() != rule["filter_value"]:
-                continue
-        if rule["min_price"] is not None or rule["max_price"] is not None:
-            try:
-                price = float(record["price"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if rule["min_price"] is not None and price < rule["min_price"]:
-                continue
-            if rule["max_price"] is not None and price > rule["max_price"]:
-                continue
         if rule["target_id"] not in seen:
             targets.append(rule)
             seen.add(rule["target_id"])
@@ -305,7 +468,7 @@ def matching_targets(record, rules):
 
 
 def rule_matches(rule_id, limit=25, offset=0, message_id=None):
-    """Count and preview ads matching one rule, including their delivery state."""
+    """Count and preview ads matching one database-driven rule, including delivery state."""
     mark_incomplete_deliveries()
     initialize()
     conn = get_connection()
@@ -320,46 +483,19 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
         category = rule["category"]
         if category not in CATEGORIES:
             raise ValueError("Invalid category")
-        # The category table is the source of truth for previews. Rows can exist there
-        # before the message pipeline flips ai_status to "processed".
+        conditions = effective_conditions(rule)
         where = []
         params = []
         if message_id is not None:
             where.append("m.id=?")
             params.append(int(message_id))
-        if rule["country"]:
-            origin = "COALESCE(NULLIF(c.origin_country,''),'')" if category == "transferlist" else (
-                "COALESCE(c.country_code,'')" if category == "housinglist" else "''")
-            dest = "COALESCE(c.destination_country,'')" if category == "transferlist" else "''"
-            fields = [expression for scope, expression in (("origin", origin), ("destination", dest))
-                      if rule["country_scope"] in ("either", scope)]
-            where.append("(" + " OR ".join(f"UPPER(TRIM({expression}))=?" for expression in fields) + ")")
-            params.extend([rule["country"]] * len(fields))
         if rule["source_channel"]:
             where.append("LOWER(LTRIM(TRIM(m.channel_username),'@'))=?")
             params.append(rule["source_channel"])
-        if rule["origin_city"]:
-            field = "origin_city" if category == "transferlist" else "city" if category == "housinglist" else None
-            where.append(f"LOWER(TRIM(COALESCE(c.{field},'')))=?" if field else "0")
-            if field: params.append(rule["origin_city"])
-        if rule["destination_city"]:
-            where.append("LOWER(TRIM(COALESCE(c.destination_city,'')))=?" if category == "transferlist" else "0")
-            if category == "transferlist": params.append(rule["destination_city"])
-        if rule["filter_field"] and rule["filter_value"]:
-            if rule["filter_field"] not in FILTER_FIELDS[category]:
-                raise ValueError("Invalid category filter")
-            where.append(f"LOWER(TRIM(CAST(c.{rule['filter_field']} AS TEXT)))=?")
-            params.append(rule["filter_value"])
-        if rule["min_price"] is not None or rule["max_price"] is not None:
-            if category == "joblist":
-                where.append("0")
-            else:
-                if rule["min_price"] is not None:
-                    where.append("c.price>=?")
-                    params.append(rule["min_price"])
-                if rule["max_price"] is not None:
-                    where.append("c.price<=?")
-                    params.append(rule["max_price"])
+        condition_sql, condition_params = _conditions_sql(conditions)
+        if condition_sql:
+            where.append(condition_sql)
+            params.extend(condition_params)
         joins = (f"FROM {category} c JOIN messages m ON m.id=c.processed_message_id "
                  "LEFT JOIN publishing_deliveries d ON d.message_id=m.id AND d.target_id=?")
         args = [rule["target_id"], *params]
@@ -374,8 +510,6 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
         records = []
         for row in rows:
             record = dict(row)
-            # A category-table row is sufficient to identify its formatter even when
-            # messages.ai_category has not been finalized yet.
             record["ai_category"] = category
             records.append(record)
         return rule, dict(counts), records
@@ -469,10 +603,11 @@ def pending(limit=100):
         result = []
         offset = 0
         while len(result) < limit:
-            rows = conn.execute("""SELECT id AS message_row_id, ai_category,channel_username,
+            placeholders = ",".join("?" for _ in CATEGORIES)
+            rows = conn.execute(f"""SELECT id AS message_row_id, ai_category,channel_username,
                 message_id AS telegram_source_id, sender_username
                 FROM messages m WHERE ai_status='processed'
-                AND ai_category IN ('transferlist','housinglist','joblist')
+                AND ai_category IN ({placeholders})
                 AND EXISTS (SELECT 1 FROM publishing_rules r
                     JOIN publishing_targets target ON target.id=r.target_id
                     WHERE r.enabled=1 AND r.delivery_mode='auto' AND target.enabled=1
@@ -481,7 +616,7 @@ def pending(limit=100):
                     AND NOT EXISTS (SELECT 1 FROM publishing_deliveries d
                         WHERE d.message_id=m.id AND d.target_id=r.target_id
                         AND d.status IN ('sent','rejected')))
-                ORDER BY m.id LIMIT 200 OFFSET ?""", (offset,)).fetchall()
+                ORDER BY m.id LIMIT 200 OFFSET ?""", (*CATEGORIES, offset)).fetchall()
             if not rows:
                 break
             offset += len(rows)

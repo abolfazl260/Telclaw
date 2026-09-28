@@ -226,8 +226,7 @@ class ConsoleUI:
         mode_label = "all messages" if crawl_mode == CRAWL_MODE_ALL else "photos only"
         self.show_message(
             f"Categories '{', '.join(selected_categories)}' scheduled as one full cycle "
-            f"({len(jobs) and 'all selected channels' or 'no channels'}), "
-            f"mode={mode_label}, range={from_date}..{to_date}, "
+            f"for all selected channels, mode={mode_label}, range={from_date}..{to_date}, "
             f"every {interval_minutes:g} minute(s). "
             f"The transfer-live summary is sent once after the full cycle.",
             Fore.GREEN,

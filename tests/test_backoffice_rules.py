@@ -34,7 +34,7 @@ def rule_db(tmp_path, monkeypatch):
         CREATE TABLE housinglist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         CREATE TABLE joblist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         INSERT INTO messages VALUES(1,'transferlist','processed','processed',11,'alice','test','');
-        INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150,'2026-10-01');""")
+        INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150,'2020-01-01');""")
     conn.commit()
     conn.close()
     return connection
@@ -254,7 +254,7 @@ def test_matching_ads_include_category_rows_before_ai_status_processed(rule_db):
                             filter_field="origin_country", filter_value="TR",
                             delivery_mode="manual")
     conn = rule_db()
-    conn.execute("INSERT INTO messages VALUES(2,NULL,'pending',12,'bob','test')")
+    conn.execute("INSERT INTO messages (id,ai_category,ai_status,processing_status,message_id,sender_username,channel_username,message_link) VALUES(2,NULL,'pending','pending',12,'bob','test','')")
     conn.execute("""INSERT INTO transferlist
         (id,processed_message_id,origin_city,destination_city,origin_country,destination_country,price)
         VALUES(2,2,'Ankara','Tehran','TR','IR',175)""")
@@ -376,7 +376,7 @@ async def test_interrupted_send_requires_review_before_manual_retry(rule_db):
 def test_zero_category_value_matches_preview_and_auto_delivery(rule_db):
     conn = rule_db()
     conn.execute("ALTER TABLE joblist ADD COLUMN remote INTEGER")
-    conn.execute("INSERT INTO messages VALUES(2,'joblist','processed',12,'bob','sample_source')")
+    conn.execute("INSERT INTO messages (id,ai_category,ai_status,processing_status,message_id,sender_username,channel_username,message_link) VALUES(2,'joblist','processed','processed',12,'bob','sample_source','')")
     conn.execute("INSERT INTO joblist(processed_message_id,remote) VALUES(2,0)")
     conn.commit()
     conn.close()
@@ -391,7 +391,7 @@ def test_generic_conditions_use_live_database_columns(rule_db):
     conn = rule_db()
     conn.execute("ALTER TABLE joblist ADD COLUMN department TEXT")
     conn.execute("ALTER TABLE joblist ADD COLUMN remote INTEGER")
-    conn.execute("INSERT INTO messages VALUES(2,'joblist','processed',12,'bob','jobs_source')")
+    conn.execute("INSERT INTO messages (id,ai_category,ai_status,processing_status,message_id,sender_username,channel_username,message_link) VALUES(2,'joblist','processed','processed',12,'bob','jobs_source','')")
     conn.execute("INSERT INTO joblist(processed_message_id,department,remote) VALUES(2,'Engineering',0)")
     conn.commit()
     conn.close()
@@ -454,7 +454,7 @@ def test_new_structured_topic_table_is_discovered_without_rule_code_change(rule_
         event_type TEXT,
         city TEXT
     )""")
-    conn.execute("INSERT INTO messages VALUES(3,'eventlist','processed',13,'carol','events_source')")
+    conn.execute("INSERT INTO messages (id,ai_category,ai_status,processing_status,message_id,sender_username,channel_username,message_link) VALUES(3,'eventlist','processed','processed',13,'carol','events_source','')")
     conn.execute("INSERT INTO eventlist(processed_message_id,event_type,city) VALUES(3,'conference','Toronto')")
     conn.commit()
     conn.close()

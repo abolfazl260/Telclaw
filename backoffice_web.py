@@ -177,7 +177,7 @@ async def index(request):
     rows = []
     for target in targets:
         assigned = [rule for rule in rules if rule["target_id"] == target["id"]]
-        rule_rows = "".join(_rule_form(rule, target, csrf) for rule in assigned)
+        rule_rows = "".join(_rule_panel(rule, target, csrf, request) for rule in assigned)
         history = routing_rules.recent_deliveries(30, target['id'])
         history_rows = ''.join(f'''<tr><td>#{item['message_id']}</td><td>{_escape(item['status'])}</td>
             <td>{_escape(item['telegram_message_id'] or '—')}</td><td>{_escape(item['updated_at'])}</td>
@@ -232,7 +232,13 @@ async def index(request):
     th,td{{padding:.6rem;text-align:left;border-bottom:1px solid #e3e8ef;overflow-wrap:anywhere}}code{{overflow-wrap:anywhere}}
     .badge{{font-size:.8rem;border-radius:30px;padding:.2rem .55rem;background:#e9eef5}}.badge.connected{{background:#d8f4e6;color:#16653e}}
     .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}
+    .rule-panel{{padding:1rem;margin:.8rem 0;border:1px solid #dce4ef;border-radius:10px;background:white}}
+    .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:1rem}}
+    .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
+    .ad-row p{{margin:.3rem 0}}.ad-row form{{display:inline-flex;padding:0}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
+    {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
+      if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Check that the bot can post to each destination.</p>
     <section><h2>Channels & groups</h2><button type="button" data-open="target-new">+ Add destination</button>
     <div class="grid">{''.join(rows) or '<p>No destinations yet.</p>'}</div>
@@ -247,6 +253,9 @@ async def index(request):
     const fields={json.dumps({key: list(value) for key,value in routing_rules.FILTER_FIELDS.items()})};
     document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.open).showModal()));
     document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',()=>b.closest('dialog').close()));
+    document.querySelectorAll('[data-confirm]').forEach(b=>b.closest('form').addEventListener('submit',e=>{{
+      if(!confirm(b.dataset.confirm)) e.preventDefault();
+    }}));
     document.querySelectorAll('select[name="category"]').forEach(category=>{{
       const form=category.closest('form');const field=form.querySelector('select[name="filter_field"]');
       const value=form.querySelector('select[name="filter_value"]');
@@ -281,6 +290,10 @@ def _rule_form(rule, target, csrf):
         <label>Category field <select name="filter_field" data-selected="{_escape(rule.get('filter_field'))}"></select></label>
         <label>Stored value <select name="filter_value" data-selected="{_escape(rule.get('filter_value'))}"><option value="">Any value</option></select></label>
         <input name="source_channel" placeholder="Source @channel" value="{_escape(rule.get('source_channel'))}">
+        <label>Publishing <select name="delivery_mode">
+            <option value="manual" {"selected" if rule.get('delivery_mode','manual')=='manual' else ''}>Manual selection</option>
+            <option value="auto" {"selected" if rule.get('delivery_mode')=='auto' else ''}>Automatic</option>
+        </select></label>
         <input name="priority" type="number" value="{rule.get('priority',100)}" required>
         <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
         <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue</label>
@@ -292,6 +305,49 @@ def _rule_form(rule, target, csrf):
         <input name="min_price" type="number" step="any" min="0" placeholder="Min price" value="{_escape(rule.get('min_price'))}">
         <input name="max_price" type="number" step="any" min="0" placeholder="Max price" value="{_escape(rule.get('max_price'))}"></details>
         <button>Save rule</button></form>'''
+
+
+def _rule_panel(rule, target, csrf, request):
+    page = 0
+    if str(getattr(request, "query", {}).get("rule", "")) == str(rule["id"]):
+        try:
+            page = min(max(int(request.query.get("page", "0")), 0), 1000)
+        except ValueError:
+            pass
+    _, counts, records = routing_rules.rule_matches(rule["id"], limit=20, offset=page * 20)
+    mode = rule.get("delivery_mode") or "auto"
+    paused = routing_rules.is_rate_limited()
+    entries = []
+    for record in records:
+        snippet = str(next((record.get(key) for key in ("title", "job_title", "cleaned_text", "raw_text", "description")
+                            if record.get(key)), "Ad details unavailable"))[:220]
+        status = record.get("delivery_status") or "not sent"
+        can_send = (mode == "manual" and rule["enabled"] and target["enabled"]
+                    and target["connection_status"] != "disconnected" and
+                    status not in {"sent", "sending"} and not paused)
+        send = (f'''<form method="post" action="/rule/send"><input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="rule_id" value="{rule['id']}">
+            <input type="hidden" name="message_id" value="{record['message_row_id']}">
+            <button>Send this ad</button></form>''' if can_send else "")
+        entries.append(f'''<div class="ad-row"><strong>Ad #{record['message_row_id']}</strong>
+            · {_escape(record.get('channel_username') or '')} · {_escape(status)}
+            <p>{_escape(snippet)}</p>{send}</div>''')
+    nav = ""
+    for label, p in (("Previous", page - 1), ("Next", page + 1)):
+        if p >= 0 and p * 20 < counts["total"] and (p != page):
+            nav += (f'<a href="/?channel={target["id"]}&rule={rule["id"]}&page={p}'
+                    f'#rule-{rule["id"]}">{label}</a> ')
+    expanded = str(getattr(request, "query", {}).get("rule", "")) == str(rule["id"])
+    return f'''<div class="rule-panel" id="rule-{rule['id']}"><div class="rule-title">
+        <h4>{_escape(rule['name'])}</h4><span class="hint">{counts['total']} matching ads ·
+        {counts['sent']} sent · {mode}</span>
+        <form method="post" action="/rule/delete"><input type="hidden" name="csrf" value="{csrf}">
+        <input type="hidden" name="rule_id" value="{rule['id']}">
+        <input type="hidden" name="target_id" value="{target['id']}">
+        <button class="danger" data-confirm="Delete this rule? Existing delivery history will remain.">Delete rule</button>
+        </form></div><details><summary>Edit rule</summary>{_rule_form(rule, target, csrf)}</details>
+        <details {'open' if expanded else ''}><summary>Matching ads ({counts['total']})</summary>
+        {''.join(entries) or '<p>No matching ads yet.</p>'}<p>{nav}</p></details></div>'''
 
 
 async def save_target(request):
@@ -320,11 +376,33 @@ async def save_rule(request):
                                 data.get("source_channel", ""), data.get("origin_city", ""),
                                 data.get("destination_city", ""), data.get("min_price"),
                                 data.get("max_price"), data.get("filter_field", ""),
-                                data.get("filter_value", ""))
+                                data.get("filter_value", ""), data.get("delivery_mode", "auto"))
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
     target_id = int(data.get("target_id"))
     raise web.HTTPSeeOther(f"/?channel={target_id}#channel-{target_id}")
+
+
+async def delete_rule(request):
+    data = await request.post()
+    try:
+        target_id = int(data.get("target_id", ""))
+        routing_rules.delete_rule(data.get("rule_id"), target_id)
+    except (TypeError, ValueError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    raise web.HTTPSeeOther(f"/?channel={target_id}#channel-{target_id}")
+
+
+async def send_selected(request):
+    data = await request.post()
+    try:
+        record, rule = routing_rules.selected_pair(data.get("rule_id"), data.get("message_id"))
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    from routed_publisher import RoutedPublisher
+    result = await RoutedPublisher().publish_pending(pairs=[(record, rule)])
+    notice = "&notice=rate_limited" if result.get("rate_limited") else ""
+    raise web.HTTPSeeOther(f"/?channel={rule['target_id']}&rule={rule['id']}{notice}#rule-{rule['id']}")
 
 
 async def filter_values(request):
@@ -411,6 +489,7 @@ def create_app():
     app.add_routes([web.get("/login", login), web.get("/", index),
                     web.get("/filter-values", filter_values),
                     web.post("/target", save_target), web.post("/rule", save_rule),
+                    web.post("/rule/delete", delete_rule), web.post("/rule/send", send_selected),
                     web.post("/retry", retry_delivery), web.post("/target/check", check_target),
                     web.post("/logout", logout)])
     return app

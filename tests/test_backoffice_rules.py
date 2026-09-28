@@ -25,11 +25,11 @@ def rule_db(tmp_path, monkeypatch):
         message_id INTEGER, sender_username TEXT);
         CREATE TABLE transferlist (id INTEGER PRIMARY KEY,
         processed_message_id INTEGER UNIQUE, origin_city TEXT,
-        destination_city TEXT, origin_country TEXT, destination_country TEXT);
+        destination_city TEXT, origin_country TEXT, destination_country TEXT, price REAL);
         CREATE TABLE housinglist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         CREATE TABLE joblist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         INSERT INTO messages VALUES(1,'transferlist','processed',11,'alice');
-        INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR');""")
+        INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150);""")
     conn.commit()
     conn.close()
     return connection
@@ -61,6 +61,19 @@ def test_destination_country_and_no_match(rule_db):
     conn.commit()
     conn.close()
     assert len(routing_rules.pending()) == 1
+
+
+def test_multiple_conditions_must_all_match(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("Filtered", "transferlist", "TR", "origin", 1,
+                            source_channel="test", origin_city="istanbul",
+                            destination_city="tehran", min_price=100, max_price=200)
+    assert len(routing_rules.pending()) == 1
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET price=250")
+    conn.commit()
+    conn.close()
+    assert routing_rules.pending() == []
 
 
 @pytest.mark.asyncio

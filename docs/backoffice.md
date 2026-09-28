@@ -91,65 +91,48 @@ already sent ads are not automatically resent.
 
 ## Rules
 
-Add each destination through the channel dialog, including its Telegram username or
-negative chat ID and an optional description. The bot checks membership and posting
-permission when you save; use **Check connection** to refresh the result. Channels
-require the bot to be an administrator with permission to post. The **Delivery history**
-button shows the last 30 attempts for that destination, including Telegram message IDs,
-errors, and a retry action. A Telegram 403 pauses further attempts for that destination
-until its permission is fixed and the connection check succeeds, which requeues rejected
-403 deliveries.
+Add each **publishing channel / group** with its Telegram username or negative chat ID
+and an optional description. A channel/group is only the place where matched ads are
+published; it is not a transport "destination" and does not imply any business topic.
+The bot checks membership and posting permission when you save it. Use **Check connection**
+to refresh that state.
 
-Each destination is one expandable row containing its settings, rules, and delivery
-history. Add multiple rules inside the destination they publish to. For each rule,
-select the advertisement category and then one of that category's fields in
-**Category field**. The next dropdown loads distinct stored values for that field
-from AI-processed ads in SQLite (up to 120 short values). Pick the value to match,
-such as `origin_country` → `TR`. If no stored values exist yet, use a category-only
-rule or wait until an ad with the relevant data has been processed. The previous
-country, city, and price conditions remain in the expandable section for existing
-rules; conditions in one rule all have to match.
+Rules are topic-agnostic. Pick a structured category, then build zero or more conditions
+from the columns that actually exist in that category's SQLite table. The back office
+discovers those fields with SQLite schema metadata instead of maintaining a transport
+field list in the UI. This means housing, jobs, transport, and future structured topics
+all use the same rule engine. A newly added column is automatically available to rules
+without adding a custom country/city/origin/destination control.
 
-Each rule displays the number of matching processed ads and how many were sent to
-its destination, including sends made by another rule for that destination.
-Expand **Matching ads** to browse 20 at a time and read the full ad preview. New rules default
-to **Manual selection**: click **Send this ad** on an individual match to publish it.
-Existing rules retain automatic delivery until switched to manual in **Edit rule**.
-Already delivered ads show **Send again** in **Matching ads**. Resending requires an
-explicit browser confirmation, keeps the original successful delivery unchanged, and
-stores each resend attempt separately in delivery history as a `resend` entry.
-**Delete rule** removes only the rule, leaving past delivery history intact.
+Each condition contains a database field, an operator, and (when needed) a value. Multiple
+conditions can be connected with **AND** or **OR** and are evaluated from left to right.
+Supported operators are equality/inequality, contains/not-contains, numeric comparisons,
+and empty/not-empty. Stored values from the selected field are loaded as suggestions,
+but admins can type another value when appropriate. The optional source-channel filter,
+priority, enabled state, continuation behavior, and manual/automatic publishing mode are
+shared controls that apply to every topic.
 
-If Telegram returns HTTP 429, publication pauses for the `retry_after` time returned
-by Telegram, including after process restarts. The affected ad remains retryable and
-automatic publishing resumes when the pause expires. Manual sends can be attempted
-again once the pause expires.
+Older rules created with the previous country/origin/destination/price columns remain
+compatible. When such a rule is opened, those legacy settings are translated into the
+generic condition builder so saving the rule moves it to the topic-agnostic model without
+changing its intended matching logic.
 
-If the service stops during a Telegram request, the delivery becomes **uncertain**
-after five minutes. Check whether the ad appeared in the channel before using
-**Review and retry**; Telegram does not provide an idempotency key for `sendMessage`.
+Each rule displays the number of matching stored ads and how many were sent to its
+channel/group. Expand **Matching ads** to browse 20 at a time and read the full preview.
+New rules default to **Manual selection**: click **Send this ad** on an individual match
+to publish it. Existing rules retain automatic delivery until switched to manual.
+Already delivered ads show **Send again**; resending requires explicit confirmation and
+keeps the original successful delivery record unchanged.
 
-First create a destination using its `@channel_username` or a numeric Telegram
-group/channel chat ID such as `-100...`. Then create a rule:
+**Delete rule** removes only the rule, leaving past delivery history intact. Rules run in
+priority order. The first matching rule stops evaluation by default; enable **Continue
+after match** to allow later matching rules to publish to additional channels/groups.
+Repeated matches to the same channel/group are deduplicated.
 
-- **Category:** transport (`transferlist`), housing (`housinglist`), or jobs
-  (`joblist`).
-- **Country:** optional ISO two-letter code such as `TR`. For transport, choose
-  whether it must match the origin, destination, or either. Housing checks its
-  `country_code`; job listings have no structured country field and should use
-  category-only rules.
-- **Other conditions:** source Telegram channel, exact origin and destination city, and minimum/maximum numeric price. All populated conditions in one rule must match.
-- **Priority:** smaller numbers run first. The first matching rule wins by default.
-  Check **Continue** to allow later matching rules to publish to additional
-  destinations. Repeated matches to the same destination are deduplicated.
-- **Enabled:** uncheck to pause a rule or destination without deleting its history.
+If Telegram returns HTTP 429, publication pauses for the `retry_after` time returned by
+Telegram, including after process restarts. If a send is interrupted, it becomes
+**uncertain** after five minutes and requires manual review before retrying.
 
-With no matching rule, a message is not published. Activating the back office
-replaces the previous fixed transfer-channel publisher for that process. Existing
-AI-processed records without entries in the new delivery table are eligible for
-the new rules, including historical records. Review those records before enabling
-any broad rule if you do not intend to publish older messages.
-
-Each message and destination has a separate delivery record. A successful send is
-not repeated for the same destination. Failed sends are retried on later cycles. The page lists recent delivery results; rejected items can be retried manually after the underlying issue is fixed.
-Telegram posting must be enabled by granting the bot posting rights at each target.
+With no matching rule, a message is not published. Each message and publishing
+channel/group has its own delivery record, and successful automatic sends are not repeated
+for that same channel/group.

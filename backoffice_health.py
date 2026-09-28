@@ -1,10 +1,17 @@
 """Read-only operational reporting for the private back office."""
 
 import json
+import os
+import resource
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import config
 from storage.database import get_connection
+
+_PROCESS_STARTED_MONOTONIC = time.monotonic()
+_CPU_BASE = resource.getrusage(resource.RUSAGE_SELF).ru_utime + resource.getrusage(resource.RUSAGE_SELF).ru_stime
 
 TRACKED_TABLES = (
     "messages",
@@ -273,6 +280,58 @@ def _publishing_report(conn):
     return result
 
 
+def _system_report(conn):
+    """Return live process, database, queue, error-rate and uptime metrics."""
+    now = time.monotonic()
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    cpu_total = usage.ru_utime + usage.ru_stime
+    elapsed = max(now - _PROCESS_STARTED_MONOTONIC, 0.001)
+    cpu_percent = max(0.0, min(100.0, ((cpu_total - _CPU_BASE) / elapsed) * 100.0))
+    rss = int(usage.ru_maxrss or 0)
+    if os.name == "posix" and os.uname().sysname.lower() == "darwin":
+        ram_bytes = rss
+    else:
+        ram_bytes = rss * 1024
+
+    columns = _columns(conn, "messages") if _table_exists(conn, "messages") else set()
+    queue_parts = []
+    for column, value in (
+        ("processing_status", "pending"),
+        ("classification_status", "pending"),
+        ("ai_status", "pending"),
+        ("advertio_status", "waiting"),
+    ):
+        if column in columns:
+            queue_parts.append(_count(conn, "messages", f"{column}=?", (value,)))
+    queue_size = sum(queue_parts)
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    daily_ads = 0
+    daily_total = 0
+    daily_failed = 0
+    if "date" in columns:
+        daily_total = _count(conn, "messages", "substr(date,1,10)=?", (today,))
+        category_filter = "ai_category IN ('housinglist','transferlist','joblist')" if "ai_category" in columns else "0"
+        daily_ads = _count(conn, "messages", f"substr(date,1,10)=? AND {category_filter}", (today,))
+        failure_parts = [f"{column}='failed'" for column in ("processing_status", "classification_status", "ai_status", "advertio_status") if column in columns]
+        if failure_parts:
+            daily_failed = _count(conn, "messages", f"substr(date,1,10)=? AND ({' OR '.join(failure_parts)})", (today,))
+    error_rate = (daily_failed / daily_total * 100.0) if daily_total else 0.0
+
+    return {
+        "daily_ads": daily_ads,
+        "cpu_percent": round(cpu_percent, 1),
+        "ram_bytes": ram_bytes,
+        "db_size_bytes": _database_report(conn).get("file_size"),
+        "queue_size": queue_size,
+        "error_rate": round(error_rate, 1),
+        "uptime_seconds": int(elapsed),
+        "daily_total_messages": daily_total,
+        "daily_failed": daily_failed,
+        "measured_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def _overview_report(conn):
     """Return compact business metrics for the back-office overview."""
     from datetime import datetime, timezone
@@ -364,6 +423,7 @@ def snapshot():
             "edits": _recent_edits(conn),
             "publishing": _publishing_report(conn),
             "overview": _overview_report(conn),
+            "system": _system_report(conn),
             "bot": {
                 "monitor_configured": bool(config.TELEGRAM_MONITOR_ENABLED),
                 "token_configured": bool(config.TELEGRAM_BOT_TOKEN),

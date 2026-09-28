@@ -273,6 +273,83 @@ def _publishing_report(conn):
     return result
 
 
+def _overview_report(conn):
+    """Return compact business metrics for the back-office overview."""
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    new_messages = 0
+    duplicates = 0
+
+    if _table_exists(conn, "system_activity"):
+        rows = conn.execute(
+            """SELECT kind, details
+               FROM system_activity
+               WHERE created_at >= ? AND kind IN ('crawl', 'processing')""",
+            (today,),
+        ).fetchall()
+        for row in rows:
+            raw = row["details"]
+            if not raw:
+                continue
+            try:
+                details = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(details, dict):
+                continue
+            if row["kind"] == "crawl":
+                for key in ("saved", "new_messages", "collected"):
+                    if key in details:
+                        try:
+                            new_messages += max(0, int(details[key] or 0))
+                        except (TypeError, ValueError):
+                            pass
+                        break
+            elif row["kind"] == "processing":
+                try:
+                    duplicates += max(0, int(details.get("duplicates_removed", 0) or 0))
+                except (TypeError, ValueError):
+                    pass
+
+    ready_ads = 0
+    if _table_exists(conn, "messages"):
+        columns = _columns(conn, "messages")
+        if {"ai_status", "ai_category"} <= columns:
+            where = """ai_status='processed'
+                       AND ai_category IN ('housinglist','transferlist','joblist')"""
+            if _table_exists(conn, "publishing_deliveries"):
+                where += """ AND NOT EXISTS (
+                    SELECT 1 FROM publishing_deliveries d
+                    WHERE d.message_id = messages.id AND d.status='sent'
+                )"""
+            ready_ads = _count(conn, "messages", where)
+
+    providers = []
+    for name in getattr(config, "AI_PROVIDERS", ()):
+        provider = str(name).strip().lower()
+        if provider == "groq":
+            credential_count = len(getattr(config, "GROQ_PROVIDERS", ()) or ())
+        elif provider == "cloudflare":
+            credential_count = len(getattr(config, "CLOUDFLARE_PROVIDERS", ()) or ())
+        else:
+            credential_count = 0
+        providers.append({
+            "name": provider,
+            "priority": len(providers) + 1,
+            "credential_count": credential_count,
+            "status": "READY" if credential_count else "NOT CONFIGURED",
+        })
+
+    return {
+        "new_messages": new_messages,
+        "duplicates": duplicates,
+        "ready_ads": ready_ads,
+        "providers": providers,
+        "provider_enabled": bool(getattr(config, "AI_EXTRACTION_ENABLED", False)),
+        "date": today,
+    }
+
+
 def snapshot():
     """Build one consistent read-only health snapshot from SQLite and configuration."""
     conn = get_connection()
@@ -286,6 +363,7 @@ def snapshot():
             "activity": _recent_activity(conn),
             "edits": _recent_edits(conn),
             "publishing": _publishing_report(conn),
+            "overview": _overview_report(conn),
             "bot": {
                 "monitor_configured": bool(config.TELEGRAM_MONITOR_ENABLED),
                 "token_configured": bool(config.TELEGRAM_BOT_TOKEN),

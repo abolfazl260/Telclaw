@@ -1,10 +1,13 @@
 """Publish AI-processed ads through admin-managed destination rules."""
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
 import config
 import routing_rules
+from storage.database import get_connection
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 
 logger = logging.getLogger(__name__)
@@ -43,11 +46,70 @@ class RoutedPublisher:
         if not self.token:
             raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
         routing_rules.initialize()
+        # Keep the legacy Koolbar destination available without requiring a
+        # Backoffice rule. Its publication eligibility is hard-coded below to
+        # preserve the old channel behavior.
+        if not any(target["chat_id"] == "@koolbar_international" for target in routing_rules.list_targets()):
+            routing_rules.save_target(
+                "Koolbar International",
+                "@koolbar_international",
+                description="Legacy hard-coded transfer destination",
+            )
+        # _claim() relies on the legacy publication table even when the
+        # Backoffice test database has not initialized the legacy publisher.
+        TelegramTransferPublisher._ensure_publication_table()
+
+    @staticmethod
+    def _koolbar_pairs(limit):
+        """Return legacy Koolbar transfer ads with their former eligibility rules."""
+        today = datetime.now(ZoneInfo("Asia/Tehran")).date().isoformat()
+        conn = get_connection()
+        try:
+            target = conn.execute(
+                "SELECT * FROM publishing_targets WHERE chat_id=? AND enabled=1",
+                ("@koolbar_international",),
+            ).fetchone()
+            if not target:
+                return []
+            rows = conn.execute(
+                """SELECT t.*, m.channel_username, m.message_id, m.message_link,
+                          m.sender_username, m.ai_category, m.ai_status,
+                          m.processing_status, m.id AS message_row_id
+                     FROM transferlist t
+                     INNER JOIN messages m ON m.id=t.processed_message_id
+                    WHERE m.processing_status='processed'
+                      AND m.ai_status='processed'
+                      AND m.ai_category='transferlist'
+                      AND t.departure_date IS NOT NULL
+                      AND date(substr(t.departure_date,1,10)) >= date(?)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM publishing_deliveries d
+                           WHERE d.message_id=m.id
+                             AND d.target_id=?
+                             AND d.status='sent'
+                      )
+                    ORDER BY t.id ASC
+                    LIMIT ?""",
+                (today, target["id"], int(limit)),
+            ).fetchall()
+            return [(dict(row), dict(target)) for row in rows]
+        finally:
+            conn.close()
 
     async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
         if routing_rules.is_rate_limited():
             return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
-        pairs = routing_rules.pending(limit) if pairs is None else pairs
+        if pairs is None:
+            pairs = routing_rules.pending(limit)
+            # The legacy Koolbar channel keeps its historical behavior outside
+            # the generic Backoffice rule builder: transferlist only, processed
+            # AI data, and departure date today or later (Tehran date).
+            existing = {(record["message_row_id"], rule["target_id"]) for record, rule in pairs}
+            for pair in self._koolbar_pairs(limit):
+                key = (pair[0]["message_row_id"], pair[1]["id"])
+                if key not in existing and len(pairs) < int(limit):
+                    pairs.append(pair)
+                    existing.add(key)
         result = {"found": len(pairs), "sent": 0, "failed": 0, "rejected": 0}
         blocked_targets = {}
         for record, rule in pairs:

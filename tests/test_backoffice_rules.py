@@ -169,6 +169,31 @@ async def test_channel_history_and_category_filter(rule_db):
 
 
 @pytest.mark.asyncio
+async def test_rules_are_nested_under_channels_and_values_come_from_database(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_target("Other", "@otherchannel")
+    routing_rules.save_rule("Turkey origin", "transferlist", "", "either", 1,
+                            filter_field="origin_country", filter_value="TR")
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    first = response.text.split('id="channel-1"', 1)[1].split('id="channel-2"', 1)[0]
+    second = response.text.split('id="channel-2"', 1)[1]
+    assert "Turkey origin" in first
+    assert "Turkey origin" not in second
+    assert 'name="target_id" value="1"' in first
+    assert 'name="target_id" value="2"' in second
+    assert "<h2>Rules</h2>" not in response.text
+
+    class Request:
+        query = {"category": "transferlist", "field": "origin_country"}
+
+    response = await backoffice_web.filter_values(Request())
+    assert response.text == '["TR"]'
+    Request.query = {"category": "transferlist", "field": "invalid"}
+    with pytest.raises(web.HTTPBadRequest):
+        await backoffice_web.filter_values(Request())
+
+
+@pytest.mark.asyncio
 async def test_telegram_403_marks_destination_disconnected(rule_db, monkeypatch):
     routing_rules.save_target("Turkey", "@turkeychannel")
     routing_rules.save_rule("All", "transferlist", "", "either", 1)

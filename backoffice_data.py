@@ -13,6 +13,18 @@ TABLES = ("messages", "transferlist", "housinglist", "joblist")
 MESSAGE_EDITABLE = frozenset({"text", "raw_text", "cleaned_text", "date", "channel_name",
                               "sender_username", "sender_type", "message_link"})
 PAGE_SIZE = 25
+TEXT_FILTER_OPERATORS = frozenset({
+    "contains", "not_contains", "eq", "ne", "starts", "empty", "not_empty", "null", "not_null"
+})
+NUMERIC_FILTER_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "null", "not_null"})
+
+
+def numeric_filter_type(data_type):
+    """Return whether a SQLite declared type should use numeric filter operators."""
+    upper = str(data_type or "").upper()
+    return any(token in upper for token in ("INT", "REAL", "FLOA", "DOUB", "NUMERIC", "DECIMAL"))
+
+
 
 
 class ConflictError(ValueError):
@@ -46,7 +58,7 @@ def initialize():
         conn.close()
 
 
-def page(table, page_number=1):
+def page(table, page_number=1, filters=None):
     table = _table(table)
     try:
         page_number = int(page_number)
@@ -59,15 +71,18 @@ def page(table, page_number=1):
         columns = _columns(conn, table)
         if "id" not in columns:
             raise ValueError("Data table unavailable")
-        total = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        clauses, params, active_filters = _filter_query(columns, filters)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        total = conn.execute(f"SELECT COUNT(*) FROM {table}{where}", params).fetchone()[0]
         pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page_number = min(page_number, pages)
         rows = [dict(row) for row in conn.execute(
-            f"SELECT * FROM {table} ORDER BY id DESC LIMIT ? OFFSET ?",
-            (PAGE_SIZE, (page_number - 1) * PAGE_SIZE))]
+            f"SELECT * FROM {table}{where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            params + [PAGE_SIZE, (page_number - 1) * PAGE_SIZE])]
         return {"table": table, "columns": columns,
                 "editable": [name for name in columns if _editable(table, name, columns)],
-                "rows": rows, "total": total, "page": page_number, "pages": pages}
+                "rows": rows, "total": total, "page": page_number, "pages": pages,
+                "filters": active_filters}
     finally:
         conn.close()
 
@@ -110,6 +125,73 @@ def _convert(value, data_type, make_null):
             raise ValueError("Number must be finite")
         return number
     return value
+
+
+def _convert_filter(value, data_type):
+    value = str(value)
+    if len(value) > 2000:
+        raise ValueError("Filter value is too long")
+    if numeric_filter_type(data_type):
+        if "INT" in data_type:
+            if not re.fullmatch(r"[+-]?\d+", value.strip()):
+                raise ValueError("Numeric filter requires a whole number")
+            return int(value)
+        try:
+            number = float(value)
+        except ValueError as exc:
+            raise ValueError("Numeric filter requires a number") from exc
+        if not math.isfinite(number):
+            raise ValueError("Numeric filter must be finite")
+        return number
+    return value
+
+
+def _filter_query(columns, filters):
+    clauses, params, active = [], [], {}
+    for column, spec in (filters or {}).items():
+        if column not in columns:
+            raise ValueError("Unknown filter column")
+        if not isinstance(spec, dict):
+            raise ValueError("Invalid column filter")
+        numeric = numeric_filter_type(columns[column])
+        allowed = NUMERIC_FILTER_OPERATORS if numeric else TEXT_FILTER_OPERATORS
+        default = "eq" if numeric else "contains"
+        operator = str(spec.get("op") or default).strip()
+        if operator not in allowed:
+            raise ValueError("Invalid filter operator")
+        value = spec.get("value", "")
+        identifier = '"' + column.replace('"', '""') + '"'
+
+        if operator in {"null", "not_null", "empty", "not_empty"}:
+            if operator == "null":
+                clauses.append(f"{identifier} IS NULL")
+            elif operator == "not_null":
+                clauses.append(f"{identifier} IS NOT NULL")
+            elif operator == "empty":
+                clauses.append(f"{identifier} = ''")
+            else:
+                clauses.append(f"{identifier} IS NOT NULL AND {identifier} <> ''")
+            active[column] = {"op": operator, "value": ""}
+            continue
+
+        if value is None or str(value) == "":
+            continue
+        converted = _convert_filter(value, columns[column])
+        if operator == "contains":
+            clauses.append(f"instr(lower(CAST({identifier} AS TEXT)), lower(?)) > 0")
+            params.append(converted)
+        elif operator == "not_contains":
+            clauses.append(f"({identifier} IS NULL OR instr(lower(CAST({identifier} AS TEXT)), lower(?)) = 0)")
+            params.append(converted)
+        elif operator == "starts":
+            clauses.append(f"lower(substr(CAST({identifier} AS TEXT), 1, length(?))) = lower(?)")
+            params.extend([converted, converted])
+        else:
+            sql_operator = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[operator]
+            clauses.append(f"{identifier} {sql_operator} ?")
+            params.append(converted)
+        active[column] = {"op": operator, "value": str(value)}
+    return clauses, params, active
 
 
 def update_cell(table, row_id, column, value, expected, admin_id, make_null=False):

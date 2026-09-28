@@ -52,6 +52,21 @@ def test_page_and_checked_cell_updates(data_db):
         conn.close()
 
 
+def test_column_filters_apply_before_pagination(data_db):
+    contains = backoffice_data.page("messages", 1, {"text": {"op": "contains", "value": "Ad 2"}})
+    assert contains["total"] == 10
+    assert all("Ad 2" in row["text"] for row in contains["rows"])
+
+    numeric = backoffice_data.page("messages", 1, {"message_id": {"op": "gte", "value": "27"}})
+    assert numeric["total"] == 2
+    assert {row["message_id"] for row in numeric["rows"]} == {27, 28}
+
+    nulls = backoffice_data.page("messages", 1, {"sender_username": {"op": "null", "value": ""}})
+    assert nulls["total"] == 28
+    with pytest.raises(ValueError):
+        backoffice_data.page("messages", 1, {"does_not_exist": {"op": "contains", "value": "x"}})
+
+
 @pytest.mark.asyncio
 async def test_editor_requires_login_and_csrf_and_reports_conflicts(data_db):
     client = TestClient(TestServer(backoffice_web.create_app()))
@@ -73,6 +88,14 @@ async def test_editor_requires_login_and_csrf_and_reports_conflicts(data_db):
         assert response.status == 200
         page = await response.text()
         assert "Page 2 of 2" in page and "edit-cell" in page and "Database" in page
+        assert 'name="f_text"' in page and 'name="op_text"' in page
+        response = await client.get(
+            "/data?table=messages&op_text=contains&f_text=Ad+28", headers=headers)
+        assert response.status == 200
+        filtered_page = await response.text()
+        assert "1 rows · Page 1 of 1" in filtered_page
+        assert "Ad 28" in filtered_page and "Ad 27" not in filtered_page
+        assert "1 active filter" in filtered_page and "Clear filters" in filtered_page
         response = await client.get("/data/cell?table=transferlist&id=1&column=origin_city",
                                     headers=headers)
         assert (await response.json())["value"] == "Old"

@@ -9,16 +9,36 @@ from storage.database import CATEGORY_TABLES, get_connection
 # Categories follow the structured category tables used by the extraction pipeline.
 # Rule fields themselves are discovered from SQLite so adding a column does not
 # require a transport-specific rule change.
-CATEGORIES = tuple(CATEGORY_TABLES)
+CATEGORIES = tuple(CATEGORY_TABLES)  # compatibility snapshot; runtime discovery uses categories()
 SCOPES = ("either", "origin", "destination")  # legacy rule compatibility only
 FILTER_OPERATORS = ("eq", "ne", "contains", "not_contains", "gt", "gte", "lt", "lte",
                     "empty", "not_empty")
 _NO_VALUE_OPERATORS = {"empty", "not_empty"}
 
 
+def categories():
+    """Discover structured topic tables from SQLite instead of hard-coding business topics."""
+    conn = get_connection()
+    try:
+        names = []
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+        for row in rows:
+            name = row[0]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                continue
+            columns = {column[1] for column in conn.execute(f"PRAGMA table_info({name})").fetchall()}
+            if "processed_message_id" in columns:
+                names.append(name)
+        preferred = [name for name in CATEGORY_TABLES if name in names]
+        preferred.extend(name for name in names if name not in preferred)
+        return tuple(preferred)
+    finally:
+        conn.close()
+
+
 def category_fields(category):
     """Return filterable fields from the real SQLite category table."""
-    if category not in CATEGORIES:
+    if category not in categories():
         raise ValueError("Invalid category")
     conn = get_connection()
     try:
@@ -30,7 +50,7 @@ def category_fields(category):
 
 def filter_fields():
     """Return the current database-backed field map used by the back office."""
-    return {category: category_fields(category) for category in CATEGORIES}
+    return {category: category_fields(category) for category in categories()}
 
 
 def _normalize_conditions(category, conditions):
@@ -288,7 +308,7 @@ def list_rules():
 
 def distinct_filter_values(category, field, limit=120):
     """Read stored category values for suggestions; identifiers come from SQLite."""
-    if category not in CATEGORIES or field not in category_fields(category):
+    if category not in categories() or field not in category_fields(category):
         raise ValueError("Invalid category field")
     conn = get_connection()
     try:
@@ -332,7 +352,7 @@ def save_rule(name, category, country, scope, target_id, priority=100,
               origin_city="", destination_city="", min_price=None, max_price=None,
               filter_field="", filter_value="", delivery_mode="auto", conditions=None):
     name, country = name.strip(), country.strip().upper()
-    if not name or category not in CATEGORIES or scope not in SCOPES:
+    if not name or category not in categories() or scope not in SCOPES:
         raise ValueError("Invalid rule name, category, or country condition")
     if country and (len(country) != 2 or not country.isascii() or not country.isalpha()):
         raise ValueError("Country must be an ISO 3166-1 two-letter code, such as TR")
@@ -481,7 +501,7 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
             raise ValueError("Rule not found")
         rule = dict(rule_row)
         category = rule["category"]
-        if category not in CATEGORIES:
+        if category not in categories():
             raise ValueError("Invalid category")
         conditions = effective_conditions(rule)
         where = []
@@ -602,8 +622,11 @@ def pending(limit=100):
             return []
         result = []
         offset = 0
+        active_categories = categories()
+        if not active_categories:
+            return []
         while len(result) < limit:
-            placeholders = ",".join("?" for _ in CATEGORIES)
+            placeholders = ",".join("?" for _ in active_categories)
             rows = conn.execute(f"""SELECT id AS message_row_id, ai_category,channel_username,
                 message_id AS telegram_source_id, sender_username
                 FROM messages m WHERE ai_status='processed'
@@ -616,7 +639,7 @@ def pending(limit=100):
                     AND NOT EXISTS (SELECT 1 FROM publishing_deliveries d
                         WHERE d.message_id=m.id AND d.target_id=r.target_id
                         AND d.status IN ('sent','rejected')))
-                ORDER BY m.id LIMIT 200 OFFSET ?""", (*CATEGORIES, offset)).fetchall()
+                ORDER BY m.id LIMIT 200 OFFSET ?""", (*active_categories, offset)).fetchall()
             if not rows:
                 break
             offset += len(rows)

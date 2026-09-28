@@ -332,12 +332,12 @@ def _rule_form(rule, target, csrf):
     rule = rule or {}
     conditions = routing_rules.effective_conditions(rule) if rule.get("id") else []
     encoded_conditions = _escape(json.dumps(conditions, ensure_ascii=False, separators=(",", ":")))
-    default_category = routing_rules.CATEGORIES[0] if routing_rules.CATEGORIES else ""
+    default_category = routing_rules.categories()[0] if routing_rules.categories() else ""
     return f'''<form method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="id" value="{rule.get('id','')}">
         <input type="hidden" name="target_id" value="{target['id']}">
         <label>Rule name<input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required></label>
-        <label>Topic / category {_select('category', routing_rules.CATEGORIES, rule.get('category', default_category))}</label>
+        <label>Topic / category {_select('category', routing_rules.categories(), rule.get('category', default_category))}</label>
         <label>Source channel (optional)<input name="source_channel" placeholder="@source_channel" value="{_escape(rule.get('source_channel'))}"></label>
         <div class="conditions-editor" data-conditions="{encoded_conditions}">
         <p class="hint">Conditions use the real columns currently stored for the selected topic. Add as many as needed; AND/OR is evaluated from left to right.</p>

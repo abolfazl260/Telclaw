@@ -22,13 +22,13 @@ def rule_db(tmp_path, monkeypatch):
     conn = connection()
     conn.executescript("""CREATE TABLE messages (
         id INTEGER PRIMARY KEY, ai_category TEXT, ai_status TEXT,
-        message_id INTEGER, sender_username TEXT);
+        message_id INTEGER, sender_username TEXT, channel_username TEXT);
         CREATE TABLE transferlist (id INTEGER PRIMARY KEY,
         processed_message_id INTEGER UNIQUE, origin_city TEXT,
         destination_city TEXT, origin_country TEXT, destination_country TEXT, price REAL);
         CREATE TABLE housinglist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         CREATE TABLE joblist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
-        INSERT INTO messages VALUES(1,'transferlist','processed',11,'alice');
+        INSERT INTO messages VALUES(1,'transferlist','processed',11,'alice','test');
         INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150);""")
     conn.commit()
     conn.close()
@@ -273,3 +273,37 @@ async def test_telegram_429_pauses_bot_without_repeated_sends(rule_db, monkeypat
     assert routing_rules.pending() == []
     assert (await publisher.publish_pending())["rate_limited"] is True
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_interrupted_send_requires_review_before_manual_retry(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("Select", "transferlist", "", "either", 1, delivery_mode="manual")
+    assert routing_rules.claim_delivery(1, 1)
+    conn = rule_db()
+    conn.execute("UPDATE publishing_deliveries SET updated_at='2020-01-01T00:00:00+00:00'")
+    conn.commit()
+    conn.close()
+    _, _, records = routing_rules.rule_matches(1)
+    assert records[0]["delivery_status"] == "uncertain"
+    with pytest.raises(ValueError):
+        routing_rules.selected_pair(1, 1)
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "Full ad preview" in response.text
+    assert "Review and retry" in response.text
+    routing_rules.retry_delivery(1, 1)
+    assert routing_rules.selected_pair(1, 1)[0]["message_row_id"] == 1
+
+
+def test_zero_category_value_matches_preview_and_auto_delivery(rule_db):
+    conn = rule_db()
+    conn.execute("ALTER TABLE joblist ADD COLUMN remote INTEGER")
+    conn.execute("INSERT INTO messages VALUES(2,'joblist','processed',12,'bob','sample_source')")
+    conn.execute("INSERT INTO joblist(processed_message_id,remote) VALUES(2,0)")
+    conn.commit()
+    conn.close()
+    routing_rules.save_target("Jobs", "@jobchannel")
+    routing_rules.save_rule("On site", "joblist", "", "either", 1,
+                            filter_field="remote", filter_value="0")
+    assert routing_rules.rule_matches(1)[1]["total"] == 1
+    assert [record["message_row_id"] for record, _ in routing_rules.pending()] == [2]

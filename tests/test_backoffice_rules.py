@@ -217,3 +217,59 @@ async def test_telegram_403_marks_destination_disconnected(rule_db, monkeypatch)
     assert (await publisher.publish_pending())["rejected"] == 1
     assert routing_rules.list_targets()[0]["connection_status"] == "disconnected"
     assert routing_rules.recent_deliveries(target_id=1)[0]["status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("Choose one", "transferlist", "", "either", 1,
+                            filter_field="origin_country", filter_value="TR",
+                            delivery_mode="manual")
+    assert routing_rules.pending() == []
+    rule, counts, records = routing_rules.rule_matches(1)
+    assert rule["delivery_mode"] == "manual"
+    assert counts == {"total": 1, "sent": 0}
+    assert records[0]["message_row_id"] == 1
+    assert routing_rules.selected_pair(1, 1)[0]["message_row_id"] == 1
+    assert routing_rules.claim_delivery(1, 1)
+    assert not routing_rules.claim_delivery(1, 1)
+    routing_rules.record_delivery(1, 1, "sent", 900)
+    with pytest.raises(ValueError):
+        routing_rules.selected_pair(1, 1)
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "1 matching ads" in response.text
+    assert "Delete rule" in response.text
+    routing_rules.delete_rule(1, 1)
+    assert routing_rules.list_rules() == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_429_pauses_bot_without_repeated_sends(rule_db, monkeypatch):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("All", "transferlist", "", "either", 1)
+    calls = []
+
+    class Response:
+        status = 429
+        ok = False
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def json(self, **kwargs):
+            return {"ok": False, "description": "Too Many Requests: retry after 32",
+                    "parameters": {"retry_after": 32}}
+
+    class Session:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        def post(self, *args, **kwargs):
+            calls.append(kwargs)
+            return Response()
+
+    monkeypatch.setattr(routed_publisher.aiohttp, "ClientSession", Session)
+    publisher = routed_publisher.RoutedPublisher(token="fake-token")
+    assert (await publisher.publish_pending())["rate_limited"] is True
+    assert routing_rules.recent_deliveries(target_id=1)[0]["status"] == "retry"
+    assert routing_rules.pending() == []
+    assert (await publisher.publish_pending())["rate_limited"] is True
+    assert len(calls) == 1

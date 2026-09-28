@@ -28,7 +28,7 @@ class RoutedPublisher:
             raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
         routing_rules.initialize()
 
-    async def publish_pending(self, limit=50, pairs=None):
+    async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
         if routing_rules.is_rate_limited():
             return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
         pairs = routing_rules.pending(limit) if pairs is None else pairs
@@ -36,12 +36,24 @@ class RoutedPublisher:
         blocked_targets = {}
         for record, rule in pairs:
             message_id, target_id = record["message_row_id"], rule["target_id"]
+            resend_id = None
+            if resend:
+                resend_id = routing_rules.claim_resend(message_id, target_id, requested_by)
+                if resend_id is None:
+                    continue
+
+            def record_result(status, telegram_message_id=None, error=None):
+                if resend:
+                    routing_rules.record_resend(resend_id, status, telegram_message_id, error)
+                else:
+                    routing_rules.record_delivery(message_id, target_id, status,
+                                                  telegram_message_id, error)
+
             if target_id in blocked_targets:
-                routing_rules.record_delivery(message_id, target_id, "rejected",
-                                              error=blocked_targets[target_id][:1000])
+                record_result("rejected", error=blocked_targets[target_id][:1000])
                 result["rejected"] += 1
                 continue
-            if not routing_rules.claim_delivery(message_id, target_id):
+            if not resend and not routing_rules.claim_delivery(message_id, target_id):
                 continue
             try:
                 if record["ai_category"] == "transferlist":
@@ -69,8 +81,8 @@ class RoutedPublisher:
                                 except (ValueError, TypeError):
                                     seconds = 60
                                 routing_rules.set_rate_limit(seconds)
-                                routing_rules.record_delivery(message_id, target_id, "retry",
-                                                              error=f"Telegram rate limit: retry after {seconds}s")
+                                record_result("failed" if resend else "retry",
+                                              error=f"Telegram rate limit: retry after {seconds}s")
                                 result["failed"] += 1
                                 result["rate_limited"] = True
                                 logger.warning("Telegram rate limit reached; publishing paused for %ss", seconds)
@@ -79,19 +91,18 @@ class RoutedPublisher:
                                 error = f"Telegram sendMessage HTTP 403: {body.get('description', '')}"
                                 blocked_targets[target_id] = error
                                 routing_rules.update_target_connection(target_id, "disconnected", error)
-                                routing_rules.record_delivery(message_id, target_id, "rejected", error=error[:1000])
+                                record_result("rejected", error=error[:1000])
                                 result["rejected"] += 1
                                 logger.warning("Publishing destination %s unavailable: %s", target_id, error)
                                 continue
                             raise RuntimeError(f"Telegram sendMessage HTTP {response.status}: {body.get('description', '')}")
-                routing_rules.record_delivery(message_id, target_id, "sent",
-                                              body["result"].get("message_id"))
+                record_result("sent", body["result"].get("message_id"))
                 result["sent"] += 1
             except (ValueError, TransferTelegramPublishError) as exc:
-                routing_rules.record_delivery(message_id, target_id, "rejected", error=str(exc)[:1000])
+                record_result("rejected", error=str(exc)[:1000])
                 result["rejected"] += 1
             except Exception as exc:
-                routing_rules.record_delivery(message_id, target_id, "retry", error=str(exc)[:1000])
+                record_result("failed" if resend else "retry", error=str(exc)[:1000])
                 result["failed"] += 1
                 logger.exception("Publication failed for message=%s target=%s", message_id, target_id)
         return result

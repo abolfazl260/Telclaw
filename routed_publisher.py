@@ -1,7 +1,6 @@
 """Publish AI-processed ads through admin-managed destination rules."""
 import logging
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import date
 
 import aiohttp
 
@@ -62,15 +61,18 @@ class RoutedPublisher:
     @staticmethod
     def _koolbar_pairs(limit):
         """Return legacy Koolbar transfer ads with their former eligibility rules."""
-        today = datetime.now(ZoneInfo("Asia/Tehran")).date().isoformat()
+        today = date.today().isoformat()
+        # Use the routing module to resolve the target so its schema initialization
+        # is guaranteed for isolated/test databases as well as the production DB.
+        targets = [
+            target for target in routing_rules.list_targets()
+            if target["chat_id"] == "@koolbar_international" and target["enabled"]
+        ]
+        if not targets:
+            return []
+        target = targets[0]
         conn = get_connection()
         try:
-            target = conn.execute(
-                "SELECT * FROM publishing_targets WHERE chat_id=? AND enabled=1",
-                ("@koolbar_international",),
-            ).fetchone()
-            if not target:
-                return []
             rows = conn.execute(
                 """SELECT t.*, m.channel_username, m.message_id, m.message_link,
                           m.sender_username, m.ai_category, m.ai_status,
@@ -103,7 +105,7 @@ class RoutedPublisher:
             pairs = routing_rules.pending(limit)
             # The legacy Koolbar channel keeps its historical behavior outside
             # the generic Backoffice rule builder: transferlist only, processed
-            # AI data, and departure date today or later (Tehran date).
+            # AI data, and departure date today or later (calendar date).
             existing = {(record["message_row_id"], rule["target_id"]) for record, rule in pairs}
             for pair in self._koolbar_pairs(limit):
                 key = (pair[0]["message_row_id"], pair[1]["id"])

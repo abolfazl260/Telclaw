@@ -158,6 +158,8 @@ async def test_channel_history_and_category_filter(rule_db):
     routing_rules.record_delivery(1, 1, "rejected", error="Telegram sendMessage HTTP 403: forbidden")
     assert len(routing_rules.recent_deliveries(target_id=1)) == 1
     assert routing_rules.pending() == []
+    routing_rules.update_target_connection(1, "disconnected", "Bot cannot post")
+    assert routing_rules.pending() == []
     routing_rules.update_target_connection(1, "connected", "Bot can post")
     assert len(routing_rules.pending()) == 1
     response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})

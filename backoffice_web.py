@@ -13,6 +13,7 @@ import aiohttp
 
 import config
 import routing_rules
+from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 from monitoring.telegram_monitor import ADMIN_USER_IDS
 from storage.database import get_connection
 
@@ -184,8 +185,10 @@ async def index(request):
             <td>{_escape(item['error'])}</td><td>'''
             + (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="message_id" value="{item['message_id']}">
-            <input type="hidden" name="target_id" value="{target['id']}"><button>Retry</button></form>'''
-            if item['status'] in {'retry', 'rejected'} else '') + '</td></tr>' for item in history)
+            <input type="hidden" name="target_id" value="{target['id']}"><button
+            {'data-confirm="Telegram may already have posted this ad. Check the channel before retrying."' if item['status']=='uncertain' else ''}
+            >{'Review and retry' if item['status']=='uncertain' else 'Retry'}</button></form>'''
+            if item['status'] in {'retry', 'rejected', 'uncertain'} else '') + '</td></tr>' for item in history)
         state = target.get('connection_status') or 'unknown'
         opened = str(getattr(request, 'query', {}).get('channel', '')) == str(target['id'])
         rows.append(f'''<details class="channel" id="channel-{target['id']}" {'open' if opened else ''}><summary>
@@ -236,6 +239,7 @@ async def index(request):
     .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:1rem}}
     .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
     .ad-row p{{margin:.3rem 0}}.ad-row form{{display:inline-flex;padding:0}}
+    .ad-row pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;background:#f5f7fb;padding:.7rem}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
@@ -321,17 +325,32 @@ def _rule_panel(rule, target, csrf, request):
     for record in records:
         snippet = str(next((record.get(key) for key in ("title", "job_title", "cleaned_text", "raw_text", "description")
                             if record.get(key)), "Ad details unavailable"))[:220]
+        try:
+            if record["ai_category"] == "transferlist":
+                preview = TelegramTransferPublisher.format_ad(record, record)
+            else:
+                from routed_publisher import _plain_ad
+                preview = _plain_ad(record)
+        except (ValueError, KeyError, TypeError, TransferTelegramPublishError):
+            preview = ""
+        preview = preview or str(record.get("cleaned_text") or record.get("raw_text") or snippet)
         status = record.get("delivery_status") or "not sent"
         can_send = (mode == "manual" and rule["enabled"] and target["enabled"]
                     and target["connection_status"] != "disconnected" and
-                    status not in {"sent", "sending"} and not paused)
+                    status not in {"sent", "sending", "uncertain"} and not paused)
         send = (f'''<form method="post" action="/rule/send"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="rule_id" value="{rule['id']}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
             <button>Send this ad</button></form>''' if can_send else "")
+        uncertain = (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="message_id" value="{record['message_row_id']}">
+            <input type="hidden" name="target_id" value="{target['id']}">
+            <button data-confirm="Telegram may already have posted this ad. Check the channel before retrying.">Review and retry</button>
+            </form>''' if status == "uncertain" else "")
         entries.append(f'''<div class="ad-row"><strong>Ad #{record['message_row_id']}</strong>
             · {_escape(record.get('channel_username') or '')} · {_escape(status)}
-            <p>{_escape(snippet)}</p>{send}</div>''')
+            <p>{_escape(snippet)}</p><details><summary>Full ad preview</summary>
+            <pre>{_escape(preview[:4000])}</pre></details>{send}{uncertain}</div>''')
     nav = ""
     for label, p in (("Previous", page - 1), ("Next", page + 1)):
         if p >= 0 and p * 20 < counts["total"] and (p != page):
@@ -340,7 +359,7 @@ def _rule_panel(rule, target, csrf, request):
     expanded = str(getattr(request, "query", {}).get("rule", "")) == str(rule["id"])
     return f'''<div class="rule-panel" id="rule-{rule['id']}"><div class="rule-title">
         <h4>{_escape(rule['name'])}</h4><span class="hint">{counts['total']} matching ads ·
-        {counts['sent']} sent · {mode}</span>
+        {counts['sent']} delivered to this channel · {mode}</span>
         <form method="post" action="/rule/delete"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="rule_id" value="{rule['id']}">
         <input type="hidden" name="target_id" value="{target['id']}">

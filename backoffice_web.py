@@ -1,6 +1,7 @@
-"""Private rule back office. Run behind an HTTPS reverse proxy."""
+"""Private rule back office, served directly or behind a proxy."""
 import hashlib
 import html
+import ipaddress
 import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
@@ -40,22 +41,31 @@ def initialize_auth():
 
 
 def public_origin():
-    """Return the external HTTPS origin, optionally adding its public proxy port."""
+    """Return the external origin, optionally adding its public proxy port."""
     base = config.BACKOFFICE_PUBLIC_URL.rstrip("/")
     parsed = urlparse(base)
     try:
         port = parsed.port
     except ValueError as exc:
         raise RuntimeError("Invalid back office public URL port") from exc
-    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password
             or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
-        raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be a public HTTPS URL")
+        raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be an HTTP IP or HTTPS origin")
     public_port = config.BACKOFFICE_PUBLIC_PORT
+    if parsed.scheme == "http":
+        try:
+            ipaddress.ip_address(parsed.hostname)
+        except ValueError as exc:
+            raise RuntimeError("Direct HTTP back office requires an IP address") from exc
+        if (public_port or port != config.BACKOFFICE_PORT
+                or config.BACKOFFICE_HOST not in {"0.0.0.0", "::", parsed.hostname}
+                or config.BACKOFFICE_TLS_CERT or config.BACKOFFICE_TLS_KEY):
+            raise RuntimeError("Direct HTTP requires the same public and local port, a public bind address, and no TLS certificate")
     if public_port:
         if port and port != public_port:
             raise RuntimeError("Public URL port conflicts with TELCLAW_BACKOFFICE_PUBLIC_PORT")
         hostname = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-        base = f"https://{hostname}:{public_port}"
+        base = f"{parsed.scheme}://{hostname}:{public_port}"
     return base
 
 
@@ -122,13 +132,16 @@ async def login(request):
     try:
         # Atomic consumption prevents a link from being redeemed twice.
         cursor = conn.execute("""UPDATE backoffice_links SET used_at=? WHERE token_hash=?
-            AND used_at IS NULL AND expires_at>? AND admin_id IN (1485409432,266809220,7469291969)""",
+            AND used_at IS NULL AND expires_at>?""",
             (_now().isoformat(), _digest(token), _now().isoformat()))
         if cursor.rowcount != 1:
             conn.rollback()
             raise web.HTTPForbidden(text="Invalid or expired link")
         row = conn.execute("SELECT admin_id FROM backoffice_links WHERE token_hash=?",
                            (_digest(token),)).fetchone()
+        if row["admin_id"] not in ADMIN_USER_IDS:
+            conn.rollback()
+            raise web.HTTPForbidden(text="Admin access revoked")
         session_token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         conn.execute("INSERT INTO backoffice_sessions VALUES(?,?,?,?)",
                      (_digest(session_token), row["admin_id"], csrf,
@@ -138,7 +151,8 @@ async def login(request):
         conn.close()
     response = web.HTTPSeeOther("/")
     response.set_cookie("telclaw_admin", session_token, httponly=True,
-                        secure=True, samesite="Strict", max_age=43200, path="/")
+                        secure=urlparse(public_origin()).scheme == "https",
+                        samesite="Strict", max_age=43200, path="/")
     raise response
 
 

@@ -80,6 +80,18 @@ rule or wait until an ad with the relevant data has been processed. The previous
 country, city, and price conditions remain in the expandable section for existing
 rules; conditions in one rule all have to match.
 
+Each rule displays the number of matching processed ads and how many were sent to
+its destination. Expand **Matching ads** to browse 20 at a time. New rules default
+to **Manual selection**: click **Send this ad** on an individual match to publish it.
+Existing rules retain automatic delivery until switched to manual in **Edit rule**.
+Already sent ads cannot be resent from the selector. **Delete rule** removes only
+the rule, leaving past delivery history intact.
+
+If Telegram returns HTTP 429, publication pauses for the `retry_after` time returned
+by Telegram, including after process restarts. The affected ad remains retryable and
+automatic publishing resumes when the pause expires. Manual sends can be attempted
+again once the pause expires.
+
 First create a destination using its `@channel_username` or a numeric Telegram
 group/channel chat ID such as `-100...`. Then create a rule:
 

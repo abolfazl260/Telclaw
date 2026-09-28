@@ -86,6 +86,22 @@ def list_rules():
         conn.close()
 
 
+def distinct_filter_values(category, field, limit=120):
+    """Read stored category values for a rule dropdown; identifiers are whitelisted."""
+    if category not in FILTER_FIELDS or field not in FILTER_FIELDS[category]:
+        raise ValueError("Invalid category field")
+    conn = get_connection()
+    try:
+        rows = conn.execute(f"""SELECT DISTINCT TRIM(CAST(c.{field} AS TEXT)) AS value
+            FROM {category} c JOIN messages m ON m.id=c.processed_message_id
+            WHERE m.ai_status='processed' AND c.{field} IS NOT NULL
+              AND LENGTH(TRIM(CAST(c.{field} AS TEXT))) BETWEEN 1 AND 80
+            ORDER BY value COLLATE NOCASE LIMIT ?""", (min(max(int(limit), 1), 200),))
+        return [row["value"] for row in rows]
+    finally:
+        conn.close()
+
+
 def save_target(label, chat_id, enabled=True, target_id=None, description=""):
     label, chat_id = label.strip(), chat_id.strip()
     description = str(description or "").strip()[:500]
@@ -125,7 +141,7 @@ def save_rule(name, category, country, scope, target_id, priority=100,
     destination_city = str(destination_city or "").strip().casefold()
     filter_field = str(filter_field or "").strip()
     filter_value = str(filter_value or "").strip().casefold()
-    if filter_field not in ("", *FILTER_FIELDS[category]) or (filter_value and not filter_field):
+    if filter_field not in ("", *FILTER_FIELDS[category]) or bool(filter_value) != bool(filter_field):
         raise ValueError("Invalid category filter")
     min_price = float(min_price) if min_price not in (None, "") else None
     max_price = float(max_price) if max_price not in (None, "") else None

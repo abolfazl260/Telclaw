@@ -13,7 +13,7 @@ TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
 CRAWLER_ERRORS_LOG=PROJECT_ROOT / "crawler_errors.log"
 TELEGRAM_MAX_DOCUMENT_BYTES=50*1024*1024
-ADMIN_USER_IDS=frozenset({1485409432, 266809220, 7469291969})
+ADMIN_USER_IDS=frozenset({1485409432, 266809220, 7469291969, 106056586})
 
 class _TelegramErrorHandler(logging.Handler):
     def __init__(self,monitor): super().__init__(level=logging.ERROR); self.monitor=monitor

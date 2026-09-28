@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from urllib.parse import urlparse
 
 from aiohttp import web
 
@@ -10,7 +9,7 @@ from monitoring.telegram_monitor import get_telegram_monitor
 from monitoring.transfer_live import install_transfer_live_command
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 from routed_publisher import RoutedPublisher
-from backoffice_web import create_app
+from backoffice_web import create_app, public_origin
 import config
 
 logger = logging.getLogger("telclaw.transfer_publisher")
@@ -38,9 +37,7 @@ async def _run():
     backoffice_ready = False
     if config.BACKOFFICE_ENABLED:
         try:
-            url = urlparse(config.BACKOFFICE_PUBLIC_URL)
-            if url.scheme != "https" or not url.netloc or url.path not in {"", "/"}:
-                raise RuntimeError("TELCLAW_BACKOFFICE_PUBLIC_URL must be an HTTPS origin")
+            public_origin()
             if not config.TELEGRAM_BOT_TOKEN:
                 raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
             backoffice_runner = web.AppRunner(create_app())

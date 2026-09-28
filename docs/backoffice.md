@@ -70,10 +70,15 @@ errors, and a retry action. A Telegram 403 pauses further attempts for that dest
 until its permission is fixed and the connection check succeeds, which requeues rejected
 403 deliveries.
 
-For a rule, select the advertisement category and then select one of that category's
-fields in **Category field**. Enter the exact value to match, ignoring case (for example,
-`origin_country` with `TR`). The previous country, city and price conditions remain in
-the expandable section for existing rules; conditions in a rule all have to match.
+Each destination is one expandable row containing its settings, rules, and delivery
+history. Add multiple rules inside the destination they publish to. For each rule,
+select the advertisement category and then one of that category's fields in
+**Category field**. The next dropdown loads distinct stored values for that field
+from AI-processed ads in SQLite (up to 120 short values). Pick the value to match,
+such as `origin_country` → `TR`. If no stored values exist yet, use a category-only
+rule or wait until an ad with the relevant data has been processed. The previous
+country, city, and price conditions remain in the expandable section for existing
+rules; conditions in one rule all have to match.
 
 First create a destination using its `@channel_username` or a numeric Telegram
 group/channel chat ID such as `-100...`. Then create a rule:

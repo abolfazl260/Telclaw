@@ -168,7 +168,8 @@ async def index(request):
     input[name=country]{{width:4rem}}input[name=priority]{{width:5rem}}
     .hint{{color:#526174}} </style></head><body><h1>Telclaw · Publishing rules</h1>
     <p class="hint">Rules run by priority (smallest number first). First match wins unless Continue is checked.
-    An ad without a matching rule is not published. Countries use two-letter codes, e.g. TR.</p>
+    An ad without a matching rule is not published. Countries use two-letter codes, e.g. TR.
+    Filled conditions in one rule must all match. Jobs do not have structured countries or route cities.</p>
     <section><h2>Destinations</h2>{''.join(rows)}
     <h3>Add destination</h3><form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
     <input name="label" placeholder="Name" required><input name="chat_id" placeholder="@channel or -100..." required>
@@ -192,6 +193,11 @@ def _rule_form(rule, targets, csrf):
         {_select('category', routing_rules.CATEGORIES, rule.get('category','transferlist'))}
         <input name="country" maxlength="2" placeholder="TR" value="{_escape(rule.get('country'))}">
         {_select('scope', routing_rules.SCOPES, rule.get('country_scope','either'))}
+        <input name="source_channel" placeholder="Source @channel" value="{_escape(rule.get('source_channel'))}">
+        <input name="origin_city" placeholder="Origin city" value="{_escape(rule.get('origin_city'))}">
+        <input name="destination_city" placeholder="Destination city" value="{_escape(rule.get('destination_city'))}">
+        <input name="min_price" type="number" step="any" min="0" placeholder="Min price" value="{_escape(rule.get('min_price'))}">
+        <input name="max_price" type="number" step="any" min="0" placeholder="Max price" value="{_escape(rule.get('max_price'))}">
         <select name="target_id">{options}</select>
         <input name="priority" type="number" value="{rule.get('priority',100)}" required>
         <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
@@ -215,7 +221,10 @@ async def save_rule(request):
         routing_rules.save_rule(data.get("name", ""), data.get("category", ""),
                                 data.get("country", ""), data.get("scope", ""),
                                 data.get("target_id"), data.get("priority", 100),
-                                "enabled" in data, "continue" not in data, data.get("id") or None)
+                                "enabled" in data, "continue" not in data, data.get("id") or None,
+                                data.get("source_channel", ""), data.get("origin_city", ""),
+                                data.get("destination_city", ""), data.get("min_price"),
+                                data.get("max_price"))
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
     raise web.HTTPSeeOther("/")

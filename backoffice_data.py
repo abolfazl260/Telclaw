@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from storage.database import CATEGORY_TABLES, get_connection
+from storage.data_normalizer import aliasable_fields, normalize_field_value
 
 TABLES = ("messages", "transferlist", "housinglist", "joblist")
 MESSAGE_EDITABLE = frozenset({"text", "raw_text", "cleaned_text", "date", "channel_name",
@@ -208,6 +209,11 @@ def update_cell(table, row_id, column, value, expected, admin_id, make_null=Fals
         if not _editable(table, column, columns):
             raise ValueError("This column is read only")
         new_value = _convert(value, columns[column], make_null)
+        if table in CATEGORY_TABLES and column in aliasable_fields().get(table, ()):
+            current_row = conn.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
+            if current_row is None:
+                raise ConflictError("Row no longer exists")
+            new_value = normalize_field_value(table, column, new_value, dict(current_row))
         # SQLite IS matches NULL safely and compares other scalar values without coercing NULL.
         cursor = conn.execute(f"UPDATE {table} SET {column}=? WHERE id=? AND {column} IS ?",
                               (new_value, row_id, expected))

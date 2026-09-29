@@ -92,6 +92,14 @@ def _seed_defaults(conn):
             ("transferlist", field, "Imam Khomeini International Airport", "Tehran", "", "Airport reference normalized to city"),
             ("transferlist", field, "Dusseldorf/Wuppertal", None, "", "Ambiguous multiple-city value"),
         ])
+    defaults.extend([
+        ("housinglist", "property_type", "condo, house, townhouse, basement", "multi", "",
+         "Multiple property types normalized to multi"),
+        ("housinglist", "property_type", "apartment, condo, house, townhouse, basement", "multi", "",
+         "Multiple property types normalized to multi"),
+        ("housinglist", "property_type", '["condo","house","townhouse","basement"]', "multi", "",
+         "JSON property-type list normalized to multi"),
+    ])
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(
             category,field_name,alias,alias_key,canonical_value,country_iso2,
@@ -204,9 +212,14 @@ def _country_matches(rule, category, field_name, data):
     return current == scope
 
 
+_NULL_LIKE_TEXT = {"", "null", "none", "n/a", "na", "unknown", "not provided", "-"}
+
+
 def _normalize_with_rules(category, field_name, value, data, rules):
     if value is None or isinstance(value, (dict, list, tuple, bool)):
         return value
+    if str(value).strip().casefold() in _NULL_LIKE_TEXT:
+        return None
     key = _alias_key(value)
     if not key:
         return value

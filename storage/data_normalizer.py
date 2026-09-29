@@ -266,6 +266,18 @@ def normalize_field_value(category, field_name, value, row_data):
 
 
 def _sync_transfer_location(conn, row):
+    conn.execute("""CREATE TABLE IF NOT EXISTS transfer_locations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        processed_message_id INTEGER NOT NULL UNIQUE,
+        origin_city_canonical TEXT,
+        origin_city_key TEXT,
+        origin_country_iso2 TEXT,
+        destination_city_canonical TEXT,
+        destination_city_key TEXT,
+        destination_country_iso2 TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE
+    )""")
     origin = normalize_location(row.get("origin_city"), row.get("origin_country"))
     destination = normalize_location(row.get("destination_city"), row.get("destination_country"))
     conn.execute("""INSERT INTO transfer_locations(

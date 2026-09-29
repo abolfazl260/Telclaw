@@ -196,3 +196,17 @@ def test_housing_property_type_defaults_are_normalized(norm_db, value, expected)
         "housinglist", {"property_type": value}
     )
     assert normalized["property_type"] == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("for sale", "sale"),
+    ("FOR SALE", "sale"),
+    ("sale", "sale"),
+    ("null", None),
+    ("", None),
+])
+def test_housing_listing_type_sale_defaults_are_normalized(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"listing_type": value}
+    )
+    assert normalized["listing_type"] == expected

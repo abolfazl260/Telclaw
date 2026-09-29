@@ -23,4 +23,5 @@ Existing housing normalization rules:
 - property_type is apartment, condo, basement, studio, room, or house when supported by the source.
 - bedrooms uses 0, 1, 2, 3, or 4+ as a string when supported.
 - price is a monthly CAD number when supported; do not convert currencies or invent exchange rates.
+- area_unit must be sqm or sqft when the source states the unit; do not guess the unit. Downstream normalization converts sqft areas to square metres for Advertio.
 - Extract only information actually present or safely normalized from the source.

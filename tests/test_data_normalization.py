@@ -254,3 +254,94 @@ def test_non_canadian_province_is_only_rejected_in_canada_scope(norm_db):
     )
     assert canada["province"] is None
     assert italy["province"] == "Lazio"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("Bernaby", "Burnaby"),
+    ("C√¥te-Saint-Luc", "Côte-Saint-Luc"),
+    ("Montr√©al", "Montreal"),
+    ("Richmondhill", "Richmond Hill"),
+    ("Multiple", None),
+    ("Multiple cities", None),
+    ("RICHMOND HILL & AURORA", None),
+    ("Rome or Blonay", None),
+    ("Ram", None),
+    ("Rim", None),
+    ("Rum", None),
+    ("Rumiyah", None),
+    ("Lanzadel", None),
+    ("Terrenee", None),
+    ("Tehran (Rum)", None),
+    ("Caserta", None),
+    ("Cookeville", None),
+    ("D√ºsseldorf", None),
+    ("Frankfurt", None),
+    ("K√∂ln", None),
+    ("Mashhad", None),
+    ("Roma", None),
+    ("Tehran", None),
+    ("Torino", None),
+    ("Turin", None),
+    ("Lazio", None),
+])
+def test_housing_city_safe_canadian_defaults(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": value, "country_code": "CA", "province": "Ontario"}
+    )
+    assert normalized["city"] == expected
+
+
+@pytest.mark.parametrize("value", [
+    "Rum (likely referring to Tehran, Iran, but assumed to be in Canada for this example)",
+    "Rum (Rum, Iran) -> ambiguous mapping, skipping",
+    "Rum (Tehran Province)",
+])
+def test_housing_city_rejects_rum_explanation_artifacts(norm_db, value):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": value, "country_code": "CA", "province": "Ontario"}
+    )
+    assert normalized["city"] is None
+
+
+@pytest.mark.parametrize("province,value,expected", [
+    ("Ontario", "Don Mills", "Toronto"),
+    ("Ontario", "Don Valley", "Toronto"),
+    ("Ontario", "East Woodbridge", "Vaughan"),
+    ("Ontario", "Maple", "Vaughan"),
+    ("Ontario", "North York", "Toronto"),
+    ("Ontario", "Oak Ridges", "Richmond Hill"),
+    ("Ontario", "Yonge / Finch", "Toronto"),
+    ("British Columbia", "North Burnaby", "Burnaby"),
+    ("British Columbia", "Yaletown", "Vancouver"),
+])
+def test_housing_city_neighborhoods_require_matching_province(norm_db, province, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": value, "country_code": "CA", "province": province}
+    )
+    assert normalized["city"] == expected
+
+
+def test_housing_city_neighborhood_is_not_rewritten_for_wrong_province(norm_db):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": "North York", "country_code": "CA", "province": "British Columbia"}
+    )
+    assert normalized["city"] == "North York"
+
+
+@pytest.mark.parametrize("value", ["Bathurst", "Bayview", "Rutherford", "Thornhill", "Langdale"])
+def test_housing_city_ambiguous_values_are_left_untouched(norm_db, value):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": value, "country_code": "CA", "province": "Ontario"}
+    )
+    assert normalized["city"] == value
+
+
+def test_housing_city_non_canadian_cleanup_is_scoped_to_canada(norm_db):
+    canada, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": "Tehran", "country_code": "CA", "province": "Ontario"}
+    )
+    iran, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"city": "Tehran", "country_code": "IR", "province": "Tehran"}
+    )
+    assert canada["city"] is None
+    assert iran["city"] == "Tehran"

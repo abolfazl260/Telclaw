@@ -345,3 +345,139 @@ def test_housing_city_non_canadian_cleanup_is_scoped_to_canada(norm_db):
     )
     assert canada["city"] is None
     assert iran["city"] == "Tehran"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("Bathurs", "Bathurst"),
+    ("Cookeilam", "Coquitlam"),
+    ("Bayview and Sheppard", "Bayview & Sheppard"),
+    ("Bayview and Major McKenzie Dr", "Bayview & Major Mackenzie"),
+    ("Marine Dr", "Marine Drive"),
+    ("Marin drive", "Marine Drive"),
+    ("Finch/Yong", "Yonge & Finch"),
+    ("Finch & Yonge", "Yonge & Finch"),
+    ("Yonge / Finch", "Yonge & Finch"),
+    ("Yonge and Finch", "Yonge & Finch"),
+    ("Yonge&Finch", "Yonge & Finch"),
+    ("Young and Finch", "Yonge & Finch"),
+    ("Yang and Finch", "Yonge & Finch"),
+    ("Finnch and Bathurst", "Finch & Bathurst"),
+    ("Finch and Bathurst", "Finch & Bathurst"),
+    ("Finch and Bath", "Finch & Bathurst"),
+    ("Yonge/Sheppard", "Yonge & Sheppard"),
+    ("Yonge and Sheppard", "Yonge & Sheppard"),
+    ("Near Yonge and Sheppard", "Yonge & Sheppard"),
+    ("Yonge / Steeles", "Yonge & Steeles"),
+    ("Yonge and Steeles", "Yonge & Steeles"),
+    ("Yonge steeles", "Yonge & Steeles"),
+    ("Yonge & Steels", "Yonge & Steeles"),
+    ("Yonge & Elginmills", "Yonge & Elgin Mills"),
+    ("Yonge and Elgin Mills", "Yonge & Elgin Mills"),
+    ("Steeles &Bayview", "Bayview & Steeles"),
+    ("Sheppard & Donmills", "Don Mills & Sheppard"),
+    ("Shepherd and 404", "Sheppard & Hwy 404"),
+    ("Victoria Park and Shepherd", "Victoria Park & Sheppard"),
+    ("Weston Rd and black creek", "Weston Road & Black Creek"),
+    ("Weston Road and Black Creek", "Weston Road & Black Creek"),
+    ("Upper Lansdale", "Upper Lonsdale"),
+])
+def test_housing_neighborhood_safe_aliases(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {"neighborhood": value, "country_code": "CA", "province": "Ontario", "city": "Toronto"},
+    )
+    assert normalized["neighborhood"] == expected
+
+
+@pytest.mark.parametrize("value", [
+    "Multiple",
+    "Multiple neighborhoods",
+    "Various",
+    "A metro area",
+    "C/A/B metro area",
+    "center",
+    "central area",
+    "Metropolitan A",
+    "Lower",
+    "LOWER - 328 MOORE PARK AVENUE",
+    "Regions 14, 3, 2, 15",
+    "Rum",
+    '["Dun Tan","North   York","Thornhill","Richmond   Hill","Aurora","Newmarket"]',
+    "North Vancouver, Coquitlam, West Vancouver, Port Coquitlam, Downtown, Burnaby",
+    "North York, Downtown Toronto, Midtown Toronto, Richmond Hill, Vaughan, Markham, Aurora, Newmarket, Scarborough, Etobicoke",
+    "North York, Richmond Hill, Markham, Vaughan, Newmarket",
+    "North York, Richmond Hill, Markham, Vaughan, Newmarket, GTA",
+    "Vancouver, Burnaby, New Westminster",
+    "ÿ¢ÿ±Ÿàÿ±ÿß",
+    "ÿßÿ±Ÿàÿ±ÿß",
+    "ŸÜŸàÿ±ÿ™ €åŸàÿ±⁄©",
+])
+def test_housing_neighborhood_invalid_or_multi_values_become_null(norm_db, value):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {"neighborhood": value, "country_code": "CA", "province": "Ontario", "city": "Toronto"},
+    )
+    assert normalized["neighborhood"] is None
+
+
+@pytest.mark.parametrize("province,city,value,expected", [
+    ("British Columbia", "North Vancouver", "North Vancouver - Delbrook", "Delbrook"),
+    ("British Columbia", "North Vancouver", "North Vancouver - Upper Lonsdale", "Upper Lonsdale"),
+    ("British Columbia", "West Vancouver", "West Vancouver Ambleside", "Ambleside"),
+    ("British Columbia", "Langley", "Brookswood, Langley", "Brookswood"),
+    ("Ontario", "Richmond Hill", "Richmond Hill - West Brook", "Westbrook"),
+    ("Ontario", "Richmond Hill", "Oak Ridges Richmond Hill", "Oak Ridges"),
+    ("Ontario", "Toronto", "Midtown (Yonge and Eglinton)", "Midtown"),
+])
+def test_housing_neighborhood_contextual_aliases(norm_db, province, city, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {"neighborhood": value, "country_code": "CA", "province": province, "city": city},
+    )
+    assert normalized["neighborhood"] == expected
+
+
+def test_housing_neighborhood_contextual_alias_requires_matching_city(norm_db):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {
+            "neighborhood": "North Vancouver - Delbrook",
+            "country_code": "CA",
+            "province": "British Columbia",
+            "city": "Vancouver",
+        },
+    )
+    assert normalized["neighborhood"] == "North Vancouver - Delbrook"
+
+
+@pytest.mark.parametrize("value", [
+    "Bayview",
+    "Bathurst",
+    "Thornhill",
+    "Downtown",
+    "Brentwood",
+    "Victoria Park",
+    "Yonge",
+    "Lonsdale",
+    "Finch and Bloor",
+    "Finnch and Bloor",
+])
+def test_housing_neighborhood_ambiguous_values_are_preserved(norm_db, value):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {"neighborhood": value, "country_code": "CA", "province": "Ontario", "city": "Toronto"},
+    )
+    assert normalized["neighborhood"] == value
+
+
+def test_housing_neighborhood_rules_are_scoped_to_canada(norm_db):
+    canada, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {"neighborhood": "Multiple", "country_code": "CA", "province": "Ontario", "city": "Toronto"},
+    )
+    italy, _ = data_normalizer.normalize_category_data(
+        "housinglist",
+        {"neighborhood": "Multiple", "country_code": "IT", "province": "Lazio", "city": "Rome"},
+    )
+    assert canada["neighborhood"] is None
+    assert italy["neighborhood"] == "Multiple"

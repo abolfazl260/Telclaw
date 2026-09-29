@@ -808,7 +808,9 @@ def normalize_field_value(category, field_name, value, row_data):
         rules = _rules_for_category(conn, category)
         proposed = dict(row_data or {})
         proposed[field_name] = value
-        return _normalize_with_rules(category, field_name, value, proposed, rules)
+        built_in = normalize_builtin_field_value(category, field_name, value)
+        proposed[field_name] = built_in
+        return _normalize_with_rules(category, field_name, built_in, proposed, rules)
     finally:
         conn.close()
 

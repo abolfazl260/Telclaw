@@ -179,9 +179,12 @@ class AIProcessingService:
         try:
             print(f"[ADVERTIO] message={record['message_id']} status=request_started")
             result = self.advertio_service.deliver(record, data)
-            status = "already_existed" if result.get("already_existed") else "sent"
-            self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)
-            self.advertio_service._cleanup_delivered_media(record)
+            status = self.advertio_service.finalize_successful_delivery(
+                record,
+                result,
+                repository=self.repository,
+                processed_at=now,
+            )
             print(f"[ADVERTIO] {status}: message={record['message_id']} lead={result.get('lead_id')} http={result.get('http_status')}")
             return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0, "skipped": 0}
         except Exception as exc:

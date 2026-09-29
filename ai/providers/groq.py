@@ -12,7 +12,7 @@ import requests
 import config
 from ai.category_schemas import CATEGORIES, CLASSIFICATION_CATEGORIES, validate_result
 from ai.category_classifier import build_classification_prompt, validate_classification_result
-from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_selected_category_data, _validate_english_title
+from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_null_like_values, _normalize_selected_category_data, _validate_english_title
 from ai.prompt_loader import render_prompt
 from ai.rate_limiter import RateLimiter
 from ai.providers.base import AIProvider
@@ -153,6 +153,7 @@ class GroqClient:
             if result.get("category") != category:
                 raise AIExtractionError(f"Extraction category mismatch: expected={category} received={result.get('category')}", reason="category_mismatch")
             result = _normalize_selected_category_data(result)
+            result = _normalize_null_like_values(result)
             result = _ensure_titles(result, processed_text)
             result = _normalize_defaults(result)
             result = _normalize_currencies(result)

@@ -191,3 +191,56 @@ def test_cleanup_removes_every_album_file_and_clears_media_state(tmp_path):
     assert repository.cleared == [(55, "album_channel")]
     assert record["media_path"] is None
     assert record["media_paths"] == []
+
+
+
+def test_manual_advertio_delivery_lazily_prepares_album_media(tmp_path):
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+
+    class Repository:
+        def __init__(self):
+            self.marked = []
+            self.cleared = []
+
+        def get_advertio_pending(self, limit=100, channel_username=None):
+            return [{
+                "message_id": 77,
+                "channel_username": "album_channel",
+                "media_type": "photo",
+                "media_path": None,
+                "media_paths": None,
+                "housing_data": {},
+            }]
+
+        def mark_advertio_result(self, message_id, channel_username, **kwargs):
+            self.marked.append((message_id, channel_username, kwargs))
+
+        def clear_media_path(self, message_id, channel_username):
+            self.cleared.append((message_id, channel_username))
+            return True
+
+    repository = Repository()
+    service = AdvertioDeliveryService(client=object(), repository=repository)
+    seen = []
+
+    def downloader(record):
+        seen.append(record["message_id"])
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        return [str(first), str(second)]
+
+    def deliver(record, _data):
+        assert record["media_paths"] == [str(first), str(second)]
+        assert record["media_path"] == str(first)
+        return {"lead_id": "lead-77", "already_existed": False}
+
+    service.deliver = deliver
+    result = service.deliver_pending(progress=False, media_downloader=downloader)
+
+    assert result == {"found": 1, "sent": 1, "already_existed": 0, "failed": 0}
+    assert seen == [77]
+    assert repository.marked[0][2]["status"] == "sent"
+    assert repository.cleared == [(77, "album_channel")]
+    assert not first.exists()
+    assert not second.exists()

@@ -236,7 +236,14 @@ class AdvertioDeliveryService:
         attributes = {}
 
         furnishing = data.get("furnished")
-        furnishing_aliases = {True: "furnished", False: "unfurnished", "true": "furnished", "false": "unfurnished"}
+        furnishing_aliases = {
+            True: "furnished", False: "unfurnished",
+            "1": "furnished", "yes": "furnished", "true": "furnished",
+            "0": "unfurnished", "no": "unfurnished", "false": "unfurnished",
+            "partial": "partially", "partially furnished": "partially",
+        }
+        if isinstance(furnishing, str):
+            furnishing = furnishing.strip().lower()
         furnishing = furnishing_aliases.get(furnishing, furnishing)
         if furnishing in {"furnished", "unfurnished", "partially"}:
             attributes["furnishing"] = furnishing

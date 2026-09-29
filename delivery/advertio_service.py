@@ -13,6 +13,7 @@ from storage.data_normalizer import (
     extract_telegram_handle,
     normalize_housing_area,
     normalize_housing_availability,
+    normalize_housing_contact,
 )
 from storage.message_repository import MessageRepository
 
@@ -110,7 +111,8 @@ class AdvertioDeliveryService:
 
     @staticmethod
     def _contact_handle(data, record):
-        handle = extract_telegram_handle(data.get("contact"), allow_plain=False)
+        normalized_contact = normalize_housing_contact(data.get("contact"))
+        handle = extract_telegram_handle(normalized_contact, allow_plain=False)
         if handle:
             return handle
         # sender_username comes directly from Telegram metadata, so a bare value

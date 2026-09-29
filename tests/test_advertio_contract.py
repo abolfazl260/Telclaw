@@ -88,3 +88,9 @@ def test_canonical_rent_period_maps_to_advertio_rental_duration():
     assert json.loads(short_payload["attributesJson"])["rental_duration"] == "short_term"
     assert json.loads(long_payload["attributesJson"])["rental_duration"] == "long_term"
     assert json.loads(daily_payload["attributesJson"])["rental_duration"] == "daily"
+
+
+def test_advertio_accepts_all_canonical_bedroom_values():
+    for bedrooms in ("0", "1", "2", "3", "4+"):
+        payload = _service().build_payload(_record(), _housing(bedrooms=bedrooms))
+        assert json.loads(payload["attributesJson"])["bedrooms"] == bedrooms

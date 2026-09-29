@@ -224,6 +224,19 @@ Telegram API credentials are loaded from environment variables and are never com
 
 1. Copy `.env.example` to `.env`.
 2. Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`.
+
+### Back Office settings precedence
+
+The Back Office **Settings** tab exposes the configuration keys documented in
+`.env.example`. Values in `.env` remain the defaults. Saving a value in Back
+Office creates a persistent SQLite override; **Use .env default** removes that
+override. Secrets are masked in the web UI.
+
+On startup Telclaw loads `.env`, opens the bootstrap SQLite database, applies
+saved Back Office overrides, and only then initializes the main services. Settings
+that bind listeners or construct long-lived clients are marked **restart required**.
+`TELCLAW_DB_NAME` remains a bootstrap-only `.env` setting because the database
+must be known before stored overrides can be read.
 3. Install dependencies.
 4. Start Telclaw.
 

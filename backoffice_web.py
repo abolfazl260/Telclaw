@@ -13,6 +13,7 @@ import aiohttp
 
 import config
 import backoffice_data
+import backoffice_settings
 import backoffice_health
 import routing_rules
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
@@ -288,7 +289,7 @@ async def index(request):
     .tabs a.active{{background:#1957b8;color:white}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
-    <a href="/data">Database</a><a href="/health">System Health</a></nav>
+    <a href="/data">Database</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
@@ -742,7 +743,7 @@ async def data_page(request):
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
     <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a class="active" href="/data">Database</a><a href="/health">System Health</a></nav>
+    <a class="active" href="/data">Database</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
     <section data-table="{table}"><p>{result['total']} rows · Page {result['page']} of {result['pages']}
@@ -887,7 +888,7 @@ async def health_page(request):
     .refresh{{float:right}}@media(max-width:700px){{.health-sections{{grid-template-columns:1fr}}}}
     </style></head><body><h1>Telclaw · System Health</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a class="active" href="/health">System Health</a></nav>
+    <a href="/data">Database</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational reports from SQLite and the running Telegram monitor.</p>
     <div class="health-grid">{pipeline_cards}</div>
 
@@ -928,6 +929,135 @@ async def health_page(request):
     </div>
     </body></html>'''
     return web.Response(text=content, content_type="text/html")
+
+
+
+def _setting_display(value, secret=False):
+    if not secret:
+        return _escape(value if value not in (None, "") else "—")
+    return "•••••••• (configured)" if str(value or "").strip() else "—"
+
+
+def _setting_input(row, csrf):
+    spec = row["spec"]
+    if spec.readonly:
+        return f'''<div class="setting-control"><input value="{_escape(row["effective"])}" disabled>
+        <span class="muted">Bootstrap setting · edit in .env</span></div>'''
+
+    value = row["override"] if row["override"] is not None else row["effective"]
+    if spec.kind == "bool":
+        selected = str(value).strip().lower() in {"1", "true", "yes", "on"}
+        control = f'''<select name="value">
+            <option value="true" {"selected" if selected else ""}>true</option>
+            <option value="false" {"selected" if not selected else ""}>false</option>
+        </select>'''
+    elif spec.choices:
+        control = '<select name="value">' + ''.join(
+            f'<option value="{_escape(choice)}" {"selected" if str(value)==choice else ""}>{_escape(choice or "(disabled)")}</option>'
+            for choice in spec.choices
+        ) + '</select>'
+    else:
+        input_type = "password" if spec.secret else ("number" if spec.kind in {"int", "float"} else "text")
+        step = ' step="any"' if spec.kind == "float" else ""
+        minimum = f' min="{spec.minimum}"' if spec.minimum is not None else ""
+        maximum = f' max="{spec.maximum}"' if spec.maximum is not None else ""
+        shown = "" if spec.secret else str(value or "")
+        placeholder = "Enter new secret; blank keeps current" if spec.secret else ""
+        control = (f'<input type="{input_type}" name="value" value="{_escape(shown)}"'
+                   f'{step}{minimum}{maximum} placeholder="{_escape(placeholder)}">')
+        if spec.secret:
+            control += '<label class="empty-secret"><input type="checkbox" name="set_empty" value="1"> override with empty value</label>'
+
+    restart = '<span class="restart">restart required</span>' if spec.restart else '<span class="live">runtime setting</span>'
+    return f'''<div class="setting-control"><form method="post" action="/settings/save" class="setting-form">
+        <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="key" value="{_escape(spec.key)}">
+        {control}<button>Save override</button>{restart}</form>
+        <form method="post" action="/settings/reset" class="setting-reset">
+        <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="key" value="{_escape(spec.key)}">
+        <button class="secondary" {"disabled" if row["override"] is None else ""}>Use .env default</button></form></div>'''
+
+
+async def settings_page(request):
+    csrf = _escape(request["session"]["csrf"])
+    grouped = {}
+    for row in backoffice_settings.rows():
+        grouped.setdefault(row["spec"].group, []).append(row)
+
+    sections = []
+    for group, rows in grouped.items():
+        items = []
+        for row in rows:
+            spec = row["spec"]
+            source_class = "override" if row["source"] == "Back Office" else "default"
+            items.append(f'''<div class="setting-row">
+                <div class="setting-meta"><code>{_escape(spec.key)}</code>
+                <span class="source {source_class}">{_escape(row["source"])}</span>
+                <div class="setting-values"><span>Effective: <strong>{_setting_display(row["effective"], spec.secret)}</strong></span>
+                <span>.env default: {_setting_display(row["default"], spec.secret)}</span></div></div>
+                {_setting_input(row, csrf)}
+            </div>''')
+        sections.append(f'<section><h2>{_escape(group)}</h2>{"".join(items)}</section>')
+
+    notice = request.query.get("notice", "")
+    notice_html = {
+        "saved": '<p class="notice ok">Setting override saved. Restart Telclaw for restart-required services to rebuild.</p>',
+        "reset": '<p class="notice ok">Override removed; the .env value is now the default again.</p>',
+    }.get(notice, "")
+
+    content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Settings</title>
+    <style>{_DATA_CSS}
+    body{{max-width:1350px}}.setting-row{{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(420px,1.5fr);
+    gap:1rem;padding:1rem 0;border-bottom:1px solid #e3e8ef;align-items:center}}
+    .setting-row:last-child{{border-bottom:0}}.setting-meta code{{font-weight:700}}
+    .setting-values{{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.35rem;color:#536479;font-size:.86rem}}
+    .source{{display:inline-block;margin-left:.5rem;padding:.12rem .45rem;border-radius:999px;font-size:.75rem}}
+    .source.override{{background:#d9f4e5;color:#17633e}}.source.default{{background:#e8edf4;color:#46576b}}
+    .setting-control{{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}}.setting-form,.setting-reset{{display:flex;gap:.45rem;
+    align-items:center;border:0;padding:0;margin:0}}.setting-form input[type=text],.setting-form input[type=password],
+    .setting-form input[type=number],.setting-form select{{min-width:250px}}
+    .secondary{{background:#66758a}}.restart{{color:#8a5700;font-size:.8rem}}.live{{color:#17633e;font-size:.8rem}}
+    .empty-secret{{font-size:.8rem;color:#536479;display:flex;align-items:center;gap:.2rem}}
+    .notice{{padding:.8rem 1rem;border-radius:10px}}.notice.ok{{background:#d9f4e5;color:#17633e}}
+    @media(max-width:850px){{.setting-row{{grid-template-columns:1fr}}.setting-form input[type=text],
+    .setting-form input[type=password],.setting-form input[type=number],.setting-form select{{min-width:180px;flex:1}}}}
+    </style></head><body><h1>Telclaw · Settings</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
+    <a href="/data">Database</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
+    <p class="muted">Values from <code>.env</code> are defaults. A saved Back Office value overrides that default and is
+    persisted in SQLite. Secret values are never rendered in the page. Settings marked restart required are saved immediately
+    but need a Telclaw restart for already-created clients, listeners or workers to rebuild safely.</p>
+    {notice_html}
+    {"".join(sections)}
+    </body></html>'''
+    return web.Response(text=content, content_type="text/html")
+
+
+async def save_setting(request):
+    data = await request.post()
+    key = str(data.get("key") or "")
+    value = data.get("value", "")
+    spec = next((item for item in backoffice_settings.SPECS if item.key == key), None)
+    if spec is None:
+        raise web.HTTPBadRequest(text="Unknown setting")
+    if spec.secret and value == "" and data.get("set_empty") != "1":
+        raise web.HTTPSeeOther("/settings")
+    if spec.secret and data.get("set_empty") == "1":
+        value = ""
+    try:
+        backoffice_settings.save_override(key, value, request["session"]["admin_id"])
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    raise web.HTTPSeeOther("/settings?notice=saved")
+
+
+async def reset_setting(request):
+    data = await request.post()
+    try:
+        backoffice_settings.reset_override(data.get("key", ""))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    raise web.HTTPSeeOther("/settings?notice=reset")
 
 
 async def data_cell(request):
@@ -1030,9 +1160,13 @@ def create_app():
     routing_rules.initialize()
     initialize_auth()
     backoffice_data.initialize()
+    backoffice_settings.initialize()
     app = web.Application(middlewares=[_security])
     app.add_routes([web.get("/login", login), web.get("/", index),
                     web.get("/data", data_page), web.get("/health", health_page),
+                    web.get("/settings", settings_page),
+                    web.post("/settings/save", save_setting),
+                    web.post("/settings/reset", reset_setting),
                     web.get("/data/cell", data_cell),
                     web.post("/data/cell", save_data_cell),
                     web.get("/filter-values", filter_values),

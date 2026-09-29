@@ -5,7 +5,6 @@ category fields and are persisted in SQLite so Back Office users can manage them
 """
 from __future__ import annotations
 
-import json
 import math
 import re
 import unicodedata
@@ -598,158 +597,6 @@ def normalize_housing_availability(value):
     return None
 
 
-_CONTACT_GENERIC_TEXT = {
-    "message", "message for more information", "message for price and more photos",
-    "message/dm for price", "private", "private message", "direct", "landlord",
-    "telegram id", "send a message", "pm for more information",
-}
-_TELEGRAM_HANDLE_RE = re.compile(r"(?<![A-Za-z0-9_])@([A-Za-z0-9_]{5,64})(?![A-Za-z0-9_])")
-_TELEGRAM_URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?t\.me/([A-Za-z0-9_]{5,64})(?:\b|/)?",
-    re.I,
-)
-_PHONE_RE = re.compile(r"(?<!\d)(\+?\d(?:[\s().-]*\d){6,14})(?!\d)")
-
-
-def _contact_text(value):
-    text = str(value or "").strip()
-    text = text.strip("'\"").strip()
-    return text.replace("\\:", ":").replace("\\/", "/")
-
-
-def extract_telegram_handle(value, *, allow_plain=False):
-    """Extract one explicit Telegram handle from messy contact data."""
-    if value is None or isinstance(value, bool):
-        return None
-
-    if isinstance(value, dict):
-        for key in ("telegram", "telegram_id", "handle", "username"):
-            if key in value:
-                found = extract_telegram_handle(value.get(key), allow_plain=True)
-                if found:
-                    return found
-        for nested in value.values():
-            found = extract_telegram_handle(nested, allow_plain=False)
-            if found:
-                return found
-        return None
-
-    if isinstance(value, (list, tuple)):
-        for nested in value:
-            found = extract_telegram_handle(nested, allow_plain=allow_plain)
-            if found:
-                return found
-        return None
-
-    text = _contact_text(value)
-    if not text:
-        return None
-
-    if text[:1] in "[{":
-        try:
-            decoded = json.loads(text)
-        except (TypeError, ValueError):
-            decoded = None
-        if decoded is not None:
-            return extract_telegram_handle(decoded, allow_plain=allow_plain)
-
-    url_match = _TELEGRAM_URL_RE.search(text)
-    if url_match:
-        return "@" + url_match.group(1)
-
-    handle_match = _TELEGRAM_HANDLE_RE.search(text)
-    if handle_match:
-        return "@" + handle_match.group(1)
-
-    admin_match = re.fullmatch(
-        r"admin\s*:\s*([A-Za-z0-9_]{5,64})", text, re.I
-    )
-    if admin_match:
-        return "@" + admin_match.group(1)
-
-    if allow_plain and re.fullmatch(r"[A-Za-z0-9_]{5,64}", text):
-        key = text.casefold()
-        if key not in _CONTACT_GENERIC_TEXT and not text.isdigit():
-            return "@" + text
-    return None
-
-
-def normalize_contact_phone(value):
-    """Extract one phone number without guessing a country code."""
-    if value is None or isinstance(value, bool):
-        return None
-
-    if isinstance(value, dict):
-        for key in ("phone", "phone_number", "whatsapp"):
-            if key in value:
-                found = normalize_contact_phone(value.get(key))
-                if found:
-                    return found
-        for nested in value.values():
-            found = normalize_contact_phone(nested)
-            if found:
-                return found
-        return None
-
-    if isinstance(value, (list, tuple)):
-        for nested in value:
-            found = normalize_contact_phone(nested)
-            if found:
-                return found
-        return None
-
-    text = _contact_text(value)
-    if not text:
-        return None
-
-    if text[:1] in "[{":
-        try:
-            decoded = json.loads(text)
-        except (TypeError, ValueError):
-            decoded = None
-        if decoded is not None:
-            return normalize_contact_phone(decoded)
-
-    match = _PHONE_RE.search(text)
-    if not match:
-        return None
-    candidate = match.group(1).strip()
-    digits = re.sub(r"\D", "", candidate)
-    if not 7 <= len(digits) <= 15:
-        return None
-    return ("+" if candidate.startswith("+") else "") + digits
-
-
-def normalize_housing_contact(value):
-    """Canonicalize housing contact while preserving a usable phone fallback internally."""
-    if value is None:
-        return None
-    if isinstance(value, str) and value.strip().casefold() in _NULL_LIKE_TEXT:
-        return None
-
-    handle = extract_telegram_handle(value, allow_plain=False)
-    if handle:
-        return handle
-
-    # Bare contact tokens are accepted only when they look username-like enough
-    # to avoid turning generic words or short personal names into Telegram IDs.
-    if isinstance(value, str):
-        text = _contact_text(value)
-        if (
-            re.fullmatch(r"[A-Za-z0-9_]{5,64}", text)
-            and text.casefold() not in _CONTACT_GENERIC_TEXT
-            and (any(ch.isdigit() for ch in text) or "_" in text or len(text) >= 8)
-        ):
-            handle = extract_telegram_handle(text, allow_plain=True)
-            if handle:
-                return handle
-
-    phone = normalize_contact_phone(value)
-    if phone:
-        return phone
-    return None
-
-
 def normalize_housing_area(area, area_unit):
     """Return (area, unit) with housing area expressed in square metres when possible."""
     if area_unit is None or str(area_unit).strip().casefold() in _NULL_LIKE_TEXT:
@@ -782,9 +629,6 @@ def normalize_builtin_field_value(category, field_name, value):
     """Apply deterministic non-alias normalization for typed structured fields."""
     if category == "housinglist" and field_name == "availability":
         return normalize_housing_availability(value)
-
-    if category == "housinglist" and field_name == "contact":
-        return normalize_housing_contact(value)
 
     if category == "housinglist" and field_name == "furnished":
         if value is None:

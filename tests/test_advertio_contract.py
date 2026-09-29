@@ -171,3 +171,12 @@ def test_advertio_uses_duration_semantics_from_legacy_availability():
     attrs = json.loads(payload["attributesJson"])
     assert attrs["rental_duration"] == "short_term"
     assert "available_from" not in attrs
+
+
+def test_property_condition_is_not_sent_to_advertio():
+    payload = _service().build_payload(
+        _record(), _housing(property_condition="renovated")
+    )
+    attrs = json.loads(payload["attributesJson"])
+    assert "property_condition" not in attrs
+    assert "condition" not in attrs

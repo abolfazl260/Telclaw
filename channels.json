@@ -437,6 +437,30 @@
       "username": "ersal_bar",
       "country": "International",
       "description": "Passenger cargo and shipping coordination."
+    },
+    {
+      "name": "Pars Cargo",
+      "username": "ParsCargo",
+      "country": "International",
+      "description": "Passenger cargo and international shipping coordination."
+    },
+    {
+      "name": "Giti Bar Australia",
+      "username": "gitibar_australia",
+      "country": "Australia",
+      "description": "Passenger cargo and shipping services related to Australia."
+    },
+    {
+      "name": "Koulbaran",
+      "username": "koulbaran",
+      "country": "International",
+      "description": "Passenger cargo and luggage shipping coordination."
+    },
+    {
+      "name": "Deliver 2 You",
+      "username": "deliver2you",
+      "country": "International",
+      "description": "Passenger cargo and delivery coordination."
     }
   ],
   "Canada_Language": [

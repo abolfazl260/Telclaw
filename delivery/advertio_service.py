@@ -386,13 +386,28 @@ class AdvertioDeliveryService:
     def get_pending_count(self, channel_username=None):
         return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))
 
-    def deliver_pending(self, limit=100, channel_username=None, progress=True):
-        """Send already processed housing records without crawling or re-running AI."""
+    def deliver_pending(self, limit=100, channel_username=None, progress=True, media_downloader=None):
+        """Send processed housing records, lazily preparing Telegram photos when needed."""
         records = self.repository.get_advertio_pending(limit=limit, channel_username=channel_username)
         total = len(records)
         sent = already_existed = failed = 0
         for index, record in enumerate(records, start=1):
             try:
+                if record.get("media_type") == "photo" and media_downloader is not None:
+                    existing = self._media_paths(record)
+                    if not existing or not all(Path(path).is_file() for path in existing):
+                        try:
+                            downloaded = media_downloader(record)
+                        except Exception as exc:
+                            raise AdvertioError(
+                                f"Telegram media download failed: {exc}",
+                                retryable=True,
+                            ) from exc
+                        if isinstance(downloaded, str):
+                            downloaded = [downloaded]
+                        if downloaded:
+                            record["media_paths"] = [str(path) for path in downloaded if path][:10]
+                            record["media_path"] = record["media_paths"][0] if record["media_paths"] else None
                 result = self.deliver(record, record["housing_data"])
                 status = "already_existed" if result.get("already_existed") else "sent"
                 self.repository.mark_advertio_result(

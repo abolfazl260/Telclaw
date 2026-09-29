@@ -9,7 +9,7 @@ import random
 
 from colorama import Fore, init
 from telethon import errors
-from telethon.tl.types import PeerChannel
+from telethon.tl.types import PeerChannel, PeerUser
 
 from processing.normalizer import normalize_channel_username, normalize_date
 from services.message_service import MessageService
@@ -25,8 +25,33 @@ VALID_CRAWL_MODES = {CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY}
 MIN_MESSAGE_WORDS = 10
 
 
+async def _forward_origin_kind(client, message):
+    """Classify a forwarded origin as human user, bot, channel, or unknown."""
+    forward_header = getattr(message, "fwd_from", None)
+    if forward_header is None:
+        return None
+
+    origin_peer = getattr(forward_header, "from_id", None)
+    if isinstance(origin_peer, PeerChannel):
+        return "channel"
+    if not isinstance(origin_peer, PeerUser):
+        return "unknown"
+
+    forward = getattr(message, "forward", None)
+    origin_entity = getattr(forward, "sender", None) if forward is not None else None
+    if origin_entity is None:
+        try:
+            origin_entity = await client.get_entity(origin_peer)
+        except Exception:
+            return "unknown"
+
+    if origin_entity is None:
+        return "unknown"
+    return "bot" if getattr(origin_entity, "bot", False) else "user"
+
+
 def _is_forwarded_from_channel(message):
-    """Return True when Telegram marks the forwarded origin as a channel."""
+    """Backward-compatible synchronous classifier for channel forwards."""
     forward_header = getattr(message, "fwd_from", None)
     if forward_header is None:
         return False
@@ -152,6 +177,8 @@ async def crawl_channel(
     filtered_count = 0
     bot_filtered_count = 0
     forwarded_channel_skipped_count = 0
+    forwarded_bot_skipped_count = 0
+    forwarded_unknown_skipped_count = 0
     no_username_count = 0
     weak_text_count = 0
     media_metadata_count = 0
@@ -181,7 +208,8 @@ async def crawl_channel(
                 print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
                 break
 
-            if _is_forwarded_from_channel(message):
+            forward_origin_kind = await _forward_origin_kind(client, message)
+            if forward_origin_kind == "channel":
                 forwarded_channel_skipped_count += 1
                 skipped_count += 1
                 print(
@@ -190,10 +218,29 @@ async def crawl_channel(
                     f"reason=forwarded_from_channel"
                 )
                 continue
+            if forward_origin_kind == "bot":
+                forwarded_bot_skipped_count += 1
+                skipped_count += 1
+                print(
+                    f"⏭ [FORWARDED-BOT-SKIPPED] "
+                    f"channel={channel_username} message_id={message.id} "
+                    f"reason=forwarded_from_bot"
+                )
+                continue
+            if forward_origin_kind == "unknown":
+                forwarded_unknown_skipped_count += 1
+                skipped_count += 1
+                print(
+                    f"⏭ [FORWARDED-UNKNOWN-SKIPPED] "
+                    f"channel={channel_username} message_id={message.id} "
+                    f"reason=forward_origin_not_verifiably_human"
+                )
+                continue
 
             sender_id, sender_username, sender_type = _extract_sender(message)
             if sender_type == "bot":
                 bot_filtered_count += 1
+                skipped_count += 1
                 print(f"⏭ [BOT-SKIPPED] channel={channel_username} message_id={message.id}")
                 continue
 
@@ -285,9 +332,11 @@ async def crawl_channel(
         print(f"🤏 Weak-text messages skipped: {weak_text_count}")
         print(f"🤖 Bot messages skipped: {bot_filtered_count}")
         print(f"📣 Forwarded channel posts skipped: {forwarded_channel_skipped_count}")
+        print(f"🤖 Forwarded bot posts skipped: {forwarded_bot_skipped_count}")
+        print(f"❓ Unverifiable forwarded posts skipped: {forwarded_unknown_skipped_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")
-        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
+        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "forwarded_bot_skipped": forwarded_bot_skipped_count, "forwarded_unknown_skipped": forwarded_unknown_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
     except errors.ChannelInvalidError:
         print(f"\n❌ Invalid channel: {channel_username}")
         return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}

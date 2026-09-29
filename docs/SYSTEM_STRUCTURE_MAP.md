@@ -77,6 +77,8 @@ SQLite category table
 Delivery
    ├── Telegram transfer publisher
    └── Advertio integration
+         ├── immediate delivery after successful housing AI extraction
+         └── scheduler retry pass for older waiting/retry records
 ```
 
 The important architectural principle is that **collection, processing, classification, extraction, and delivery are separate stages** even though some orchestration currently exists in shared services.

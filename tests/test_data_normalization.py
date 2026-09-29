@@ -217,7 +217,7 @@ def test_housing_listing_type_sale_defaults_are_normalized(norm_db, value, expec
     ("Ontario", "Ontario"),
     ("QC", "Quebec"),
     ("Quebec", "Quebec"),
-    ("Québec", "Québec"),
+    ("Québec", "Quebec"),
     ("Qu√©bec", "Quebec"),
     ("BC", "British Columbia"),
     ("British Columbia", "British Columbia"),

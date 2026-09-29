@@ -509,3 +509,47 @@ def test_housing_rent_period_defaults_match_advertio_duration_enum(norm_db, valu
         "housinglist", {"rent_period": value}
     )
     assert normalized["rent_period"] == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("0", "0"),
+    ("1", "1"),
+    ("2", "2"),
+    ("3", "3"),
+    ("4", "4+"),
+    ("4+", "4+"),
+    ("5", "4+"),
+    ("6", "4+"),
+    ("one", "1"),
+    ("Bachelor", "0"),
+    ("1+Den", "1"),
+    ("1+1", "1"),
+    ("2+1", "2"),
+    ("4+1", "4+"),
+    ("master", "1"),
+    ("single", "0"),
+    ("1 person or 1 couple", None),
+    ("single or double", "0"),
+    ("single/double", "0"),
+    ("single and double", None),
+    ("0, 1, 2, 3, 4+", "1"),
+    ("1, 2, 3+", "1"),
+    ("1, 2, 2+", "2"),
+    ("1, 2, 3, 4+", "1"),
+    ("1, 2, 3", "1"),
+    ("2-Jan", "0"),
+    ("2 or 1", "1"),
+    ("2 or 3", "2"),
+    ("1+", None),
+    ("2+", None),
+    ("3+", None),
+    ("3-Jan", None),
+    ("5¬Ω", None),
+    ("null", None),
+    ("", None),
+])
+def test_housing_bedrooms_defaults_match_advertio_enum(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"bedrooms": value}
+    )
+    assert normalized["bedrooms"] == expected

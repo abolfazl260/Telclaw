@@ -5,6 +5,7 @@ import ssl
 from aiohttp import web
 
 from storage import database
+import backoffice_settings
 from system_ui import SystemConsoleUI
 from monitoring.telegram_monitor import get_telegram_monitor
 from monitoring.transfer_live import install_transfer_live_command
@@ -34,6 +35,8 @@ async def _transfer_publisher_loop(publisher):
 
 async def _run():
     database.initialize_db()
+    # .env/config.py provides defaults; Back Office values persist as overrides.
+    backoffice_settings.apply_persisted_overrides()
     backoffice_runner = None
     backoffice_ready = False
     if config.BACKOFFICE_ENABLED:

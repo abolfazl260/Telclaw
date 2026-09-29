@@ -209,6 +209,17 @@ def _seed_defaults(conn):
         ("housinglist", "area_unit", "m¬≤", "sqm", "", "Repair mojibake square-meter unit"),
         ("housinglist", "area_unit", "m²", "sqm", "", "Square-meter unit alias"),
         ("housinglist", "area_unit", "meters", "sqm", "", "Area field meters unit treated as square meters"),
+        ("housinglist", "furnished", "1", "furnished", "", "Canonical furnished value"),
+        ("housinglist", "furnished", "yes", "furnished", "", "Affirmative furnished value"),
+        ("housinglist", "furnished", "true", "furnished", "", "Boolean-like furnished value"),
+        ("housinglist", "furnished", "furnished", "furnished", "", "Advertio canonical furnishing value"),
+        ("housinglist", "furnished", "0", "unfurnished", "", "Canonical unfurnished value"),
+        ("housinglist", "furnished", "no", "unfurnished", "", "Negative furnished value"),
+        ("housinglist", "furnished", "false", "unfurnished", "", "Boolean-like unfurnished value"),
+        ("housinglist", "furnished", "unfurnished", "unfurnished", "", "Advertio canonical furnishing value"),
+        ("housinglist", "furnished", "partial", "partially", "", "Partially furnished alias"),
+        ("housinglist", "furnished", "partially", "partially", "", "Advertio canonical furnishing value"),
+        ("housinglist", "furnished", "partially furnished", "partially", "", "Partially furnished alias"),
         ("housinglist", "province", "AB", "Alberta", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "BC", "British Columbia", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "MB", "Manitoba", "CA", "Canadian province code to full name"),
@@ -476,6 +487,18 @@ def normalize_housing_area(area, area_unit):
 
 def normalize_builtin_field_value(category, field_name, value):
     """Apply deterministic non-alias normalization for typed structured fields."""
+    if category == "housinglist" and field_name == "furnished":
+        if value is None:
+            return None
+        if value is True:
+            return "furnished"
+        if value is False:
+            return "unfurnished"
+        text = str(value).strip()
+        if text.casefold() in _NULL_LIKE_TEXT:
+            return None
+        return value
+
     if category == "housinglist" and field_name == "bathrooms":
         if value is None or isinstance(value, bool):
             return None

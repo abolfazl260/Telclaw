@@ -55,7 +55,6 @@ DATES
 EXTRACTION
 - Extract only information explicitly supported by the source.
 - Cargo type, weight, unit, quantity, volume, unit, airline, flight number, and times: extract only when stated.
-- Airline: when an actual carrier is explicitly named, use its standard English brand name (for example Turkish Airlines, Qatar Airways, Air Transat, Malaysia Airlines, Delta Air Lines, Iran Airtour). If multiple actual carriers are explicitly named, join their canonical names with ", ". Do not turn nationality, destination, "Iranian airline", "unknown airline", or other generic wording into a specific carrier.
 - Price: only when stated. Currency: ISO 4217; use stated currency. If omitted, infer from route only with high confidence. Never convert.
 - Contact: explicit contact information only.
 - `features`: only additional explicit transfer information not represented by another field.

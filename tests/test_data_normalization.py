@@ -181,11 +181,11 @@ def test_database_tab_manual_edit_is_normalized(norm_db):
 
 
 @pytest.mark.parametrize("value,expected", [
-    ("condo, house, townhouse, basement", "multi"),
-    ("apartment, condo, house, townhouse,   basement", "multi"),
-    ('["condo","house","townhouse","basement"]', "multi"),
-    ("multi", "multi"),
-    ("townhouse", "townhouse"),
+    ("condo, house, townhouse, basement", "apartment"),
+    ("apartment, condo, house, townhouse,   basement", "apartment"),
+    ('["condo","house","townhouse","basement"]', "apartment"),
+    ("multi", "apartment"),
+    ("townhouse", "apartment"),
     ("null", None),
     ("none", None),
     ("n/a", None),

@@ -25,4 +25,5 @@ Existing housing normalization rules:
 - price is a monthly CAD number when supported; do not convert currencies or invent exchange rates.
 - area_unit must be sqm or sqft when the source states the unit; do not guess the unit. Downstream normalization converts sqft areas to square metres for Advertio.
 - furnished must be furnished, unfurnished, or partially when supported by the source; use null when unknown.
+- availability is only the exact move-in/start date. Return YYYY-MM-DD only when the source gives a date with an explicit year; use null for vague values such as "available now", a month without a year, or an end date. Put rental duration such as short-term, long-term, daily, weekly, or monthly in rent_period instead.
 - Extract only information actually present or safely normalized from the source.

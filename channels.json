@@ -35,6 +35,12 @@
       "username": "jobfoundtoronto",
       "country": "Canada",
       "description": "Employment opportunities in Toronto."
+    },
+    {
+      "name": "Pars Expert",
+      "username": "parsexpert",
+      "country": "Canada",
+      "description": "Job and professional opportunities for the Iranian community in Canada."
     }
   ],
   "Canada_Immigrate": [
@@ -317,6 +323,24 @@
       "username": "RezaSBK90",
       "country": "International",
       "description": "Chat group for Iranian passenger cargo transportation services."
+    },
+    {
+      "name": "Iran Canada Cargo",
+      "username": "Iran_Canada_cargo",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping between Iran and Canada."
+    },
+    {
+      "name": "IranCanada Cargo",
+      "username": "IranCanada_Cargo",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping between Iran and Canada."
+    },
+    {
+      "name": "Giti Bar Canada",
+      "username": "gitibar_canada",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping services for Canada."
     }
   ],
   "Canada_Language": [
@@ -351,6 +375,18 @@
       "username": "kioosk1",
       "country": "Canada",
       "description": "Business listings and classifieds platform in Canada."
+    },
+    {
+      "name": "Housing Kooch Canada",
+      "username": "housingkoochcanada",
+      "country": "Canada",
+      "description": "Housing and home listings in Canada."
+    },
+    {
+      "name": "Divare Mehrabani London",
+      "username": "divaremehrabanilondon",
+      "country": "Canada",
+      "description": "Housing and local listings for London, Canada."
     }
   ],
   "Canada_Education": [
@@ -529,6 +565,42 @@
     {
       "name": "Simo Online Shopping",
       "username": "simo_onlineshopping",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Linary Shop",
+      "username": "linaryshop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Saharbanu Shop",
+      "username": "saharbanu_shop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Madame Boutique",
+      "username": "madameboutique",
+      "country": "Iran",
+      "description": "Iranian online boutique and shopping channel."
+    },
+    {
+      "name": "Heraa Club",
+      "username": "heraa_club",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Kabok Online Shop",
+      "username": "kabokonlineshop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Femmora Shop",
+      "username": "femmorashop",
       "country": "Iran",
       "description": "Iranian online shopping channel."
     }

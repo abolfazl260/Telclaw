@@ -94,3 +94,8 @@ def test_advertio_accepts_all_canonical_bedroom_values():
     for bedrooms in ("0", "1", "2", "3", "4+"):
         payload = _service().build_payload(_record(), _housing(bedrooms=bedrooms))
         assert json.loads(payload["attributesJson"])["bedrooms"] == bedrooms
+
+
+def test_normalized_bathroom_count_reaches_advertio_payload():
+    payload = _service().build_payload(_record(), _housing(bathrooms=3))
+    assert json.loads(payload["attributesJson"])["bathrooms_count"] == 3

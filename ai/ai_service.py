@@ -1,9 +1,7 @@
 """Orchestrates provider-agnostic extraction from the independent AI queue."""
 
 from datetime import datetime, timezone
-import json
 import logging
-from pathlib import Path
 import random
 import re
 import time
@@ -122,43 +120,12 @@ class AIProcessingService:
                 self._rate_limit_wait(exc, rate_limit_attempts)
 
     def _prepare_media_for_advertio(self, record):
-        if record.get("media_type") != "photo":
+        if not self.advertio_service:
             return True
-
-        persisted = record.get("media_paths")
-        paths = []
-        if isinstance(persisted, (list, tuple)):
-            paths = [str(path) for path in persisted if path]
-        elif isinstance(persisted, str) and persisted.strip():
-            try:
-                decoded = json.loads(persisted)
-            except (TypeError, ValueError):
-                decoded = []
-            if isinstance(decoded, list):
-                paths = [str(path) for path in decoded if path]
-
-        if paths and all(Path(path).is_file() for path in paths):
-            record["media_paths"] = paths[:10]
-            record["media_path"] = record["media_paths"][0]
-            return True
-
-        existing = record.get("media_path")
-        if not record.get("media_group_id") and existing and Path(existing).is_file():
-            record["media_paths"] = [str(existing)]
-            return True
-
-        if self.media_downloader is None:
-            raise RuntimeError("Telegram media downloader is not configured for this AI run")
-        downloaded = self.media_downloader(record)
-        if isinstance(downloaded, str):
-            downloaded = [downloaded]
-        if not isinstance(downloaded, (list, tuple)) or not downloaded:
-            raise RuntimeError("Telegram media download returned no file")
-        paths = [str(path) for path in downloaded if path][:10]
-        if not paths:
-            raise RuntimeError("Telegram media download returned no usable file")
-        record["media_paths"] = paths
-        record["media_path"] = paths[0]
+        self.advertio_service.prepare_media_for_delivery(
+            record,
+            media_downloader=self.media_downloader,
+        )
         return True
 
     def _deliver_to_advertio(self, record, category, data):

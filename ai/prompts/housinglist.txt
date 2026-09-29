@@ -24,4 +24,5 @@ Existing housing normalization rules:
 - bedrooms uses 0, 1, 2, 3, or 4+ as a string when supported.
 - price is a monthly CAD number when supported; do not convert currencies or invent exchange rates.
 - area_unit must be sqm or sqft when the source states the unit; do not guess the unit. Downstream normalization converts sqft areas to square metres for Advertio.
+- furnished must be furnished, unfurnished, or partially when supported by the source; use null when unknown.
 - Extract only information actually present or safely normalized from the source.

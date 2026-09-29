@@ -80,8 +80,12 @@ class MessageRepository:
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 
-    def get_advertio_pending(self, limit=100, channel_username=None):
-        return database.get_advertio_pending_messages(limit=limit, channel_username=channel_username)
+    def get_advertio_pending(self, limit=100, channel_username=None, before_datetime=None):
+        return database.get_advertio_pending_messages(
+            limit=limit,
+            channel_username=channel_username,
+            before_datetime=before_datetime,
+        )
 
     def get_latest_message_id(self, channel_username):
         return database.get_latest_message_id(channel_username)

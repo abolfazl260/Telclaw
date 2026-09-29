@@ -623,3 +623,99 @@ def test_database_tab_bedrooms_edit_uses_normalization_rules(norm_db):
     )
     assert value == "4+"
     assert backoffice_data.cell("housinglist", housing_id, "bedrooms")["value"] == "4+"
+
+
+@pytest.mark.parametrize("value,expected", [
+    (2, 2),
+    (1, 1),
+    (3.5, 3),
+    (0, None),
+    (3, 3),
+    (2.5, 2),
+    ("null", None),
+    (4, 4),
+    (5, 5),
+    (1.5, 1),
+    ("2+1", 2),
+    ("", None),
+])
+def test_housing_bathrooms_are_rounded_down(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"bathrooms": value}
+    )
+    assert normalized["bathrooms"] == expected
+
+
+def test_housing_bathrooms_schema_migrates_real_to_integer_and_floors_existing_values(tmp_path, monkeypatch):
+    db_path = tmp_path / "bathrooms-migration.sqlite3"
+    monkeypatch.setattr(config, "DB_NAME", str(db_path))
+
+    conn = database.get_connection()
+    try:
+        conn.execute("""CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_username TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            text TEXT,
+            date TEXT NOT NULL,
+            UNIQUE(channel_username,message_id)
+        )""")
+        conn.execute("""CREATE TABLE housinglist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            processed_message_id INTEGER NOT NULL UNIQUE,
+            bathrooms REAL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE
+        )""")
+        for message_id, bathrooms in [(1, 3.5), (2, 2.5), (3, 0), (4, "2+1")]:
+            conn.execute(
+                "INSERT INTO messages(channel_username,message_id,text,date) VALUES('source',?,'x','2026-09-29')",
+                (message_id,),
+            )
+            processed_id = conn.execute(
+                "SELECT id FROM messages WHERE message_id=?", (message_id,)
+            ).fetchone()["id"]
+            conn.execute(
+                "INSERT INTO housinglist(processed_message_id,bathrooms) VALUES(?,?)",
+                (processed_id, bathrooms),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.initialize_db()
+
+    conn = database.get_connection()
+    try:
+        schema = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(housinglist)")}
+        values = [row["bathrooms"] for row in conn.execute("SELECT bathrooms FROM housinglist ORDER BY id")]
+    finally:
+        conn.close()
+
+    assert schema["bathrooms"] == "INTEGER"
+    assert values == [3, 2, None, 2]
+
+
+def test_database_tab_bathrooms_edit_rounds_down(norm_db):
+    row_id = _insert_message(message_id=88)
+    conn = database.get_connection()
+    try:
+        conn.execute("INSERT INTO housinglist(processed_message_id,bathrooms) VALUES(?,?)", (row_id, 2))
+        housing_id = conn.execute(
+            "SELECT id FROM housinglist WHERE processed_message_id=?", (row_id,)
+        ).fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "bathrooms", "3.5", 2, 1485409432,
+    )
+    assert value == 3
+    assert backoffice_data.cell("housinglist", housing_id, "bathrooms")["value"] == 3
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "bathrooms", "2+1", 3, 1485409432,
+    )
+    assert value == 2
+    assert backoffice_data.cell("housinglist", housing_id, "bathrooms")["value"] == 2

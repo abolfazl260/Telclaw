@@ -376,19 +376,32 @@ class AdvertioDeliveryService:
         }
 
     def deliver(self, record, data):
-        """Upload media, create the lead, then release local media on success.
-
-        Successful creation and Advertio's idempotent already-existed response both
-        consume the local media cache. Any exception raised before create_lead
-        succeeds leaves the files in place so retryable deliveries can reuse them.
-        """
+        """Upload media first, then create the lead. 400 is permanent; 429/5xx are retryable."""
         payload = self.build_payload(record, data)
         for path in self._media_paths(record)[:10]:
             key = self.client.upload_media(path, self.source_name)
             payload["mediaKeys"].append(key)
-        result = self.client.create_lead(payload)
+        return self.client.create_lead(payload)
+
+    def finalize_successful_delivery(self, record, result, *, repository=None, processed_at=None):
+        """Persist successful delivery state before releasing local media.
+
+        Both new leads and Advertio's idempotent already-existed response are
+        successful terminal outcomes. Local files are deleted only after the
+        database status has been persisted successfully.
+        """
+        target_repository = repository or self.repository
+        status = "already_existed" if result.get("already_existed") else "sent"
+        target_repository.mark_advertio_result(
+            record["message_id"],
+            record["channel_username"],
+            status=status,
+            lead_id=result.get("lead_id"),
+            error=None,
+            processed_at=processed_at or datetime.now(timezone.utc).isoformat(),
+        )
         self._cleanup_delivered_media(record)
-        return result
+        return status
 
     def get_pending_count(self, channel_username=None):
         return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))
@@ -416,13 +429,7 @@ class AdvertioDeliveryService:
                             record["media_paths"] = [str(path) for path in downloaded if path][:10]
                             record["media_path"] = record["media_paths"][0] if record["media_paths"] else None
                 result = self.deliver(record, record["housing_data"])
-                status = "already_existed" if result.get("already_existed") else "sent"
-                self.repository.mark_advertio_result(
-                    record["message_id"], record["channel_username"], status=status,
-                    lead_id=result.get("lead_id"), error=None,
-                    processed_at=datetime.now(timezone.utc).isoformat(),
-                )
-                self._cleanup_delivered_media(record)
+                status = self.finalize_successful_delivery(record, result)
                 if status == "already_existed":
                     already_existed += 1
                 else:

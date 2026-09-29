@@ -210,3 +210,45 @@ def test_housing_listing_type_sale_defaults_are_normalized(norm_db, value, expec
         "housinglist", {"listing_type": value}
     )
     assert normalized["listing_type"] == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("ON", "Ontario"),
+    ("Ontario", "Ontario"),
+    ("QC", "Quebec"),
+    ("Quebec", "Quebec"),
+    ("Québec", "Québec"),
+    ("Qu√©bec", "Quebec"),
+    ("BC", "British Columbia"),
+    ("British Columbia", "British Columbia"),
+    ("NB", "New Brunswick"),
+    ("New Brunswick", "New Brunswick"),
+    ("SK", "Saskatchewan"),
+    ("Northwest Territories", "Northwest Territories"),
+    ("NT", "Northwest Territories"),
+    ("AB", "Alberta"),
+    ("MB", "Manitoba"),
+    ("NL", "Newfoundland and Labrador"),
+    ("NS", "Nova Scotia"),
+    ("NU", "Nunavut"),
+    ("PE", "Prince Edward Island"),
+    ("YT", "Yukon"),
+    ("null", None),
+    ("", None),
+])
+def test_housing_canadian_province_defaults_use_full_names(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"province": value, "country_code": "CA"}
+    )
+    assert normalized["province"] == expected
+
+
+def test_non_canadian_province_is_only_rejected_in_canada_scope(norm_db):
+    canada, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"province": "Lazio", "country_code": "CA"}
+    )
+    italy, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"province": "Lazio", "country_code": "IT"}
+    )
+    assert canada["province"] is None
+    assert italy["province"] == "Lazio"

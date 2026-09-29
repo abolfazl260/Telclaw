@@ -376,12 +376,19 @@ class AdvertioDeliveryService:
         }
 
     def deliver(self, record, data):
-        """Upload media first, then create the lead. 400 is permanent; 429/5xx are retryable."""
+        """Upload media, create the lead, then release local media on success.
+
+        Successful creation and Advertio's idempotent already-existed response both
+        consume the local media cache. Any exception raised before create_lead
+        succeeds leaves the files in place so retryable deliveries can reuse them.
+        """
         payload = self.build_payload(record, data)
         for path in self._media_paths(record)[:10]:
             key = self.client.upload_media(path, self.source_name)
             payload["mediaKeys"].append(key)
-        return self.client.create_lead(payload)
+        result = self.client.create_lead(payload)
+        self._cleanup_delivered_media(record)
+        return result
 
     def get_pending_count(self, channel_username=None):
         return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))

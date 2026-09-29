@@ -193,6 +193,22 @@ def _seed_defaults(conn):
         ("housinglist", "bedrooms", "3+", None, "", "Advertio has no exact 3+ bedroom enum"),
         ("housinglist", "bedrooms", "3-Jan", None, "", "Corrupted bedroom value; do not guess"),
         ("housinglist", "bedrooms", "5¬Ω", None, "", "Corrupted layout value; do not guess"),
+        ("housinglist", "area_unit", "Sq.Ft", "sqft", "", "Canonical square-foot unit"),
+        ("housinglist", "area_unit", "sqft", "sqft", "", "Canonical square-foot unit"),
+        ("housinglist", "area_unit", "sqf", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "sq ft", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "square feet", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "square foot", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "sq feet", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "foot", "sqft", "", "Area field foot unit treated as square feet"),
+        ("housinglist", "area_unit", "sf", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "ft¬≤", "sqft", "", "Repair mojibake square-foot unit"),
+        ("housinglist", "area_unit", "ft²", "sqft", "", "Square-foot unit alias"),
+        ("housinglist", "area_unit", "square meters", "sqm", "", "Canonical square-meter unit"),
+        ("housinglist", "area_unit", "sqm", "sqm", "", "Canonical square-meter unit"),
+        ("housinglist", "area_unit", "m¬≤", "sqm", "", "Repair mojibake square-meter unit"),
+        ("housinglist", "area_unit", "m²", "sqm", "", "Square-meter unit alias"),
+        ("housinglist", "area_unit", "meters", "sqm", "", "Area field meters unit treated as square meters"),
         ("housinglist", "province", "AB", "Alberta", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "BC", "British Columbia", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "MB", "Manitoba", "CA", "Canadian province code to full name"),
@@ -417,6 +433,46 @@ def _country_matches(rule, category, field_name, data):
 
 _NULL_LIKE_TEXT = {"", "null", "none", "n/a", "na", "unknown", "not provided", "-"}
 
+_AREA_SQFT_KEYS = {
+    _alias_key(value) for value in (
+        "Sq.Ft", "sqft", "sqf", "sq ft", "square feet", "square foot",
+        "sq feet", "foot", "sf", "ft¬≤", "ft²",
+    )
+}
+_AREA_SQM_KEYS = {
+    _alias_key(value) for value in (
+        "square meters", "sqm", "m¬≤", "m²", "meters",
+    )
+}
+
+
+def normalize_housing_area(area, area_unit):
+    """Return (area, unit) with housing area expressed in square metres when possible."""
+    if area_unit is None or str(area_unit).strip().casefold() in _NULL_LIKE_TEXT:
+        return area, None
+
+    unit_key = _alias_key(area_unit)
+    if unit_key in _AREA_SQFT_KEYS:
+        canonical_unit = "sqft"
+    elif unit_key in _AREA_SQM_KEYS:
+        canonical_unit = "sqm"
+    else:
+        return area, area_unit
+
+    if area is None or isinstance(area, bool):
+        return area, canonical_unit
+    try:
+        number = float(area)
+    except (TypeError, ValueError):
+        return area, canonical_unit
+    if not math.isfinite(number):
+        return area, canonical_unit
+
+    if canonical_unit == "sqft":
+        number = round(number * 0.09290304, 2)
+        canonical_unit = "sqm"
+    return number, canonical_unit
+
 
 def normalize_builtin_field_value(category, field_name, value):
     """Apply deterministic non-alias normalization for typed structured fields."""
@@ -556,6 +612,21 @@ def normalize_category_data(category, data, *, conn=None):
         rules = _rules_for_category(conn, category)
         result = dict(data)
         changes = {}
+
+        if category == "housinglist" and ("area" in result or "area_unit" in result):
+            before_area = result.get("area")
+            before_unit = result.get("area_unit")
+            canonical_unit = _normalize_with_rules(
+                category, "area_unit", before_unit, result, rules
+            ) if "area_unit" in result else None
+            normalized_area, normalized_unit = normalize_housing_area(before_area, canonical_unit)
+
+            if "area" in result and normalized_area != before_area:
+                result["area"] = normalized_area
+                changes["area"] = (before_area, normalized_area)
+            if "area_unit" in result and normalized_unit != before_unit:
+                result["area_unit"] = normalized_unit
+                changes["area_unit"] = (before_unit, normalized_unit)
 
         # Normalize country-ish fields first so country-scoped city aliases can match.
         fields = list(database.CATEGORY_TABLES[category])

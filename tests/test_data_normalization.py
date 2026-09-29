@@ -178,3 +178,21 @@ def test_database_tab_manual_edit_is_normalized(norm_db):
     )
     assert value == "Frankfurt"
     assert backoffice_data.cell("transferlist", transfer_id, "origin_city")["value"] == "Frankfurt"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("condo, house, townhouse, basement", "multi"),
+    ("apartment, condo, house, townhouse,   basement", "multi"),
+    ('["condo","house","townhouse","basement"]', "multi"),
+    ("multi", "multi"),
+    ("townhouse", "townhouse"),
+    ("null", None),
+    ("none", None),
+    ("n/a", None),
+    ("", None),
+])
+def test_housing_property_type_defaults_are_normalized(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"property_type": value}
+    )
+    assert normalized["property_type"] == expected

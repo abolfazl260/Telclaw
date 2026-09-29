@@ -163,6 +163,59 @@ def _seed_defaults(conn):
         ("housinglist", "city", "Torino", None, "CA", "Known non-Canadian city in Canadian housing scope"),
         ("housinglist", "city", "Turin", None, "CA", "Known non-Canadian city in Canadian housing scope"),
         ("housinglist", "city", "Lazio", None, "CA", "Region/non-city value in Canadian housing scope"),
+        ("housinglist", "neighborhood", "Bathurs", "Bathurst", "CA", "Correct neighborhood/street spelling"),
+        ("housinglist", "neighborhood", "Cookeilam", "Coquitlam", "CA", "Correct common Coquitlam misspelling"),
+        ("housinglist", "neighborhood", "Bayview and Sheppard", "Bayview & Sheppard", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Bayview and Major McKenzie Dr", "Bayview & Major Mackenzie", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Marine Dr", "Marine Drive", "CA", "Canonical street spelling"),
+        ("housinglist", "neighborhood", "Marin drive", "Marine Drive", "CA", "Correct street misspelling"),
+        ("housinglist", "neighborhood", "Finch/Yong", "Yonge & Finch", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Finch & Yonge", "Yonge & Finch", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge / Finch", "Yonge & Finch", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge and Finch", "Yonge & Finch", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge&Finch", "Yonge & Finch", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Young and Finch", "Yonge & Finch", "CA", "Correct Yonge spelling"),
+        ("housinglist", "neighborhood", "Yang and Finch", "Yonge & Finch", "CA", "Correct Yonge spelling"),
+        ("housinglist", "neighborhood", "Finnch and Bathurst", "Finch & Bathurst", "CA", "Correct Finch spelling"),
+        ("housinglist", "neighborhood", "Finch and Bathurst", "Finch & Bathurst", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Finch and Bath", "Finch & Bathurst", "CA", "Canonical Bathurst intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge/Sheppard", "Yonge & Sheppard", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge and Sheppard", "Yonge & Sheppard", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Near Yonge and Sheppard", "Yonge & Sheppard", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge / Steeles", "Yonge & Steeles", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge and Steeles", "Yonge & Steeles", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge steeles", "Yonge & Steeles", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge & Steels", "Yonge & Steeles", "CA", "Correct Steeles spelling"),
+        ("housinglist", "neighborhood", "Yonge & Elginmills", "Yonge & Elgin Mills", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Yonge and Elgin Mills", "Yonge & Elgin Mills", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Steeles &Bayview", "Bayview & Steeles", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Sheppard & Donmills", "Don Mills & Sheppard", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Shepherd and 404", "Sheppard & Hwy 404", "CA", "Correct Sheppard spelling"),
+        ("housinglist", "neighborhood", "Victoria Park and Shepherd", "Victoria Park & Sheppard", "CA", "Correct Sheppard spelling"),
+        ("housinglist", "neighborhood", "Weston Rd and black creek", "Weston Road & Black Creek", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Weston Road and Black Creek", "Weston Road & Black Creek", "CA", "Canonical intersection spelling"),
+        ("housinglist", "neighborhood", "Upper Lansdale", "Upper Lonsdale", "CA", "Correct Lonsdale spelling"),
+        ("housinglist", "neighborhood", "Multiple", None, "CA", "Ambiguous neighborhood value"),
+        ("housinglist", "neighborhood", "Multiple neighborhoods", None, "CA", "Ambiguous neighborhood value"),
+        ("housinglist", "neighborhood", "Various", None, "CA", "Ambiguous neighborhood value"),
+        ("housinglist", "neighborhood", "A metro area", None, "CA", "Generic non-neighborhood value"),
+        ("housinglist", "neighborhood", "C/A/B metro area", None, "CA", "Ambiguous generic area"),
+        ("housinglist", "neighborhood", "center", None, "CA", "Generic non-neighborhood value"),
+        ("housinglist", "neighborhood", "central area", None, "CA", "Generic non-neighborhood value"),
+        ("housinglist", "neighborhood", "Metropolitan A", None, "CA", "Generic non-neighborhood value"),
+        ("housinglist", "neighborhood", "Lower", None, "CA", "Incomplete non-neighborhood value"),
+        ("housinglist", "neighborhood", "LOWER - 328 MOORE PARK AVENUE", None, "CA", "Property/address fragment, not neighborhood"),
+        ("housinglist", "neighborhood", "Regions 14, 3, 2, 15", None, "CA", "Multiple regions, not one neighborhood"),
+        ("housinglist", "neighborhood", "Rum", None, "CA", "Invalid/ambiguous neighborhood value"),
+        ("housinglist", "neighborhood", '["Dun Tan","North   York","Thornhill","Richmond   Hill","Aurora","Newmarket"]', None, "CA", "Multiple locations in one field"),
+        ("housinglist", "neighborhood", "North Vancouver, Coquitlam, West Vancouver, Port Coquitlam, Downtown, Burnaby", None, "CA", "Multiple cities in one neighborhood field"),
+        ("housinglist", "neighborhood", "North York, Downtown Toronto, Midtown Toronto, Richmond Hill, Vaughan, Markham, Aurora, Newmarket, Scarborough, Etobicoke", None, "CA", "Multiple cities/neighborhoods in one field"),
+        ("housinglist", "neighborhood", "North York, Richmond Hill, Markham, Vaughan, Newmarket", None, "CA", "Multiple cities in one field"),
+        ("housinglist", "neighborhood", "North York, Richmond Hill, Markham, Vaughan, Newmarket, GTA", None, "CA", "Multiple cities in one field"),
+        ("housinglist", "neighborhood", "Vancouver, Burnaby, New Westminster", None, "CA", "Multiple cities in one field"),
+        ("housinglist", "neighborhood", "ÿ¢ÿ±Ÿàÿ±ÿß", None, "CA", "Corrupted text"),
+        ("housinglist", "neighborhood", "ÿßÿ±Ÿàÿ±ÿß", None, "CA", "Corrupted text"),
+        ("housinglist", "neighborhood", "ŸÜŸàÿ±ÿ™ €åŸàÿ±⁄©", None, "CA", "Corrupted text"),
     ])
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(
@@ -290,9 +343,19 @@ _HOUSING_CITY_BY_PROVINCE = {
     ("British Columbia", "Yaletown"): "Vancouver",
 }
 
+_HOUSING_NEIGHBORHOOD_BY_LOCATION = {
+    ("British Columbia", "North Vancouver", "North Vancouver - Delbrook"): "Delbrook",
+    ("British Columbia", "North Vancouver", "North Vancouver - Upper Lonsdale"): "Upper Lonsdale",
+    ("British Columbia", "West Vancouver", "West Vancouver Ambleside"): "Ambleside",
+    ("British Columbia", "Langley", "Brookswood, Langley"): "Brookswood",
+    ("Ontario", "Richmond Hill", "Richmond Hill - West Brook"): "Westbrook",
+    ("Ontario", "Richmond Hill", "Oak Ridges Richmond Hill"): "Oak Ridges",
+    ("Ontario", "Toronto", "Midtown (Yonge and Eglinton)"): "Midtown",
+}
+
 
 def _normalize_contextual_value(category, field_name, value, data):
-    if category != "housinglist" or field_name != "city":
+    if category != "housinglist":
         return value
     country = str(data.get("country_code") or "").strip().upper()
     if country != "CA":
@@ -300,13 +363,26 @@ def _normalize_contextual_value(category, field_name, value, data):
 
     text = str(value or "").strip()
     key = _alias_key(text)
-    if key.startswith("rum ("):
-        return None
 
-    province = str(data.get("province") or "").strip()
-    for (expected_province, alias), canonical in _HOUSING_CITY_BY_PROVINCE.items():
-        if _alias_key(province) == _alias_key(expected_province) and key == _alias_key(alias):
-            return canonical
+    if field_name == "city":
+        if key.startswith("rum ("):
+            return None
+        province = str(data.get("province") or "").strip()
+        for (expected_province, alias), canonical in _HOUSING_CITY_BY_PROVINCE.items():
+            if _alias_key(province) == _alias_key(expected_province) and key == _alias_key(alias):
+                return canonical
+        return value
+
+    if field_name == "neighborhood":
+        province = str(data.get("province") or "").strip()
+        city = str(data.get("city") or "").strip()
+        for (expected_province, expected_city, alias), canonical in _HOUSING_NEIGHBORHOOD_BY_LOCATION.items():
+            if (
+                _alias_key(province) == _alias_key(expected_province)
+                and _alias_key(city) == _alias_key(expected_city)
+                and key == _alias_key(alias)
+            ):
+                return canonical
     return value
 
 

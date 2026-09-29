@@ -2,6 +2,7 @@
 
 from storage import database
 from storage.location_normalizer import normalize_location
+from storage.data_normalizer import initialize as initialize_normalization, normalize_category_data
 
 
 class MessageRepository:
@@ -9,6 +10,7 @@ class MessageRepository:
 
     def initialize(self):
         database.initialize_db()
+        initialize_normalization()
         self._initialize_transfer_locations()
 
     @staticmethod
@@ -138,7 +140,8 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def save_category_record(self, processed_message_id, category, data):
-        result = database.save_category_record(processed_message_id, category, data)
+        normalized_data, _ = normalize_category_data(category, data)
+        result = database.save_category_record(processed_message_id, category, normalized_data)
         if category == "transferlist":
             conn = database.get_connection()
             try:

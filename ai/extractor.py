@@ -135,6 +135,53 @@ def _normalize_selected_category_data(result):
     return result
 
 
+_NULL_LIKE_STRINGS = {
+    "",
+    "null",
+    "none",
+    "n/a",
+    "na",
+    "unknown",
+    "not provided",
+    "-",
+}
+
+
+def _normalize_null_like_values(result):
+    """Convert common AI null-like strings to real None before persistence.
+
+    Normalization is intentionally conservative and exact-match only. Meaningful
+    free text is preserved; only known sentinel values are converted.
+    """
+    if not isinstance(result, dict):
+        return result
+    category = result.get("category")
+    data = result.get("data")
+    if category not in CATEGORIES or not isinstance(data, dict):
+        return result
+    category_data = data.get(category)
+    if not isinstance(category_data, dict):
+        return result
+
+    def normalize(value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            return None if text.casefold() in _NULL_LIKE_STRINGS else text
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(normalize(item) for item in value)
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items()}
+        return value
+
+    for key, value in list(category_data.items()):
+        category_data[key] = normalize(value)
+    return result
+
+
 def _normalize_defaults(result):
     if not isinstance(result, dict):
         return result
@@ -187,4 +234,5 @@ __all__ = [
     "AIExtractionError",
     "GroqExtractor",
     "_normalize_selected_category_data",
+    "_normalize_null_like_values",
 ]

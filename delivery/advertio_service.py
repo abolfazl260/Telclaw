@@ -403,6 +403,62 @@ class AdvertioDeliveryService:
         self._cleanup_delivered_media(record)
         return status
 
+    def prepare_media_for_delivery(self, record, media_downloader=None):
+        """Guarantee photo listings have usable local media before Advertio delivery.
+
+        Photo records are fail-closed: if their local media cache is missing or
+        stale, a downloader must restore it. A missing downloader, download error,
+        empty result, or missing downloaded file is retryable and must never fall
+        through to a lead request with mediaKeys=[].
+        """
+        if record.get("media_type") != "photo":
+            return self._media_paths(record)
+
+        existing = self._media_paths(record)
+        if existing and all(Path(path).is_file() for path in existing):
+            record["media_paths"] = existing[:10]
+            record["media_path"] = record["media_paths"][0]
+            return record["media_paths"]
+
+        if media_downloader is None:
+            raise AdvertioError(
+                "Telegram photo media is not available locally and no media downloader is configured",
+                retryable=True,
+            )
+
+        try:
+            downloaded = media_downloader(record)
+        except AdvertioError:
+            raise
+        except Exception as exc:
+            raise AdvertioError(
+                f"Telegram media download failed: {exc}",
+                retryable=True,
+            ) from exc
+
+        if isinstance(downloaded, str):
+            downloaded = [downloaded]
+        if not isinstance(downloaded, (list, tuple)):
+            downloaded = []
+
+        paths = [str(path) for path in downloaded if path][:10]
+        if not paths:
+            raise AdvertioError(
+                "Telegram media download returned no usable photo",
+                retryable=True,
+            )
+
+        missing = [path for path in paths if not Path(path).is_file()]
+        if missing:
+            raise AdvertioError(
+                f"Telegram media download returned missing local file: {missing[0]}",
+                retryable=True,
+            )
+
+        record["media_paths"] = paths
+        record["media_path"] = paths[0]
+        return paths
+
     def get_pending_count(self, channel_username=None):
         return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))
 
@@ -413,21 +469,7 @@ class AdvertioDeliveryService:
         sent = already_existed = failed = 0
         for index, record in enumerate(records, start=1):
             try:
-                if record.get("media_type") == "photo" and media_downloader is not None:
-                    existing = self._media_paths(record)
-                    if not existing or not all(Path(path).is_file() for path in existing):
-                        try:
-                            downloaded = media_downloader(record)
-                        except Exception as exc:
-                            raise AdvertioError(
-                                f"Telegram media download failed: {exc}",
-                                retryable=True,
-                            ) from exc
-                        if isinstance(downloaded, str):
-                            downloaded = [downloaded]
-                        if downloaded:
-                            record["media_paths"] = [str(path) for path in downloaded if path][:10]
-                            record["media_path"] = record["media_paths"][0] if record["media_paths"] else None
+                self.prepare_media_for_delivery(record, media_downloader=media_downloader)
                 result = self.deliver(record, record["housing_data"])
                 status = self.finalize_successful_delivery(record, result)
                 if status == "already_existed":

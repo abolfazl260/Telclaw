@@ -482,5 +482,55 @@
       "country": "UAE",
       "description": "Jobs in Dubai."
     }
+  ],
+  "Iranian_onlineshop": [
+    {
+      "name": "Arayeshi Arosha",
+      "username": "arayeshi_arosha",
+      "country": "Iran",
+      "description": "Iranian online shop channel."
+    },
+    {
+      "name": "Danjeh Boutique Online",
+      "username": "danjehboutique_online",
+      "country": "Iran",
+      "description": "Iranian online boutique and shopping channel."
+    },
+    {
+      "name": "Mari Online Shop",
+      "username": "Marionlineshop2020",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Istanbul Online Shop",
+      "username": "istanbulonlineshoppp",
+      "country": "Turkey",
+      "description": "Iranian-focused online shopping channel based around Istanbul."
+    },
+    {
+      "name": "Rojaa Shop",
+      "username": "rojaashop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Parish Appo",
+      "username": "parishappo",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Rush Barbari",
+      "username": "rushbarbari",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Simo Online Shopping",
+      "username": "simo_onlineshopping",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    }
   ]
 }

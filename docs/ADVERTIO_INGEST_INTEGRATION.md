@@ -168,7 +168,7 @@ POST /api/ingest/media?source=telegram-rent
 
 The returned `key` is sent in `mediaKeys`. `url` and `thumbUrl` are not persisted by Telclaw.
 
-Advertio limits each file to 8 MB and each lead to 10 media keys. Telclaw currently has a single `media_path` per crawled message, so the adapter uploads the available local path and is ready for a future multi-media representation.
+Advertio limits each file to 8 MB and each lead to 10 media keys. Telclaw persists Telegram `grouped_id` as `media_group_id` and lazily resolves photo albums immediately before Advertio delivery. Downloaded paths are stored in ordered `media_paths` JSON (with legacy `media_path` retaining the first image for compatibility). The adapter uploads at most 10 paths in order; the first uploaded key is therefore the Advertio feed-card image. Mixed/non-photo album items are ignored by this photo delivery path.
 
 ## Idempotency
 
@@ -242,6 +242,5 @@ Telclaw therefore does not implement an unbounded upload fan-out. `TELCLAW_ADVER
 
 1. Add a dedicated Advertio delivery queue/worker for retryable 5xx/network failures.
 2. Add Telegram deletion/update event handling so the Advertio DELETE operation is triggered from a verified source deletion event.
-3. Extend crawler media persistence from one `media_path` to an ordered media collection so all available photos can be uploaded (maximum 10).
-4. Add an optional connection/test command that verifies `X-Ingest-Key` without creating a lead.
-5. Keep Advertio-specific fields in the housing schema; do not hide required country/province/city data only inside the delivery adapter.
+3. Add an optional connection/test command that verifies `X-Ingest-Key` without creating a lead.
+4. Keep Advertio-specific fields in the housing schema; do not hide required country/province/city data only inside the delivery adapter.

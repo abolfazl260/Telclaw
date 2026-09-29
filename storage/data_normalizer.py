@@ -107,6 +107,21 @@ def _seed_defaults(conn):
          "For-sale listing type normalized to sale"),
         ("housinglist", "listing_type", "sale", "sale", "",
          "Canonical sale listing type"),
+        ("housinglist", "province", "AB", "Alberta", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "BC", "British Columbia", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "MB", "Manitoba", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "NB", "New Brunswick", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "NL", "Newfoundland and Labrador", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "NS", "Nova Scotia", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "NT", "Northwest Territories", "CA", "Canadian territory code to full name"),
+        ("housinglist", "province", "NU", "Nunavut", "CA", "Canadian territory code to full name"),
+        ("housinglist", "province", "ON", "Ontario", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "PE", "Prince Edward Island", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "QC", "Quebec", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "SK", "Saskatchewan", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "YT", "Yukon", "CA", "Canadian territory code to full name"),
+        ("housinglist", "province", "Qu√©bec", "Quebec", "CA", "Repair mojibake province name"),
+        ("housinglist", "province", "Lazio", None, "CA", "Invalid Canadian province; do not guess"),
     ])
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(

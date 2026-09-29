@@ -120,3 +120,17 @@ def test_advertio_accepts_canonical_square_metre_area():
         _record(), _housing(area=100, area_unit="sqm")
     )
     assert json.loads(payload["attributesJson"])["area"] == 100
+
+
+@pytest.mark.parametrize("furnished,expected", [
+    ("furnished", "furnished"),
+    ("unfurnished", "unfurnished"),
+    ("partially", "partially"),
+    ("TRUE", "furnished"),
+    ("0", "unfurnished"),
+])
+def test_advertio_furnishing_enum_mapping(furnished, expected):
+    payload = _service().build_payload(
+        _record(), _housing(furnished=furnished)
+    )
+    assert json.loads(payload["attributesJson"])["furnishing"] == expected

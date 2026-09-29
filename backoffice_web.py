@@ -14,6 +14,7 @@ import aiohttp
 import config
 import backoffice_data
 import backoffice_settings
+from storage import data_normalizer
 import backoffice_health
 import routing_rules
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
@@ -289,7 +290,7 @@ async def index(request):
     .tabs a.active{{background:#1957b8;color:white}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
-    <a href="/data">Database</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
@@ -743,7 +744,7 @@ async def data_page(request):
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
     <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a class="active" href="/data">Database</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a class="active" href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
     <section data-table="{table}"><p>{result['total']} rows · Page {result['page']} of {result['pages']}
@@ -888,7 +889,7 @@ async def health_page(request):
     .refresh{{float:right}}@media(max-width:700px){{.health-sections{{grid-template-columns:1fr}}}}
     </style></head><body><h1>Telclaw · System Health</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/data">Database</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational reports from SQLite and the running Telegram monitor.</p>
     <div class="health-grid">{pipeline_cards}</div>
 
@@ -930,6 +931,175 @@ async def health_page(request):
     </body></html>'''
     return web.Response(text=content, content_type="text/html")
 
+
+
+
+def _normalization_target_options(selected=""):
+    options = []
+    for category, fields in data_normalizer.aliasable_fields().items():
+        for field in fields:
+            target = f"{category}.{field}"
+            label = f"{category} · {field}"
+            options.append(
+                f'<option value="{_escape(target)}" {"selected" if target == selected else ""}>{_escape(label)}</option>'
+            )
+    return "".join(options)
+
+
+def _normalization_rule_card(rule, csrf):
+    target = f"{rule['category']}.{rule['field_name']}"
+    try:
+        matches = data_normalizer.count_current_matches(rule["id"])
+    except (ValueError, TypeError):
+        matches = 0
+    null_checked = rule.get("canonical_value") is None
+    source = "Built-in seed" if rule.get("created_by") is None else f"Admin {rule.get('created_by')}"
+    return f'''<article class="alias-card"><form method="post" action="/normalization/save">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <input type="hidden" name="id" value="{int(rule['id'])}">
+        <label>Field<select name="target" required>{_normalization_target_options(target)}</select></label>
+        <label>Alias<input name="alias" value="{_escape(rule.get('alias'))}" required></label>
+        <label>Canonical<input name="canonical" value="{_escape(rule.get('canonical_value') or '')}"
+            {"disabled" if null_checked else ""}></label>
+        <label class="check"><input type="checkbox" name="map_to_null" value="1"
+            {"checked" if null_checked else ""}> Map to NULL / ambiguous</label>
+        <label>Country scope (optional ISO2)<input name="country_iso2"
+            value="{_escape(rule.get('country_iso2') or '')}" maxlength="2" placeholder="DE"></label>
+        <label>Notes<input name="notes" value="{_escape(rule.get('notes') or '')}" maxlength="1000"></label>
+        <label class="check"><input type="checkbox" name="enabled" value="1"
+            {"checked" if rule.get('enabled') else ""}> Enabled</label>
+        <div class="alias-actions"><button>Save</button>
+        <span class="match-count">{matches} existing value(s) would change</span>
+        <span class="muted">{_escape(source)}</span></div></form>
+        <form method="post" action="/normalization/delete" class="inline delete-alias">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <input type="hidden" name="id" value="{int(rule['id'])}">
+        <button class="danger" data-confirm="Delete this normalization rule? Existing canonicalized rows are not automatically reverted.">Delete</button>
+        </form></article>'''
+
+
+async def normalization_page(request):
+    csrf = _escape(request["session"]["csrf"])
+    rules = data_normalizer.list_aliases()
+    cards = "".join(_normalization_rule_card(rule, csrf) for rule in rules)
+    notice = request.query.get("notice", "")
+    if notice == "applied":
+        notice_html = (f'<p class="normalization-notice">Re-normalization complete: '
+                       f'{_escape(request.query.get("rows", "0"))} row(s), '
+                       f'{_escape(request.query.get("cells", "0"))} cell(s) changed. '
+                       'Already-published Telegram messages were not edited.</p>')
+    elif notice == "saved":
+        notice_html = ('<p class="normalization-notice">Rule saved. New structured records use it immediately. '
+                       'Review the affected count, then use Re-normalize existing data for old rows.</p>')
+    elif notice == "deleted":
+        notice_html = '<p class="normalization-notice">Rule deleted. Previously canonicalized values were not reverted.</p>'
+    else:
+        notice_html = ""
+
+    content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Data Normalization</title>
+    <style>{_DATA_CSS}
+    body{{max-width:1450px}}.alias-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:.9rem}}
+    .alias-card{{background:white;border:1px solid #dce4ef;border-radius:12px;padding:1rem}}
+    .alias-card form:not(.inline),.new-alias{{display:grid;grid-template-columns:repeat(2,minmax(160px,1fr));gap:.65rem}}
+    .alias-card label,.new-alias label{{display:grid;gap:.25rem;font-size:.88rem;color:#46576b}}
+    .alias-card input,.alias-card select,.new-alias input,.new-alias select{{font:inherit;padding:.5rem;border:1px solid #c8d3e2;border-radius:7px;width:100%}}
+    .check{{display:flex!important;grid-template-columns:auto 1fr!important;align-items:center;gap:.4rem!important}}
+    .check input{{width:auto!important}}.alias-actions{{grid-column:1/-1;display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}}
+    .delete-alias{{margin-top:.55rem}}.match-count{{font-weight:650;color:#31597f}}
+    .normalization-notice{{background:#e3f3ff;border:1px solid #b8d9f2;padding:.8rem;border-radius:10px}}
+    .normalization-warning{{background:#fff1c8;padding:.8rem;border-radius:10px;color:#6f5200}}
+    @media(max-width:700px){{.alias-card form:not(.inline),.new-alias{{grid-template-columns:1fr}}}}
+    </style></head><body><h1>Telclaw · Data Normalization</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
+    <a href="/data">Database</a><a class="active" href="/normalization">Normalization</a>
+    <a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <p class="muted">Aliases are exact field-specific mappings for structured category data. Raw Telegram text in
+    <code>messages.raw_text</code> is never modified. Matching ignores case and accents, so one Dusseldorf rule also
+    catches Düsseldorf. Optional country scope limits a rule when the related country field contains that ISO2 code.</p>
+    {notice_html}
+    <section><h2>Add normalization alias</h2><form method="post" action="/normalization/save" class="new-alias">
+      <input type="hidden" name="csrf" value="{csrf}">
+      <label>Field<select name="target" required>{_normalization_target_options()}</select></label>
+      <label>Alias<input name="alias" required placeholder="Frankfurt (Main)"></label>
+      <label>Canonical<input name="canonical" placeholder="Frankfurt"></label>
+      <label class="check"><input type="checkbox" name="map_to_null" value="1"> Map to NULL / ambiguous</label>
+      <label>Country scope (optional ISO2)<input name="country_iso2" maxlength="2" placeholder="DE"></label>
+      <label>Notes<input name="notes" maxlength="1000" placeholder="Why this alias exists"></label>
+      <label class="check"><input type="checkbox" name="enabled" value="1" checked> Enabled</label>
+      <div class="alias-actions"><button>Add alias</button></div>
+    </form></section>
+    <section><h2>Existing aliases</h2><div class="alias-grid">{cards or '<p>No aliases configured.</p>'}</div></section>
+    <section><h2>Existing database</h2>
+      <p class="normalization-warning">This updates structured category rows only. It does not edit Telegram messages that
+      were already published. Review alias rules and affected counts first.</p>
+      <form method="post" action="/normalization/apply">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <label>Scope <select name="category"><option value="">All categories</option>
+        {''.join(f'<option value="{_escape(c)}">{_escape(c)}</option>' for c in data_normalizer.aliasable_fields())}
+        </select></label>
+        <button data-confirm="Apply the current normalization rules to existing structured database rows?">Re-normalize existing data</button>
+      </form>
+    </section>
+    <script nonce="{request['csp_nonce']}">
+    document.querySelectorAll('[name="map_to_null"]').forEach(box=>{{
+      const form=box.closest('form'); const canonical=form.querySelector('[name="canonical"]');
+      if(!canonical) return;
+      const sync=()=>{{canonical.disabled=box.checked;if(box.checked) canonical.value='';}};
+      box.addEventListener('change',sync);sync();
+    }});
+    document.querySelectorAll('[data-confirm]').forEach(b=>b.closest('form').addEventListener('submit',e=>{{
+      if(!confirm(b.dataset.confirm)) e.preventDefault();
+    }}));
+    </script></body></html>'''
+    return web.Response(text=content, content_type="text/html")
+
+
+def _normalization_target(value):
+    text = str(value or "")
+    if "." not in text:
+        raise ValueError("Invalid normalization field")
+    category, field_name = text.split(".", 1)
+    return category, field_name
+
+
+async def save_normalization_alias(request):
+    data = await request.post()
+    try:
+        category, field_name = _normalization_target(data.get("target"))
+        data_normalizer.save_alias(
+            category, field_name, data.get("alias"), data.get("canonical"),
+            country_iso2=data.get("country_iso2", ""),
+            enabled=data.get("enabled") == "1",
+            notes=data.get("notes", ""),
+            admin_id=request["session"]["admin_id"],
+            alias_id=data.get("id") or None,
+            map_to_null=data.get("map_to_null") == "1",
+        )
+    except (ValueError, TypeError, sqlite3.IntegrityError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    raise web.HTTPSeeOther("/normalization?notice=saved")
+
+
+async def delete_normalization_alias(request):
+    data = await request.post()
+    try:
+        data_normalizer.delete_alias(data.get("id"))
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    raise web.HTTPSeeOther("/normalization?notice=deleted")
+
+
+async def apply_normalization(request):
+    data = await request.post()
+    category = str(data.get("category") or "").strip() or None
+    try:
+        result = data_normalizer.renormalize_existing(category)
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    raise web.HTTPSeeOther(
+        f"/normalization?notice=applied&rows={int(result['rows_changed'])}&cells={int(result['cells_changed'])}"
+    )
 
 
 def _setting_display(value, secret=False):
@@ -1023,7 +1193,7 @@ async def settings_page(request):
     .setting-form input[type=password],.setting-form input[type=number],.setting-form select{{min-width:180px;flex:1}}}}
     </style></head><body><h1>Telclaw · Settings</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
+    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
     <p class="muted">Values from <code>.env</code> are defaults. A saved Back Office value overrides that default and is
     persisted in SQLite. Secret values are never rendered in the page. Settings marked restart required are saved immediately
     but need a Telclaw restart for already-created clients, listeners or workers to rebuild safely.</p>
@@ -1161,10 +1331,14 @@ def create_app():
     initialize_auth()
     backoffice_data.initialize()
     backoffice_settings.initialize()
+    data_normalizer.initialize()
     app = web.Application(middlewares=[_security])
     app.add_routes([web.get("/login", login), web.get("/", index),
-                    web.get("/data", data_page), web.get("/health", health_page),
-                    web.get("/settings", settings_page),
+                    web.get("/data", data_page), web.get("/normalization", normalization_page),
+                    web.get("/health", health_page), web.get("/settings", settings_page),
+                    web.post("/normalization/save", save_normalization_alias),
+                    web.post("/normalization/delete", delete_normalization_alias),
+                    web.post("/normalization/apply", apply_normalization),
                     web.post("/settings/save", save_setting),
                     web.post("/settings/reset", reset_setting),
                     web.get("/data/cell", data_cell),

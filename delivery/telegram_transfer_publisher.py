@@ -99,7 +99,7 @@ class TelegramTransferPublisher:
         )
         text = emoji_pattern.sub("", str(text))
         text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
-        return re.sub(r"[ \\t]{2,}", " ", text).strip()
+        return re.sub(r"[ \t]{2,}", " ", text).strip()
 
     @staticmethod
     def _country_flag(value):

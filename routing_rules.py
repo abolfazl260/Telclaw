@@ -650,7 +650,8 @@ def pending(limit=100):
                                     (record["message_row_id"],)).fetchone()
                 if data is None:
                     continue
-                record.update(dict(data))
+                normalized_data, _ = normalize_category_data(category, dict(data), conn=conn)
+                record.update(normalized_data)
                 for rule in matching_targets(record, rules):
                     status = conn.execute("""SELECT status FROM publishing_deliveries
                         WHERE message_id=? AND target_id=?""",

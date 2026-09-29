@@ -4,15 +4,9 @@ import ssl
 
 from aiohttp import web
 
-from storage import database
-import backoffice_settings
-from system_ui import SystemConsoleUI
-from monitoring.telegram_monitor import get_telegram_monitor
-from monitoring.transfer_live import install_transfer_live_command
-from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
-from routed_publisher import RoutedPublisher
-from backoffice_web import create_app, public_origin
 import config
+import backoffice_settings
+from storage import database
 
 logger = logging.getLogger("telclaw.transfer_publisher")
 
@@ -36,7 +30,16 @@ async def _transfer_publisher_loop(publisher):
 async def _run():
     database.initialize_db()
     # .env/config.py provides defaults; Back Office values persist as overrides.
+    # Apply them before importing services that may snapshot config at import/init time.
     backoffice_settings.apply_persisted_overrides()
+
+    from system_ui import SystemConsoleUI
+    from monitoring.telegram_monitor import get_telegram_monitor
+    from monitoring.transfer_live import install_transfer_live_command
+    from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
+    from routed_publisher import RoutedPublisher
+    from backoffice_web import create_app, public_origin
+
     backoffice_runner = None
     backoffice_ready = False
     if config.BACKOFFICE_ENABLED:

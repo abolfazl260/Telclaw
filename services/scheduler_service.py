@@ -10,7 +10,7 @@ import config
 from ai.ai_service import AIProcessingService
 from ai.classification_service import CategoryClassificationService
 from collection.crawler import CRAWL_MODE_ALL
-from collection.media_downloader import download_photo_for_record
+from collection.media_downloader import download_photos_for_record
 from services.crawl_job_service import CrawlJobService
 from services.processing_service import ProcessingService
 from services.stage_control import get_stage_control
@@ -58,7 +58,7 @@ class SchedulerService:
 
         def download_media(record):
             future = asyncio.run_coroutine_threadsafe(
-                download_photo_for_record(client, record),
+                download_photos_for_record(client, record),
                 loop,
             )
             return future.result()

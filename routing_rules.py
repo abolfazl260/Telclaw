@@ -608,6 +608,7 @@ def pending(limit=100):
     """Yield only unsent message-target pairs; disabled or unmatched rules publish nothing."""
     mark_incomplete_deliveries()
     initialize()
+    initialize_normalization()
     if is_rate_limited():
         return []
     conn = get_connection()

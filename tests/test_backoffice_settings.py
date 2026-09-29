@@ -1,3 +1,4 @@
+import copy
 import os
 
 os.environ.setdefault("TELEGRAM_API_ID", "1")
@@ -14,11 +15,27 @@ from storage import database
 
 @pytest.fixture
 def settings_db(tmp_path, monkeypatch):
+    tracked = {
+        spec.attr for spec in backoffice_settings.SPECS
+        if spec.attr is not None
+    } | {
+        "AI_PROVIDERS", "GROQ_PROVIDERS", "CLOUDFLARE_PROVIDERS",
+        "AI_EXTRACTION_CATEGORY_ENABLED",
+    }
+    snapshot = {
+        name: copy.deepcopy(getattr(config, name))
+        for name in tracked if hasattr(config, name)
+    }
+
     path = tmp_path / "settings.sqlite"
     monkeypatch.setattr(config, "DB_NAME", str(path))
     database.initialize_db()
     backoffice_settings.initialize()
-    return path
+    try:
+        yield path
+    finally:
+        for name, value in snapshot.items():
+            setattr(config, name, value)
 
 
 def test_env_is_default_and_override_wins(settings_db, monkeypatch):

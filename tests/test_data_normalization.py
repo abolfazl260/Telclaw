@@ -719,3 +719,54 @@ def test_database_tab_bathrooms_edit_rounds_down(norm_db):
     )
     assert value == 2
     assert backoffice_data.cell("housinglist", housing_id, "bathrooms")["value"] == 2
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("Sq.Ft", "sqft"),
+    ("sqft", "sqft"),
+    ("sqf", "sqft"),
+    ("sq ft", "sqft"),
+    ("square feet", "sqft"),
+    ("square foot", "sqft"),
+    ("sq feet", "sqft"),
+    ("foot", "sqft"),
+    ("sf", "sqft"),
+    ("ft¬≤", "sqft"),
+    ("ft²", "sqft"),
+    ("square meters", "sqm"),
+    ("sqm", "sqm"),
+    ("m¬≤", "sqm"),
+    ("m²", "sqm"),
+    ("meters", "sqm"),
+    ("null", None),
+    ("", None),
+])
+def test_housing_area_unit_aliases_are_canonicalized(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"area_unit": value}
+    )
+    assert normalized["area_unit"] == expected
+
+
+@pytest.mark.parametrize("area,unit,expected_area", [
+    (1000, "Sq.Ft", 92.9),
+    (500, "sq ft", 46.45),
+    (538, "ft²", 49.98),
+    (100, "sqm", 100.0),
+    (85, "square meters", 85.0),
+])
+def test_housing_area_is_converted_to_square_metres(norm_db, area, unit, expected_area):
+    normalized, changes = data_normalizer.normalize_category_data(
+        "housinglist", {"area": area, "area_unit": unit}
+    )
+    assert normalized["area"] == expected_area
+    assert normalized["area_unit"] == "sqm"
+    assert "area_unit" in changes
+
+
+def test_housing_area_with_unknown_unit_is_not_assumed_to_be_sqm(norm_db):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"area": 100, "area_unit": "unknown-unit"}
+    )
+    assert normalized["area"] == 100
+    assert normalized["area_unit"] == "unknown-unit"

@@ -35,3 +35,9 @@ def test_missing_transfer_title_does_not_render_empty_title_line():
     text = TelegramTransferPublisher.format_ad(record, record)
 
     assert "📌 عنوان:" not in text
+
+
+def test_transfer_text_cleanup_preserves_ascii_t_characters():
+    assert TelegramTransferPublisher._remove_emojis(
+        "Small package from Tehran to Toronto"
+    ) == "Small package from Tehran to Toronto"

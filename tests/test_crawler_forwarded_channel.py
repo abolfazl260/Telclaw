@@ -1,4 +1,4 @@
-"""Regression tests for skipping posts forwarded from Telegram channels."""
+"""Regression tests for accepting only verifiable human forwarded origins."""
 
 import sqlite3
 from datetime import date, datetime, timezone
@@ -10,38 +10,53 @@ from telethon.tl.types import PeerChannel, PeerUser
 from collection import crawler
 
 
-def _message(message_id, forward_from):
+def _message(message_id, forward_from=None):
     return SimpleNamespace(
         id=message_id,
         date=datetime(2026, 9, 29, 8, 0, tzinfo=timezone.utc),
-        fwd_from=SimpleNamespace(from_id=forward_from),
+        fwd_from=None if forward_from is None else SimpleNamespace(from_id=forward_from),
+        forward=None,
         sender=SimpleNamespace(
             id=9000 + message_id,
             username=f"user{message_id}",
             bot=False,
             broadcast=False,
         ),
-        text="this forwarded personal message has enough words to pass the minimum collection text threshold",
-        raw_text="this forwarded personal message has enough words to pass the minimum collection text threshold",
-        message="this forwarded personal message has enough words to pass the minimum collection text threshold",
+        text="this personal message has enough words to pass the minimum collection text threshold safely",
+        raw_text="this personal message has enough words to pass the minimum collection text threshold safely",
+        message="this personal message has enough words to pass the minimum collection text threshold safely",
         media=None,
     )
 
 
-def test_forward_origin_classifier_only_rejects_channels():
-    assert crawler._is_forwarded_from_channel(
-        SimpleNamespace(fwd_from=SimpleNamespace(from_id=PeerChannel(123)))
-    )
-    assert not crawler._is_forwarded_from_channel(
-        SimpleNamespace(fwd_from=SimpleNamespace(from_id=PeerUser(456)))
-    )
-    assert not crawler._is_forwarded_from_channel(SimpleNamespace(fwd_from=None))
+@pytest.mark.asyncio
+async def test_forward_origin_classifier_distinguishes_human_bot_channel_and_unknown():
+    class FakeClient:
+        async def get_entity(self, peer):
+            if isinstance(peer, PeerUser) and peer.user_id == 10:
+                return SimpleNamespace(id=10, bot=False)
+            if isinstance(peer, PeerUser) and peer.user_id == 20:
+                return SimpleNamespace(id=20, bot=True)
+            raise ValueError("unresolvable origin")
+
+    client = FakeClient()
+
+    assert await crawler._forward_origin_kind(client, _message(1, None)) is None
+    assert await crawler._forward_origin_kind(client, _message(2, PeerUser(10))) == "user"
+    assert await crawler._forward_origin_kind(client, _message(3, PeerUser(20))) == "bot"
+    assert await crawler._forward_origin_kind(client, _message(4, PeerChannel(30))) == "channel"
+    assert await crawler._forward_origin_kind(
+        client, SimpleNamespace(fwd_from=SimpleNamespace(from_id=None), forward=None)
+    ) == "unknown"
 
 
 @pytest.mark.asyncio
-async def test_channel_forward_is_skipped_before_persistence_but_user_forward_is_saved(monkeypatch):
-    channel_forward = _message(1, PeerChannel(111))
-    user_forward = _message(2, PeerUser(222))
+async def test_only_direct_human_and_forwarded_human_reach_persistence(monkeypatch):
+    direct_human = _message(1, None)
+    forwarded_human = _message(2, PeerUser(10))
+    forwarded_bot = _message(3, PeerUser(20))
+    forwarded_channel = _message(4, PeerChannel(30))
+    forwarded_unknown = _message(5, PeerUser(40))
     saved = []
 
     class FakeMessageService:
@@ -56,9 +71,19 @@ async def test_channel_forward_is_skipped_before_persistence_but_user_forward_is
         async def get_input_entity(self, _username):
             return SimpleNamespace(channel_id=77, title="Source")
 
+        async def get_entity(self, peer):
+            if isinstance(peer, PeerUser) and peer.user_id == 10:
+                return SimpleNamespace(id=10, bot=False)
+            if isinstance(peer, PeerUser) and peer.user_id == 20:
+                return SimpleNamespace(id=20, bot=True)
+            raise ValueError("unresolvable origin")
+
         async def iter_messages(self, _entity):
-            yield channel_forward
-            yield user_forward
+            yield direct_human
+            yield forwarded_human
+            yield forwarded_bot
+            yield forwarded_channel
+            yield forwarded_unknown
 
     def fake_connection():
         conn = sqlite3.connect(":memory:")
@@ -88,6 +113,20 @@ async def test_channel_forward_is_skipped_before_persistence_but_user_forward_is
         date(2026, 9, 29),
     )
 
+    assert result["saved"] == 2
+    assert result["forwarded_bot_skipped"] == 1
     assert result["forwarded_channel_skipped"] == 1
-    assert result["saved"] == 1
-    assert [item["message_id"] for item in saved] == [2]
+    assert result["forwarded_unknown_skipped"] == 1
+    assert [item["message_id"] for item in saved] == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_forward_object_sender_is_used_without_extra_lookup():
+    message = _message(1, PeerUser(99))
+    message.forward = SimpleNamespace(sender=SimpleNamespace(id=99, bot=True))
+
+    class NoLookupClient:
+        async def get_entity(self, _peer):
+            raise AssertionError("cached forward sender should be used")
+
+    assert await crawler._forward_origin_kind(NoLookupClient(), message) == "bot"

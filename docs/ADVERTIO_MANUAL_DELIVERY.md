@@ -29,14 +29,17 @@ AdvertioDeliveryService.deliver_pending()
        ↓
 Existing housing data
        ↓
-Advertio media upload (if media exists)
+If media_type=photo:
+reuse valid local media OR lazily re-download from Telegram
+       ↓
+Advertio media upload
        ↓
 POST /api/ingest/leads
        ↓
 Update advertio_status
 ```
 
-No crawler and no AI extraction are involved in this flow.
+No crawler and no AI extraction are involved in this flow. A Telegram client may still be used to lazily restore photo media for a waiting/retry record whose local files are absent. This is a media fetch only; it does not re-crawl or re-run AI.
 
 ## Main Menu
 
@@ -52,6 +55,8 @@ The user can select how many existing eligible records to send. Progress and fin
 
 - successful new lead → `sent`
 - Advertio idempotency response (`alreadyExisted=true`) → `already_existed`
+- missing/stale local photo with no usable downloader → `retry`; the lead request is not sent
+- Telegram photo download failure/empty result → `retry`; the lead request is not sent
 - retryable network/5xx error → `retry`
 - permanent mapping/400/other non-retryable error → `rejected`
 
@@ -68,3 +73,5 @@ This manual menu is a delivery operation only. It must not trigger:
 - re-generation of the AI result
 
 The source of truth for the Advertio payload is the existing persisted `housinglist` record created during AI processing.
+
+Photo delivery is fail-closed: when a record says `media_type=photo`, Advertio must not receive that lead with an empty `mediaKeys` array merely because the local cache is missing. Media must first be restored successfully or the record remains retryable.

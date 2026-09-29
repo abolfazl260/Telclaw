@@ -20,9 +20,9 @@ async def test_media_downloader_is_bound_to_scheduler_loop(monkeypatch):
     async def fake_download(client, record):
         calls.append((client, record, asyncio.get_running_loop()))
         await asyncio.sleep(0)
-        return "/tmp/test-media"
+        return ["/tmp/test-media"]
 
-    monkeypatch.setattr("services.scheduler_service.download_photo_for_record", fake_download)
+    monkeypatch.setattr("services.scheduler_service.download_photos_for_record", fake_download)
 
     ai_service = FakeAIProcessingService()
     client = object()
@@ -36,7 +36,7 @@ async def test_media_downloader_is_bound_to_scheduler_loop(monkeypatch):
         {"message_id": 123, "channel_username": "test", "media_type": "photo"},
     )
 
-    assert result == "/tmp/test-media"
+    assert result == ["/tmp/test-media"]
     assert len(calls) == 1
     assert calls[0][0] is client
     assert calls[0][1]["message_id"] == 123
@@ -48,7 +48,7 @@ async def test_media_downloader_propagates_download_errors(monkeypatch):
     async def fake_download(client, record):
         raise ValueError("telegram download failed")
 
-    monkeypatch.setattr("services.scheduler_service.download_photo_for_record", fake_download)
+    monkeypatch.setattr("services.scheduler_service.download_photos_for_record", fake_download)
 
     ai_service = FakeAIProcessingService()
     SchedulerService._bind_media_downloader(ai_service, object(), asyncio.get_running_loop())

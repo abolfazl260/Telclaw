@@ -568,11 +568,29 @@ class SystemConsoleUI(ConsoleUI):
                 await self.pause()
                 return
 
+            media_downloader = None
+            selected = preview[:limit]
+            if any(record.get("media_type") == "photo" for record in selected):
+                client = await self.connect_client()
+                if client is None:
+                    self.show_message(
+                        "Advertio delivery needs a connected Telegram account to prepare listing photos.",
+                        Fore.RED,
+                    )
+                    await self.pause()
+                    return
+                media_downloader = self._make_sync_media_downloader()
+
             self.show_message(
                 "Starting Advertio delivery. No Telegram crawl and no AI extraction will run.",
                 Fore.CYAN,
             )
-            result = await asyncio.to_thread(self.advertio_service.deliver_pending, limit=limit, progress=True)
+            result = await asyncio.to_thread(
+                self.advertio_service.deliver_pending,
+                limit=limit,
+                progress=True,
+                media_downloader=media_downloader,
+            )
             color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
             self.show_message(
                 f"Completed. Found: {result['found']} | Sent: {result['sent']} | "

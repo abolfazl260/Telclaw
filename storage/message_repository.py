@@ -163,11 +163,11 @@ class MessageRepository:
         )
 
     def clear_media_path(self, message_id, channel_username):
-        """Clear media_path for exactly one delivered message record."""
+        """Clear legacy and ordered local media paths for one delivered record."""
         conn = database.get_connection()
         try:
             cursor = conn.execute(
-                "UPDATE messages SET media_path=NULL WHERE channel_username=? AND message_id=?",
+                "UPDATE messages SET media_path=NULL, media_paths=NULL WHERE channel_username=? AND message_id=?",
                 (channel_username, message_id),
             )
             conn.commit()

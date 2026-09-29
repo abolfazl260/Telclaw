@@ -10,6 +10,7 @@ import config
 from ai.extractor import AIExtractionError
 from ai.provider_manager import AIProviderManager
 from storage.message_repository import MessageRepository
+from storage.data_normalizer import normalize_category_data
 from services.stage_control import get_stage_control
 
 logger = logging.getLogger("telclaw.ai")
@@ -201,6 +202,12 @@ class AIProcessingService:
                 data = result.get("data", {}).get(category)
                 if not isinstance(data, dict):
                     raise AIExtractionError(f"Missing extracted data for classified category: {category}", reason="invalid_provider_output")
+                data, normalization_changes = normalize_category_data(category, data)
+                if normalization_changes:
+                    logger.info(
+                        "[NORMALIZATION] message_id=%s category=%s fields=%s",
+                        record.get("message_id"), category, ",".join(sorted(normalization_changes)),
+                    )
                 self.repository.save_category_record(record["id"], category, data)
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=True, ai_category=category, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 delivery = self._deliver_to_advertio(record, category, data)

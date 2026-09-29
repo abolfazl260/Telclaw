@@ -41,6 +41,12 @@
       "username": "parsexpert",
       "country": "Canada",
       "description": "Job and professional opportunities for the Iranian community in Canada."
+    },
+    {
+      "name": "Vancouver Hiring",
+      "username": "VancouverHiring",
+      "country": "Canada",
+      "description": "Hiring and job opportunities in Vancouver."
     }
   ],
   "Canada_Immigrate": [
@@ -207,6 +213,30 @@
       "username": "rentvancouver",
       "country": "Canada",
       "description": "Rental listings in British Columbia and Vancouver."
+    },
+    {
+      "name": "Canada Immigration and Residence",
+      "username": "mohajerat_va_eghamat_canada",
+      "country": "Canada",
+      "description": "Canada immigration, residence, and housing-related community."
+    },
+    {
+      "name": "Maskan O Arz",
+      "username": "maskanoarz",
+      "country": "Canada",
+      "description": "Housing and real-estate listings."
+    },
+    {
+      "name": "Toronto Iranians",
+      "username": "Toronto_Iranians",
+      "country": "Canada",
+      "description": "Iranian community in Toronto with housing-related posts."
+    },
+    {
+      "name": "Canada Home",
+      "username": "CanadaHome",
+      "country": "Canada",
+      "description": "Housing and home listings in Canada."
     }
   ],
   "Canada_Flight": [
@@ -341,6 +371,54 @@
       "username": "gitibar_canada",
       "country": "Canada",
       "description": "Passenger cargo and shipping services for Canada."
+    },
+    {
+      "name": "Koolbar London",
+      "username": "koolbarlondon",
+      "country": "United Kingdom",
+      "description": "Passenger cargo and luggage shipping related to London."
+    },
+    {
+      "name": "US Kolbar",
+      "username": "USkolbar",
+      "country": "USA",
+      "description": "Passenger cargo and luggage shipping related to the USA."
+    },
+    {
+      "name": "Coolbar EU Iran",
+      "username": "CoolbarEUIRAN",
+      "country": "Europe",
+      "description": "Passenger cargo and shipping between Europe and Iran."
+    },
+    {
+      "name": "Touring China",
+      "username": "TouringChina",
+      "country": "China",
+      "description": "Travel and cargo related community for China."
+    },
+    {
+      "name": "Sheypoor UK Bar",
+      "username": "SheypoorUkBar",
+      "country": "United Kingdom",
+      "description": "Passenger cargo and luggage shipping related to the UK."
+    },
+    {
+      "name": "Mosafferan",
+      "username": "mosafferan",
+      "country": "International",
+      "description": "Passenger travel and cargo coordination channel."
+    },
+    {
+      "name": "England Tehran Cargo",
+      "username": "ErsalebarazEnglandtoTehranIran",
+      "country": "United Kingdom",
+      "description": "Passenger cargo and shipping between England and Tehran, Iran."
+    },
+    {
+      "name": "Big World Market",
+      "username": "big_world_market",
+      "country": "International",
+      "description": "International marketplace and cargo-related channel."
     }
   ],
   "Canada_Language": [
@@ -387,6 +465,24 @@
       "username": "divaremehrabanilondon",
       "country": "Canada",
       "description": "Housing and local listings for London, Canada."
+    },
+    {
+      "name": "Divar Agahi Canada",
+      "username": "DivarAgahiCanada",
+      "country": "Canada",
+      "description": "Canadian classifieds and marketplace listings."
+    },
+    {
+      "name": "Iranians of Canada",
+      "username": "Iranians_of_Canada",
+      "country": "Canada",
+      "description": "Iranian community classifieds and marketplace in Canada."
+    },
+    {
+      "name": "Richmond Hill Toronto",
+      "username": "RichmondHillToronto",
+      "country": "Canada",
+      "description": "Local community and marketplace listings in Richmond Hill and Toronto."
     }
   ],
   "Canada_Education": [
@@ -433,6 +529,12 @@
       "username": "canadapa",
       "country": "Canada",
       "description": "Community chat for Canada-related discussions."
+    },
+    {
+      "name": "Move 2 Vancouver",
+      "username": "Move2Vancouver",
+      "country": "Canada",
+      "description": "Community for moving to and living in Vancouver."
     }
   ],
   "Canada_Other": [
@@ -601,6 +703,24 @@
     {
       "name": "Femmora Shop",
       "username": "femmorashop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Coral Collection Online Shop",
+      "username": "coral_collection_online_shop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Canada Shopping",
+      "username": "Canada_shopping",
+      "country": "Canada",
+      "description": "Online shopping channel serving Iranian shoppers in Canada."
+    },
+    {
+      "name": "Elvin Shop 2",
+      "username": "elvinshop2",
       "country": "Iran",
       "description": "Iranian online shopping channel."
     }

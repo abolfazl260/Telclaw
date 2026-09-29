@@ -419,6 +419,24 @@
       "username": "big_world_market",
       "country": "International",
       "description": "International marketplace and cargo-related channel."
+    },
+    {
+      "name": "Italy Iran Cargo",
+      "username": "itlayirancargo",
+      "country": "Italy",
+      "description": "Passenger cargo and shipping between Italy and Iran."
+    },
+    {
+      "name": "Post 2 Iran",
+      "username": "post2iran",
+      "country": "International",
+      "description": "Shipping and package delivery to Iran."
+    },
+    {
+      "name": "Ersal Bar",
+      "username": "ersal_bar",
+      "country": "International",
+      "description": "Passenger cargo and shipping coordination."
     }
   ],
   "Canada_Language": [
@@ -723,6 +741,12 @@
       "username": "elvinshop2",
       "country": "Iran",
       "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Online Shop Italy",
+      "username": "onlineshop_italy",
+      "country": "Italy",
+      "description": "Online shopping channel serving Iranian shoppers in Italy."
     }
   ]
 }

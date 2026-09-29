@@ -8,6 +8,7 @@ from pathlib import Path
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
+from storage.data_normalizer import normalize_housing_area
 from storage.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
@@ -244,8 +245,9 @@ class AdvertioDeliveryService:
         if rental_duration in cls.RENTAL_DURATIONS:
             attributes["rental_duration"] = rental_duration
 
-        area = cls._number(data.get("area"))
-        if area is not None and 5 <= area <= 500:
+        area, area_unit = normalize_housing_area(data.get("area"), data.get("area_unit"))
+        area = cls._number(area)
+        if area_unit == "sqm" and area is not None and 5 <= area <= 500:
             attributes["area"] = area
 
         bathrooms = cls._number(data.get("bathrooms"))

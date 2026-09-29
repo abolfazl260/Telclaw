@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 from colorama import Fore
 
@@ -45,17 +45,8 @@ class SchedulerService:
         return f"{session_name}:{channel_username.lower().lstrip('@')}:{from_date}:{to_date}:{crawl_mode}"
 
     @staticmethod
-    def _bind_media_downloader(ai_processing_service, client, loop):
-        """Bind the current Telegram client to the synchronous AI media hook.
-
-        AI extraction is executed in a worker thread, while the Telethon client
-        belongs to the scheduler's event loop. The adapter submits the existing
-        async downloader back to that loop and waits for its result, avoiding
-        unsafe cross-loop access to the Telegram client.
-        """
-        if not hasattr(ai_processing_service, "set_media_downloader"):
-            return
-
+    def _make_media_downloader(client, loop):
+        """Create a synchronous adapter for the loop-owned Telethon client."""
         def download_media(record):
             future = asyncio.run_coroutine_threadsafe(
                 download_photos_for_record(client, record),
@@ -63,10 +54,23 @@ class SchedulerService:
             )
             return future.result()
 
-        ai_processing_service.set_media_downloader(download_media)
+        return download_media
+
+    @staticmethod
+    def _bind_media_downloader(ai_processing_service, client, loop):
+        """Bind the current Telegram client to the synchronous AI media hook."""
+        if not hasattr(ai_processing_service, "set_media_downloader"):
+            return None
+
+        downloader = SchedulerService._make_media_downloader(client, loop)
+        ai_processing_service.set_media_downloader(downloader)
+        return downloader
 
     async def _run_post_crawl_pipeline(self, client, channel_username, crawl_result=None):
         async with self._pipeline_lock:
+            # Anything that fails Advertio after this cutoff is deferred until
+            # the next scheduler cycle. This prevents immediate same-cycle hammering.
+            advertio_cycle_cutoff = datetime.now(timezone.utc).isoformat()
             print(f"\n{Fore.CYAN}{'=' * 60}")
             if isinstance(crawl_result, dict) and crawl_result.get("stopped"):
                 print(f"{Fore.YELLOW}⏭️ CRAWL SKIPPED BY OPERATOR: @{channel_username}")
@@ -128,6 +132,37 @@ class SchedulerService:
             else:
                 reason = "disabled" if classification_stats.get("disabled") else "stopped"
                 print(f"{Fore.YELLOW}⚠️ AI data extraction not started because classification stage is {reason}.")
+
+            advertio_stats = {"found": 0, "sent": 0, "already_existed": 0, "failed": 0}
+            advertio_service = getattr(self.ai_processing, "advertio_service", None)
+            if config.ADVERTIO_INGEST_ENABLED and advertio_service is not None:
+                if self.stage_control.is_skip_requested("advertio"):
+                    print(
+                        f"{Fore.YELLOW}⚠️ Advertio stage skipped by operator; "
+                        "waiting/retry records remain pending for the next cycle."
+                    )
+                else:
+                    print(f"\n{Fore.CYAN}▸ Starting automatic Advertio waiting/retry delivery...")
+                    media_downloader = self._make_media_downloader(
+                        client,
+                        asyncio.get_running_loop(),
+                    )
+                    advertio_stats = await asyncio.to_thread(
+                        advertio_service.deliver_pending,
+                        limit=100,
+                        channel_username=None,
+                        progress=True,
+                        media_downloader=media_downloader,
+                        before_datetime=advertio_cycle_cutoff,
+                    )
+                    print(
+                        f"{Fore.GREEN}✅ Advertio delivery completed | "
+                        f"Found: {advertio_stats['found']} | Sent: {advertio_stats['sent']} | "
+                        f"Already existed: {advertio_stats['already_existed']} | "
+                        f"Failed: {advertio_stats['failed']}"
+                    )
+                    await self.monitor.report("advertio", advertio_stats)
+                self.stage_control.consume_skip("advertio")
 
             return processing_stats, classification_stats, extraction_stats
 

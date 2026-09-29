@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
 
 

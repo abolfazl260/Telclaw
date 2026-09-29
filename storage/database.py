@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import config
 
 MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","collection_status":"TEXT NOT NULL DEFAULT 'collected'","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","media_group_id":"TEXT","media_path":"TEXT","media_paths":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT","classification_status":"TEXT NOT NULL DEFAULT 'waiting'","classification_category":"TEXT","classification_error":"TEXT","classification_processed_at":"TEXT","classification_attempts":"INTEGER NOT NULL DEFAULT 0"}
-CATEGORY_TABLES = {"housinglist":{"property_type":"TEXT","listing_type":"TEXT","title":"TEXT","description":"TEXT","location":"TEXT","country_code":"TEXT","province":"TEXT","city":"TEXT","neighborhood":"TEXT","price":"REAL","currency":"TEXT","rent_period":"TEXT","bedrooms":"TEXT","bathrooms":"REAL","area":"REAL","area_unit":"TEXT","furnished":"INTEGER","availability":"TEXT","property_condition":"TEXT","contact":"TEXT","features":"TEXT"},"transferlist":{"title":"TEXT","description":"TEXT","origin_city":"TEXT","origin_province":"TEXT","origin_country":"TEXT","destination_city":"TEXT","destination_province":"TEXT","destination_country":"TEXT","airline":"TEXT","flight_number":"TEXT","departure_date":"TEXT","departure_time":"TEXT","arrival_date":"TEXT","arrival_time":"TEXT","transport_type":"TEXT","cargo_type":"TEXT","weight":"REAL","weight_unit":"TEXT","quantity":"REAL","volume":"REAL","volume_unit":"TEXT","price":"REAL","currency":"TEXT","contact":"TEXT","features":"TEXT"},"joblist":{"job_title":"TEXT","company":"TEXT","location":"TEXT","employment_type":"TEXT","salary":"REAL","salary_currency":"TEXT","salary_period":"TEXT","experience":"TEXT","education":"TEXT","skills":"TEXT","remote":"INTEGER","job_type":"TEXT","description":"TEXT","application_method":"TEXT","contact":"TEXT"}}
+CATEGORY_TABLES = {"housinglist":{"property_type":"TEXT","listing_type":"TEXT","title":"TEXT","description":"TEXT","location":"TEXT","country_code":"TEXT","province":"TEXT","city":"TEXT","neighborhood":"TEXT","price":"REAL","currency":"TEXT","rent_period":"TEXT","bedrooms":"TEXT","bathrooms":"INTEGER","area":"REAL","area_unit":"TEXT","furnished":"INTEGER","availability":"TEXT","property_condition":"TEXT","contact":"TEXT","features":"TEXT"},"transferlist":{"title":"TEXT","description":"TEXT","origin_city":"TEXT","origin_province":"TEXT","origin_country":"TEXT","destination_city":"TEXT","destination_province":"TEXT","destination_country":"TEXT","airline":"TEXT","flight_number":"TEXT","departure_date":"TEXT","departure_time":"TEXT","arrival_date":"TEXT","arrival_time":"TEXT","transport_type":"TEXT","cargo_type":"TEXT","weight":"REAL","weight_unit":"TEXT","quantity":"REAL","volume":"REAL","volume_unit":"TEXT","price":"REAL","currency":"TEXT","contact":"TEXT","features":"TEXT"},"joblist":{"job_title":"TEXT","company":"TEXT","location":"TEXT","employment_type":"TEXT","salary":"REAL","salary_currency":"TEXT","salary_period":"TEXT","experience":"TEXT","education":"TEXT","skills":"TEXT","remote":"INTEGER","job_type":"TEXT","description":"TEXT","application_method":"TEXT","contact":"TEXT"}}
 
 def get_connection():
     db_path=Path(config.DB_NAME)
@@ -35,7 +35,22 @@ def _rebuild_category_table(cursor,table,fields,existing_columns):
     copy_columns=[column for column in desired_columns if column in existing_columns]
     if copy_columns:
         column_sql=", ".join(copy_columns)
-        cursor.execute(f"INSERT INTO {temp_table} ({column_sql}) SELECT {column_sql} FROM {table}")
+        select_expressions=[]
+        for column in copy_columns:
+            if table=="housinglist" and column=="bathrooms":
+                select_expressions.append(
+                    """CASE
+                        WHEN CAST(bathrooms AS REAL) >= 1
+                         AND CAST(bathrooms AS REAL) < 11
+                        THEN CAST(CAST(bathrooms AS REAL) AS INTEGER)
+                        ELSE NULL
+                    END AS bathrooms"""
+                )
+            else:
+                select_expressions.append(column)
+        cursor.execute(
+            f"INSERT INTO {temp_table} ({column_sql}) SELECT {', '.join(select_expressions)} FROM {table}"
+        )
     cursor.execute(f"DROP TABLE {table}")
     cursor.execute(f"ALTER TABLE {temp_table} RENAME TO {table}")
 

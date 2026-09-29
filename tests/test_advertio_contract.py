@@ -99,3 +99,24 @@ def test_advertio_accepts_all_canonical_bedroom_values():
 def test_normalized_bathroom_count_reaches_advertio_payload():
     payload = _service().build_payload(_record(), _housing(bathrooms=3))
     assert json.loads(payload["attributesJson"])["bathrooms_count"] == 3
+
+
+def test_advertio_converts_square_feet_to_square_metres():
+    payload = _service().build_payload(
+        _record(), _housing(area=1000, area_unit="Sq.Ft")
+    )
+    assert json.loads(payload["attributesJson"])["area"] == 92.9
+
+
+def test_advertio_omits_area_when_unit_is_unknown():
+    payload = _service().build_payload(
+        _record(), _housing(area=100, area_unit=None)
+    )
+    assert "area" not in json.loads(payload["attributesJson"])
+
+
+def test_advertio_accepts_canonical_square_metre_area():
+    payload = _service().build_payload(
+        _record(), _housing(area=100, area_unit="sqm")
+    )
+    assert json.loads(payload["attributesJson"])["area"] == 100

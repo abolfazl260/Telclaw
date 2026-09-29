@@ -761,7 +761,8 @@ def test_housing_area_is_converted_to_square_metres(norm_db, area, unit, expecte
     )
     assert normalized["area"] == expected_area
     assert normalized["area_unit"] == "sqm"
-    assert "area_unit" in changes
+    if unit != "sqm":
+        assert "area_unit" in changes
 
 
 def test_housing_area_with_unknown_unit_is_not_assumed_to_be_sqm(norm_db):

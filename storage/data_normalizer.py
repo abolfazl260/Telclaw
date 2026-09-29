@@ -456,6 +456,127 @@ _AREA_SQM_KEYS = {
     )
 }
 
+_AVAILABILITY_TO_RENT_PERIOD = {
+    "daily": "daily",
+    "short-term": "short_term",
+    "short term": "short_term",
+    "short_term": "short_term",
+    "temporary": "short_term",
+    "monthly / short-term": "short_term",
+    "monthly / short term": "short_term",
+    "1-6 months": "short_term",
+    "short-term and monthly": "short_term",
+    "short-term, monthly": "short_term",
+    "short-term or long-term": "short_term",
+    "short term & long term": "short_term",
+    "short term &long term": "short_term",
+    "short and long term": "short_term",
+    "short-term and long-term": "short_term",
+    "long-term and short-term (minimum 3 months)": "short_term",
+    "short and medium term": "short_term",
+    "temporary or permanent": "short_term",
+    "long-term": "long_term",
+    "long term": "long_term",
+    "one year": "long_term",
+    "no short-term rentals": "long_term",
+}
+
+_AMBIGUOUS_AVAILABILITY = {
+    "available",
+    "available now",
+    "immediately",
+    "immediate",
+    "ready to move in",
+    "september",
+    "october",
+    "available october",
+    "early november",
+    "mid-october",
+    "available october first",
+    "from 1 november",
+    "from 6 october",
+    "ready to rent from september 1",
+    "available from mid-september",
+    "october 1 or november 1",
+    "available: november 1st",
+    "november 1st",
+    "15-sep",
+    "1-sep",
+    "21-sep",
+    "10-oct",
+    "september‚äø1",
+    "september 5 to november 5",
+    "available: about 25 sep ‚äì 10 nov",
+    "18 september to 30 november",
+    "until december 1st",
+}
+
+
+def availability_rent_period(value):
+    """Return canonical rent_period when availability actually contains duration semantics."""
+    if value is None:
+        return None
+    return _AVAILABILITY_TO_RENT_PERIOD.get(str(value).strip().casefold())
+
+
+def normalize_housing_availability(value):
+    """Return Advertio-compatible YYYY-MM-DD or None for vague/non-date availability."""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text or text.casefold() in _NULL_LIKE_TEXT:
+        return None
+
+    key = text.casefold()
+    if key in _AVAILABILITY_TO_RENT_PERIOD or key in _AMBIGUOUS_AVAILABILITY:
+        return None
+
+    # ISO date or ISO range: Advertio wants the first available date.
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})(?:\s+to\s+\d{4}-\d{2}-\d{2})?$", text, re.I)
+    if match:
+        candidate = match.group(1)
+        try:
+            return datetime.strptime(candidate, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+
+    # US/Canadian numeric date as present in the dataset: M/D/YY or M/D/YYYY.
+    match = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})", text)
+    if match:
+        month, day, year = map(int, match.groups())
+        if year < 100:
+            year += 2000
+        try:
+            return datetime(year, month, day).strftime("%Y-%m-%d")
+        except ValueError:
+            return None
+
+    # Explicit English dates with a year.
+    for fmt in ("%b %d,%Y", "%b %d, %Y", "%d-%b-%y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # Date ranges where the first date has an explicit year.
+    match = re.match(
+        r"^([A-Za-z]{3,9}\s+\d{1,2}\s+\d{4})\s+to\s+[A-Za-z]{3,9}\s+\d{1,2}\s+\d{4}$",
+        text,
+        re.I,
+    )
+    if match:
+        for fmt in ("%b %d %Y", "%B %d %Y"):
+            try:
+                return datetime.strptime(match.group(1), fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+    # "after YYYY-MM-DD" is not an exact available_from date, so do not guess.
+    if re.fullmatch(r"after\s+\d{4}-\d{2}-\d{2}", text, re.I):
+        return None
+
+    return None
+
 
 def normalize_housing_area(area, area_unit):
     """Return (area, unit) with housing area expressed in square metres when possible."""
@@ -487,6 +608,9 @@ def normalize_housing_area(area, area_unit):
 
 def normalize_builtin_field_value(category, field_name, value):
     """Apply deterministic non-alias normalization for typed structured fields."""
+    if category == "housinglist" and field_name == "availability":
+        return normalize_housing_availability(value)
+
     if category == "housinglist" and field_name == "furnished":
         if value is None:
             return None
@@ -635,6 +759,13 @@ def normalize_category_data(category, data, *, conn=None):
         rules = _rules_for_category(conn, category)
         result = dict(data)
         changes = {}
+
+        if category == "housinglist" and "availability" in result:
+            duration = availability_rent_period(result.get("availability"))
+            if duration and not result.get("rent_period"):
+                before_rent = result.get("rent_period")
+                result["rent_period"] = duration
+                changes["rent_period"] = (before_rent, duration)
 
         if category == "housinglist" and ("area" in result or "area_unit" in result):
             before_area = result.get("area")

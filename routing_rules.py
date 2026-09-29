@@ -5,6 +5,7 @@ import math
 import re
 
 from storage.database import CATEGORY_TABLES, get_connection
+from storage.data_normalizer import initialize as initialize_normalization, normalize_category_data
 
 # Categories follow the structured category tables used by the extraction pipeline.
 # Rule fields themselves are discovered from SQLite so adding a column does not

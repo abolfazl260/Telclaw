@@ -464,11 +464,17 @@ class AdvertioDeliveryService:
 
     def deliver_pending(self, limit=100, channel_username=None, progress=True, media_downloader=None, before_datetime=None):
         """Send processed housing records, optionally limited to work predating a cycle cutoff."""
-        records = self.repository.get_advertio_pending(
-            limit=limit,
-            channel_username=channel_username,
-            before_datetime=before_datetime,
-        )
+        if before_datetime is None:
+            records = self.repository.get_advertio_pending(
+                limit=limit,
+                channel_username=channel_username,
+            )
+        else:
+            records = self.repository.get_advertio_pending(
+                limit=limit,
+                channel_username=channel_username,
+                before_datetime=before_datetime,
+            )
         total = len(records)
         sent = already_existed = failed = 0
         for index, record in enumerate(records, start=1):

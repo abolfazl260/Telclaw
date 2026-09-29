@@ -93,12 +93,16 @@ def _seed_defaults(conn):
             ("transferlist", field, "Dusseldorf/Wuppertal", None, "", "Ambiguous multiple-city value"),
         ])
     defaults.extend([
-        ("housinglist", "property_type", "condo, house, townhouse, basement", "multi", "",
+        ("housinglist", "property_type", "condo, house, townhouse, basement", "apartment", "",
+         "Multiple property types normalized to apartment"),
+        ("housinglist", "property_type", "apartment, condo, house, townhouse, basement", "apartment", "",
          "Multiple property types normalized to multi"),
-        ("housinglist", "property_type", "apartment, condo, house, townhouse, basement", "multi", "",
-         "Multiple property types normalized to multi"),
-        ("housinglist", "property_type", '["condo","house","townhouse","basement"]', "multi", "",
-         "JSON property-type list normalized to multi"),
+        ("housinglist", "property_type", '["condo","house","townhouse","basement"]', "apartment", "",
+         "JSON property-type list normalized to apartment"),
+        ("housinglist", "property_type", "multi", "apartment", "",
+         "Generic multi property type normalized to apartment"),
+        ("housinglist", "property_type", "townhouse", "apartment", "",
+         "Townhouse normalized to apartment"),
     ])
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(

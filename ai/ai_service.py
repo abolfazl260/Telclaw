@@ -1,7 +1,9 @@
 """Orchestrates provider-agnostic extraction from the independent AI queue."""
 
 from datetime import datetime, timezone
+import json
 import logging
+from pathlib import Path
 import random
 import re
 import time
@@ -122,17 +124,41 @@ class AIProcessingService:
     def _prepare_media_for_advertio(self, record):
         if record.get("media_type") != "photo":
             return True
+
+        persisted = record.get("media_paths")
+        paths = []
+        if isinstance(persisted, (list, tuple)):
+            paths = [str(path) for path in persisted if path]
+        elif isinstance(persisted, str) and persisted.strip():
+            try:
+                decoded = json.loads(persisted)
+            except (TypeError, ValueError):
+                decoded = []
+            if isinstance(decoded, list):
+                paths = [str(path) for path in decoded if path]
+
+        if paths and all(Path(path).is_file() for path in paths):
+            record["media_paths"] = paths[:10]
+            record["media_path"] = record["media_paths"][0]
+            return True
+
         existing = record.get("media_path")
-        if existing:
-            from pathlib import Path
-            if Path(existing).is_file():
-                return True
+        if not record.get("media_group_id") and existing and Path(existing).is_file():
+            record["media_paths"] = [str(existing)]
+            return True
+
         if self.media_downloader is None:
             raise RuntimeError("Telegram media downloader is not configured for this AI run")
-        media_path = self.media_downloader(record)
-        if not media_path:
+        downloaded = self.media_downloader(record)
+        if isinstance(downloaded, str):
+            downloaded = [downloaded]
+        if not isinstance(downloaded, (list, tuple)) or not downloaded:
             raise RuntimeError("Telegram media download returned no file")
-        record["media_path"] = media_path
+        paths = [str(path) for path in downloaded if path][:10]
+        if not paths:
+            raise RuntimeError("Telegram media download returned no usable file")
+        record["media_paths"] = paths
+        record["media_path"] = paths[0]
         return True
 
     def _deliver_to_advertio(self, record, category, data):
@@ -155,6 +181,7 @@ class AIProcessingService:
             result = self.advertio_service.deliver(record, data)
             status = "already_existed" if result.get("already_existed") else "sent"
             self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)
+            self.advertio_service._cleanup_delivered_media(record)
             print(f"[ADVERTIO] {status}: message={record['message_id']} lead={result.get('lead_id')} http={result.get('http_status')}")
             return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0, "skipped": 0}
         except Exception as exc:

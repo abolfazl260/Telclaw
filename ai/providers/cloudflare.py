@@ -12,7 +12,7 @@ import requests
 import config
 from ai.category_schemas import CATEGORIES, CLASSIFICATION_CATEGORIES, validate_result
 from ai.category_classifier import build_classification_prompt, validate_classification_result
-from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_selected_category_data, _validate_english_title
+from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_null_like_values, _normalize_selected_category_data, _validate_english_title
 from ai.prompt_loader import render_prompt
 from ai.rate_limiter import RateLimiter
 from ai.providers.base import AIProvider
@@ -219,6 +219,7 @@ class CloudflareProvider(AIProvider):
             if not isinstance(result, dict) or result.get("category") != category:
                 raise ValueError(f"Extraction category mismatch: expected={category} received={result.get('category') if isinstance(result, dict) else None}")
             result = _normalize_selected_category_data(result)
+            result = _normalize_null_like_values(result)
             result = _ensure_titles(result, text)
             result = _normalize_defaults(result)
             result = _normalize_currencies(result)

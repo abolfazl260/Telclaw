@@ -237,6 +237,30 @@
       "username": "CanadaHome",
       "country": "Canada",
       "description": "Housing and home listings in Canada."
+    },
+    {
+      "name": "Buy House in MT",
+      "username": "buyhouseinMT",
+      "country": "Canada",
+      "description": "Home buying and real-estate listings in Canada."
+    },
+    {
+      "name": "Toronto Apartment House",
+      "username": "Toronto_Apartment_House",
+      "country": "Canada",
+      "description": "Apartment and house listings in Toronto."
+    },
+    {
+      "name": "Khaneyab Toronto",
+      "username": "KhaneyabToronto",
+      "country": "Canada",
+      "description": "Housing and rental listings in Toronto."
+    },
+    {
+      "name": "Luxury Toronto Home",
+      "username": "luxarytorontohome",
+      "country": "Canada",
+      "description": "Luxury housing and real-estate listings in Toronto."
     }
   ],
   "Canada_Flight": [
@@ -525,6 +549,12 @@
       "username": "RichmondHillToronto",
       "country": "Canada",
       "description": "Local community and marketplace listings in Richmond Hill and Toronto."
+    },
+    {
+      "name": "Divare Canada",
+      "username": "divare_canada",
+      "country": "Canada",
+      "description": "Canadian classifieds and marketplace listings."
     }
   ],
   "Canada_Education": [

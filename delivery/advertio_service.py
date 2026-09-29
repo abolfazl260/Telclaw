@@ -8,7 +8,12 @@ from pathlib import Path
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
-from storage.data_normalizer import availability_rent_period, normalize_housing_area, normalize_housing_availability
+from storage.data_normalizer import (
+    availability_rent_period,
+    extract_telegram_handle,
+    normalize_housing_area,
+    normalize_housing_availability,
+)
 from storage.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
@@ -105,12 +110,12 @@ class AdvertioDeliveryService:
 
     @staticmethod
     def _contact_handle(data, record):
-        candidates = [data.get("contact"), record.get("sender_username")]
-        for value in candidates:
-            text = str(value or "").strip()
-            if re.fullmatch(r"@?[A-Za-z0-9_]{5,64}", text):
-                return text if text.startswith("@") else f"@{text}"
-        return None
+        handle = extract_telegram_handle(data.get("contact"), allow_plain=False)
+        if handle:
+            return handle
+        # sender_username comes directly from Telegram metadata, so a bare value
+        # is safe to interpret as a Telegram username.
+        return extract_telegram_handle(record.get("sender_username"), allow_plain=True)
 
     @staticmethod
     def _media_paths(record):

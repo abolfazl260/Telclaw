@@ -134,3 +134,38 @@ def test_advertio_furnishing_enum_mapping(furnished, expected):
         _record(), _housing(furnished=furnished)
     )
     assert json.loads(payload["attributesJson"])["furnishing"] == expected
+
+
+@pytest.mark.parametrize("availability,expected", [
+    ("9/11/26", "2026-09-11"),
+    ("2026-09-25 to 2026-10-05", "2026-09-25"),
+    ("Oct 01,2026", "2026-10-01"),
+    ("1-Oct-26", "2026-10-01"),
+])
+def test_advertio_normalizes_available_from_date(availability, expected):
+    payload = _service().build_payload(
+        _record(), _housing(availability=availability)
+    )
+    assert json.loads(payload["attributesJson"])["available_from"] == expected
+
+
+@pytest.mark.parametrize("availability", [
+    "Available now",
+    "September",
+    "Early November",
+    "after 2026-11-10",
+])
+def test_advertio_omits_vague_availability(availability):
+    payload = _service().build_payload(
+        _record(), _housing(availability=availability)
+    )
+    assert "available_from" not in json.loads(payload["attributesJson"])
+
+
+def test_advertio_uses_duration_semantics_from_legacy_availability():
+    payload = _service().build_payload(
+        _record(), _housing(availability="short-term", rent_period=None)
+    )
+    attrs = json.loads(payload["attributesJson"])
+    assert attrs["rental_duration"] == "short_term"
+    assert "available_from" not in attrs

@@ -873,3 +873,129 @@ def test_database_tab_furnished_edit_uses_normalization_rules(norm_db):
         "housinglist", housing_id, "furnished", "0", "furnished", 1485409432,
     )
     assert value == "unfurnished"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("9/11/26", "2026-09-11"),
+    ("11/1/26", "2026-11-01"),
+    ("9/1/23", "2023-09-01"),
+    ("9/21/23", "2023-09-21"),
+    ("9/1/26", "2026-09-01"),
+    ("2026-09-25 to 2026-10-05", "2026-09-25"),
+    ("10/10/26", "2026-10-10"),
+    ("10/1/26", "2026-10-01"),
+    ("Sep 1 2026 to Jun 30 2027", "2026-09-01"),
+    ("10/9/26", "2026-10-09"),
+    ("9/6/26", "2026-09-06"),
+    ("Oct 01,2026", "2026-10-01"),
+    ("9/18/26", "2026-09-18"),
+    ("10/1/23", "2023-10-01"),
+    ("1-Oct-26", "2026-10-01"),
+    ("9/30/26", "2026-09-30"),
+    ("5/1/26", "2026-05-01"),
+    ("2026-09-14 to 2026-10-23", "2026-09-14"),
+])
+def test_housing_availability_exact_dates_become_advertio_dates(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"availability": value}
+    )
+    assert normalized["availability"] == expected
+
+
+@pytest.mark.parametrize("value", [
+    "15-Sep",
+    "available",
+    "Available now",
+    "September",
+    "September‚ÄØ1",
+    "1-Sep",
+    "From 1 November",
+    "October",
+    "from 6 October",
+    "immediately",
+    "Available October",
+    "until December 1st",
+    "immediate",
+    "Early November",
+    "Ready to rent from September 1",
+    "21-Sep",
+    "mid-October",
+    "September 5 to November 5",
+    "Available October first",
+    "10-Oct",
+    "November 1st",
+    "ready to move in",
+    "Available: about 25 Sep ‚Äì 10 Nov",
+    "Available from mid-September",
+    "18 September to 30 November",
+    "October 1 or November 1",
+    "Available: November 1st",
+    "after 2026-11-10",
+    "null",
+    "",
+])
+def test_housing_availability_vague_dates_are_not_guessed(norm_db, value):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"availability": value}
+    )
+    assert normalized["availability"] is None
+
+
+@pytest.mark.parametrize("value,expected_period", [
+    ("short-term", "short_term"),
+    ("long-term", "long_term"),
+    ("short term", "short_term"),
+    ("short_term", "short_term"),
+    ("short-term or long-term", "short_term"),
+    ("temporary", "short_term"),
+    ("short term & long term", "short_term"),
+    ("short and long term", "short_term"),
+    ("short-term and long-term", "short_term"),
+    ("one year", "long_term"),
+    ("short-term and monthly", "short_term"),
+    ("short-term, monthly", "short_term"),
+    ("temporary or permanent", "short_term"),
+    ("Monthly / Short-Term", "short_term"),
+    ("1-6 months", "short_term"),
+    ("Short Term &long term", "short_term"),
+    ("long-term and short-term (minimum 3 months)", "short_term"),
+    ("short and medium term", "short_term"),
+    ("No short-term rentals", "long_term"),
+    ("daily", "daily"),
+])
+def test_housing_availability_duration_moves_to_rent_period(norm_db, value, expected_period):
+    normalized, changes = data_normalizer.normalize_category_data(
+        "housinglist", {"availability": value, "rent_period": None}
+    )
+    assert normalized["availability"] is None
+    assert normalized["rent_period"] == expected_period
+    assert changes["rent_period"] == (None, expected_period)
+
+
+def test_housing_availability_does_not_overwrite_existing_rent_period(norm_db):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"availability": "short-term", "rent_period": "long_term"}
+    )
+    assert normalized["availability"] is None
+    assert normalized["rent_period"] == "long_term"
+
+
+def test_manual_availability_edit_uses_date_normalizer(norm_db):
+    row_id = _insert_message(message_id=111)
+    conn = database.get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO housinglist(processed_message_id,availability) VALUES(?,?)",
+            (row_id, None),
+        )
+        housing_id = conn.execute(
+            "SELECT id FROM housinglist WHERE processed_message_id=?", (row_id,)
+        ).fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "availability", "10/10/26", None, 1485409432,
+    )
+    assert value == "2026-10-10"

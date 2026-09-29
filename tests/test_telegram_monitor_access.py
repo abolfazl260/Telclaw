@@ -1,8 +1,15 @@
 """Security regression tests for the monitoring bot's Telegram allowlist."""
 
-import pytest
+import logging
 
-from monitoring.telegram_monitor import ADMIN_USER_IDS, TelegramMonitor
+import pytest
+from aiohttp.http_exceptions import BadHttpMessage
+
+from monitoring.telegram_monitor import (
+    ADMIN_USER_IDS,
+    TelegramMonitor,
+    _is_expected_aiohttp_client_noise,
+)
 
 
 def update(user_id, *, chat_id=None, chat_type="private", command="/start"):
@@ -105,3 +112,22 @@ async def test_callback_requires_admin_sender_in_private_chat(monkeypatch):
 
     assert requested == []
     assert requests == []
+
+
+
+def test_aiohttp_http2_probe_is_not_promoted_to_system_alert():
+    exc = BadHttpMessage(message="Pause on PRI/Upgrade")
+    record = logging.LogRecord(
+        "aiohttp.server", logging.ERROR, __file__, 1,
+        "Error handling request from scanner", (), (BadHttpMessage, exc, None)
+    )
+    assert _is_expected_aiohttp_client_noise(record)
+
+
+def test_real_aiohttp_server_error_is_still_reportable():
+    exc = RuntimeError("application handler failed")
+    record = logging.LogRecord(
+        "aiohttp.server", logging.ERROR, __file__, 1,
+        "Error handling request", (), (RuntimeError, exc, None)
+    )
+    assert not _is_expected_aiohttp_client_noise(record)

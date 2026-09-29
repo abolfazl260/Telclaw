@@ -180,3 +180,38 @@ def test_property_condition_is_not_sent_to_advertio():
     attrs = json.loads(payload["attributesJson"])
     assert "property_condition" not in attrs
     assert "condition" not in attrs
+
+
+@pytest.mark.parametrize("contact,expected", [
+    ("@Zexade", "@Zexade"),
+    ("el7076", "@el7076"),
+    ('{"phone":"416-858-4558","telegram":"@At_Mel"}', "@At_Mel"),
+    ("Admin :pingtoping1", "@pingtoping1"),
+    ("https\\://t.me/GIGIIIIIIIII898", "@GIGIIIIIIIII898"),
+])
+def test_advertio_extracts_only_real_telegram_contact_handles(contact, expected):
+    payload = _service().build_payload(_record(), _housing(contact=contact))
+    assert payload["contactHandle"] == expected
+
+
+@pytest.mark.parametrize("contact", [
+    "416-432-7171",
+    "+1 (437)-771-7794",
+    "message",
+    "private",
+    "landlord",
+    '{"phone":"604-445-9201"}',
+])
+def test_advertio_does_not_use_phone_or_generic_text_as_contact_handle(contact):
+    record = _record()
+    record["sender_username"] = None
+    payload = _service().build_payload(record, _housing(contact=contact))
+    assert payload["contactHandle"] is None
+    assert payload["sourceUrl"]
+
+
+def test_sender_username_remains_valid_advertio_contact_fallback():
+    record = _record()
+    record["sender_username"] = "owner_123"
+    payload = _service().build_payload(record, _housing(contact=None))
+    assert payload["contactHandle"] == "@owner_123"

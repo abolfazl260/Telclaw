@@ -105,8 +105,9 @@ def _extract_media(message, channel_username):
     has_media = message.media is not None
     file_unique_id = None
     media_type = None
+    media_group_id = getattr(message, "grouped_id", None)
     if not message.media:
-        return has_media, media_type, file_unique_id, None, None
+        return has_media, media_type, file_unique_id, media_group_id, None, None
 
     if getattr(message.media, "document", None):
         file_unique_id = getattr(message.media.document, "id", None)
@@ -121,7 +122,7 @@ def _extract_media(message, channel_username):
         if channel_username
         else None
     )
-    return has_media, media_type, file_unique_id, message_link, media_reference
+    return has_media, media_type, file_unique_id, media_group_id, message_link, media_reference
 
 
 def _should_collect(media_type, crawl_mode):
@@ -258,7 +259,7 @@ async def crawl_channel(
                 print(f"⏭ [WEAK-TEXT-SKIPPED] channel={channel_username} message_id={message.id} word_count={word_count} threshold={MIN_MESSAGE_WORDS} reason=insufficient_text")
                 continue
 
-            has_media, media_type, file_unique_id, message_link, media_reference = _extract_media(message, channel_username)
+            has_media, media_type, file_unique_id, media_group_id, message_link, media_reference = _extract_media(message, channel_username)
             if not _should_collect(media_type, crawl_mode):
                 filtered_count += 1
                 continue
@@ -277,7 +278,8 @@ async def crawl_channel(
             media_path = None
             if has_media:
                 media_metadata_count += 1
-                print(f"   🖼️ [MEDIA-METADATA] type={media_type or 'unknown'} download=deferred")
+                album_label = f" album={media_group_id}" if media_group_id is not None else ""
+                print(f"   🖼️ [MEDIA-METADATA] type={media_type or 'unknown'}{album_label} download=deferred")
 
             try:
                 saved = repository.save_collected_message(
@@ -300,6 +302,7 @@ async def crawl_channel(
                     has_media=has_media,
                     media_type=media_type,
                     file_unique_id=file_unique_id,
+                    media_group_id=media_group_id,
                     media_path=media_path,
                     message_link=message_link,
                     media_reference=media_reference,

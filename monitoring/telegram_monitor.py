@@ -15,10 +15,26 @@ CRAWLER_ERRORS_LOG=PROJECT_ROOT / "crawler_errors.log"
 TELEGRAM_MAX_DOCUMENT_BYTES=50*1024*1024
 ADMIN_USER_IDS=frozenset({1485409432, 266809220, 7469291969, 106056586})
 
+def _is_expected_aiohttp_client_noise(record):
+    """Ignore malformed client protocol probes while keeping real server errors visible."""
+    if record.name != "aiohttp.server" or not record.exc_info:
+        return False
+    exc_type, exc, _ = record.exc_info
+    if exc_type is None or exc is None:
+        return False
+    module = getattr(exc_type, "__module__", "")
+    name = getattr(exc_type, "__name__", "")
+    if module != "aiohttp.http_exceptions" or name != "BadHttpMessage":
+        return False
+    detail = str(exc)
+    return "Pause on PRI/Upgrade" in detail or "Invalid method encountered" in detail
+
+
 class _TelegramErrorHandler(logging.Handler):
     def __init__(self,monitor): super().__init__(level=logging.ERROR); self.monitor=monitor
     def emit(self,record):
         if record.name.startswith("monitoring.telegram_monitor"): return
+        if _is_expected_aiohttp_client_noise(record): return
         try: asyncio.get_running_loop().create_task(self.monitor.error(record.levelname,record.name,self.format(record)))
         except RuntimeError: pass
 

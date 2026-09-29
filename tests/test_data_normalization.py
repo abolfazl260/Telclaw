@@ -1029,3 +1029,66 @@ def test_housing_property_condition_defaults_are_normalized(norm_db, value, expe
         "housinglist", {"property_condition": value}
     )
     assert normalized["property_condition"] == expected
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("Turkish Airlines", "Turkish Airlines"),
+    ("Air Tour", None),
+    ("Lufthansa, Iran Air", "Lufthansa, Iran Air"),
+    ("Lufthansa", "Lufthansa"),
+    ("null", None),
+    ("Lufthansa, Iranian flight", "Lufthansa"),
+    ("Malaysian Airline", "Malaysia Airlines"),
+    ("klm", "KLM"),
+    ("Lufthansa _ Iranian Flight", "Lufthansa"),
+    ("Qatar", "Qatar Airways"),
+    ("Lufthansa, Mahan", "Lufthansa, Mahan Air"),
+    ("Turkish", "Turkish Airlines"),
+    ("Mahan Air", "Mahan Air"),
+    ("Iran Air", "Iran Air"),
+    ("ÿß€åÿ±ÿ™ÿ±ÿßŸÜÿ≤€åÿ™", None),
+    ("ÿß€åÿ± ÿ™ÿ±ÿßŸÜÿ≥€åÿ™", None),
+    ("Iran Air - AirTran", "Iran Air"),
+    ("Lufthansa, Iranian Airline", "Lufthansa"),
+    ("Lufthansa, Iranian Airlines", "Lufthansa"),
+    ("Polish Airline", None),
+    ("Air Canada/Turkish", "Air Canada, Turkish Airlines"),
+    ("Air Transit", "Air Transat"),
+    ("Qatari", "Qatar Airways"),
+    ("Turkish Airlines and Iran Air Tours", "Turkish Airlines, Iran Airtour"),
+    ("Iranian", None),
+    ("Turkish Airlines + Iranian Airlines", "Turkish Airlines"),
+    ("Airtransat", "Air Transat"),
+    ("ŸÑŸàŸÅÿ™ÿßŸÜÿ≤ÿß", "Lufthansa"),
+    ("Delta Air", "Delta Air Lines"),
+    ("Air Transat", "Air Transat"),
+    ("Qatar Airways", "Qatar Airways"),
+    ("Air Transat and Mahan Air", "Air Transat, Mahan Air"),
+    ("Air Transt and Iranian Airlines", "Air Transat"),
+    ("Malaysia Air", "Malaysia Airlines"),
+    ("Iranian and Dubai", None),
+    ("Qeshm Air", "Qeshm Air"),
+    ("Varig", "VARIG"),
+    ("Ÿàÿßÿ±ÿ¥", "Varesh Airlines"),
+    ("Iranian airline", None),
+    ("Iran Air Tours - Lufthansa", "Iran Airtour, Lufthansa"),
+    ("EMIRATES", "Emirates"),
+    ("unknown airline", None),
+    ("Iranian Airlines", None),
+    ("FlyKish", "Fly Kish Airlines"),
+    ("Flight to Kish Island", None),
+    ("Iran Airlines", None),
+    ("Sepahran", "Sepehran Airlines"),
+    ("Mahan Air or Kam Air", "Mahan Air, Kam Air"),
+    ("Iran Air Tours", "Iran Airtour"),
+    ("Iran Air and Turkish", "Iran Air, Turkish Airlines"),
+    ("Iran Airtour", "Iran Airtour"),
+    ("Iran Air, Lufthansa", "Iran Air, Lufthansa"),
+    ("China Southern", "China Southern Airlines"),
+    ("", None),
+])
+def test_transfer_airline_defaults_are_normalized(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "transferlist", {"airline": value}
+    )
+    assert normalized["airline"] == expected

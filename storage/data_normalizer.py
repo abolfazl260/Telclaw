@@ -103,6 +103,10 @@ def _seed_defaults(conn):
          "Generic multi property type normalized to apartment"),
         ("housinglist", "property_type", "townhouse", "apartment", "",
          "Townhouse normalized to apartment"),
+        ("housinglist", "listing_type", "for sale", "sale", "",
+         "For-sale listing type normalized to sale"),
+        ("housinglist", "listing_type", "sale", "sale", "",
+         "Canonical sale listing type"),
     ])
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(

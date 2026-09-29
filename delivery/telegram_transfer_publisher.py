@@ -9,6 +9,7 @@ import aiohttp
 
 import config
 from storage import database
+from storage.data_normalizer import normalize_category_data
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +179,7 @@ class TelegramTransferPublisher:
 
     @classmethod
     def format_ad(cls, record, data):
+        data, _ = normalize_category_data("transferlist", data)
         origin = cls._value(data, "origin_city")
         destination = cls._value(data, "destination_city")
         if not origin or not destination:

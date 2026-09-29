@@ -48,7 +48,7 @@ SPECS = (
     _s("TELCLAW_AI_INTERVAL_MINUTES", "AI_INTERVAL_MINUTES", "Runtime", kind="float", minimum=0, fallback="1"),
 
     _s("AI_PROVIDER_1", None, "AI Providers", choices=("groq", "cloudflare"), restart=True, fallback="groq"),
-    _s("AI_PROVIDER_2", None, "AI Providers", choices=("", "groq", "cloudflare"), restart=True, fallback="cloudflare"),
+    _s("AI_PROVIDER_2", None, "AI Providers", choices=("", "groq", "cloudflare"), restart=True),
     _s("AI_RETRY_COUNT", "AI_RETRY_COUNT", "AI Providers", kind="int", minimum=0, fallback="3"),
     _s("AI_TIMEOUT_SECONDS", "AI_TIMEOUT_SECONDS", "AI Providers", kind="float", minimum=1, fallback="60"),
     _s("AI_COOLDOWN_SECONDS", "AI_COOLDOWN_SECONDS", "AI Providers", kind="float", minimum=0, fallback="200"),
@@ -80,13 +80,13 @@ SPECS = (
     _s("TELCLAW_CLOUDFLARE_REQUESTS_PER_MINUTE", "CLOUDFLARE_REQUESTS_PER_MINUTE", "Cloudflare", kind="int", minimum=1, fallback="30"),
     _s("TELCLAW_CLOUDFLARE_TIMEOUT_SECONDS", "CLOUDFLARE_TIMEOUT_SECONDS", "Cloudflare", kind="float", minimum=1, fallback="60"),
 
-    _s("TELCLAW_AI_CLASSIFICATION_ENABLED", "AI_CLASSIFICATION_ENABLED", "AI Classification", kind="bool", fallback="true"),
+    _s("TELCLAW_AI_CLASSIFICATION_ENABLED", "AI_CLASSIFICATION_ENABLED", "AI Classification", kind="bool", fallback="false"),
     _s("TELCLAW_AI_CLASSIFICATION_BATCH_SIZE", "AI_CLASSIFICATION_BATCH_SIZE", "AI Classification", kind="int", minimum=1, fallback="50"),
     _s("TELCLAW_AI_CLASSIFICATION_MAX_RETRIES", "AI_CLASSIFICATION_MAX_RETRIES", "AI Classification", kind="int", minimum=0, fallback="3"),
-    _s("TELCLAW_AI_EXTRACTION_ENABLED", "AI_EXTRACTION_ENABLED", "AI Extraction", kind="bool", fallback="true"),
-    _s("TELCLAW_AI_EXTRACTION_HOUSINGLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="true"),
-    _s("TELCLAW_AI_EXTRACTION_TRANSFERLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="true"),
-    _s("TELCLAW_AI_EXTRACTION_JOBLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="true"),
+    _s("TELCLAW_AI_EXTRACTION_ENABLED", "AI_EXTRACTION_ENABLED", "AI Extraction", kind="bool", fallback="false"),
+    _s("TELCLAW_AI_EXTRACTION_HOUSINGLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="false"),
+    _s("TELCLAW_AI_EXTRACTION_TRANSFERLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="false"),
+    _s("TELCLAW_AI_EXTRACTION_JOBLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="false"),
 
     _s("TELCLAW_TELEGRAM_MONITOR_ENABLED", "TELEGRAM_MONITOR_ENABLED", "Monitoring", kind="bool", restart=True, fallback="false"),
     _s("TELCLAW_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "Monitoring", secret=True, restart=True),
@@ -177,6 +177,14 @@ def overrides():
 
 
 def env_default(spec):
+    if spec.key == "TELCLAW_CLOUDFLARE_TIMEOUT_SECONDS":
+        return os.getenv(spec.key, os.getenv("AI_TIMEOUT_SECONDS", spec.fallback or "60"))
+    if spec.key in {
+        "TELCLAW_AI_EXTRACTION_HOUSINGLIST_ENABLED",
+        "TELCLAW_AI_EXTRACTION_TRANSFERLIST_ENABLED",
+        "TELCLAW_AI_EXTRACTION_JOBLIST_ENABLED",
+    }:
+        return os.getenv(spec.key, os.getenv("TELCLAW_AI_EXTRACTION_ENABLED", "false"))
     return os.getenv(spec.key, spec.fallback)
 
 
@@ -239,9 +247,9 @@ def apply_persisted_overrides():
     stored = overrides()
 
     for spec in SPECS:
-        if spec.readonly or spec.attr is None or spec.key not in stored:
+        if spec.readonly or spec.attr is None:
             continue
-        setattr(config, spec.attr, _parse(spec, stored[spec.key]))
+        setattr(config, spec.attr, _parse(spec, effective_raw(spec, stored)))
 
     providers = tuple(
         value.strip().lower()

@@ -188,6 +188,10 @@ class TelegramTransferPublisher:
         if ad_number is not None:
             lines.append(f"TR-{int(ad_number):06d}")
             lines.append("")
+        title = cls._remove_emojis(cls._value(data, "title"))
+        if title:
+            lines.append(f"📌 عنوان: {title}")
+            lines.append("")
         lines.extend([
             cls._location_line("مبدا", origin, cls._value(data, "origin_country")),
             cls._location_line("مقصد", destination, cls._value(data, "destination_country")),

@@ -227,10 +227,17 @@ def get_messages_by_status(status,limit=500,channel_username=None): return _get_
 def get_processing_pending_messages(limit=500,channel_username=None): return _get_messages("collection_status='collected' AND processing_status='pending'",[],limit,channel_username)
 def get_classification_pending_messages(limit=50,channel_username=None): return _get_messages("processing_status='processed' AND NULLIF(TRIM(ai_category), '') IS NULL AND (classification_status='pending' OR (classification_status='failed' AND classification_attempts<?))",[config.AI_CLASSIFICATION_MAX_RETRIES],limit,channel_username)
 def get_ai_pending_messages(limit=100,channel_username=None): return _get_messages("processing_status='processed' AND classification_status='processed' AND classification_category IN ('housinglist','transferlist','joblist') AND ai_status='pending'",[],limit,channel_username)
-def get_advertio_pending_messages(limit=100,channel_username=None):
+def get_advertio_pending_messages(limit=100,channel_username=None,before_datetime=None):
     conn=get_connection()
     try:
         sql="SELECT m.*,h.* FROM messages m INNER JOIN housinglist h ON h.processed_message_id=m.id WHERE m.processing_status='processed' AND m.ai_status='processed' AND m.ai_category='housinglist' AND COALESCE(m.advertio_status,'waiting') IN ('waiting','retry')"; values=[]
+        if before_datetime:
+            sql += """ AND (
+                (COALESCE(m.advertio_status,'waiting')='retry' AND (m.advertio_processed_at IS NULL OR m.advertio_processed_at < ?))
+                OR
+                (COALESCE(m.advertio_status,'waiting')='waiting' AND (m.ai_processed_at IS NULL OR m.ai_processed_at < ?))
+            )"""
+            values.extend([before_datetime,before_datetime])
         if channel_username: sql += " AND m.channel_username=?"; values.append(channel_username)
         sql += " ORDER BY m.id LIMIT ?"; values.append(int(limit)); rows=conn.execute(sql,values).fetchall(); results=[]
         for row in rows:

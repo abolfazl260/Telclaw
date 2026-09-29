@@ -770,3 +770,105 @@ def test_housing_area_with_unknown_unit_is_not_assumed_to_be_sqm(norm_db):
     )
     assert normalized["area"] == 100
     assert normalized["area_unit"] == "unknown-unit"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1", "furnished"),
+    (1, "furnished"),
+    ("yes", "furnished"),
+    ("TRUE", "furnished"),
+    (True, "furnished"),
+    ("furnished", "furnished"),
+    ("0", "unfurnished"),
+    (0, "unfurnished"),
+    ("no", "unfurnished"),
+    ("FALSE", "unfurnished"),
+    (False, "unfurnished"),
+    ("unfurnished", "unfurnished"),
+    ("partial", "partially"),
+    ("partially", "partially"),
+    ("partially furnished", "partially"),
+    ("null", None),
+    ("", None),
+])
+def test_housing_furnished_defaults_match_advertio_enum(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"furnished": value}
+    )
+    assert normalized["furnished"] == expected
+
+
+def test_housing_furnished_schema_migrates_integer_to_text(tmp_path, monkeypatch):
+    db_path = tmp_path / "furnished-migration.sqlite3"
+    monkeypatch.setattr(config, "DB_NAME", str(db_path))
+
+    conn = database.get_connection()
+    try:
+        conn.execute("""CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_username TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            text TEXT,
+            date TEXT NOT NULL,
+            UNIQUE(channel_username,message_id)
+        )""")
+        conn.execute("""CREATE TABLE housinglist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            processed_message_id INTEGER NOT NULL UNIQUE,
+            furnished INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE
+        )""")
+        for message_id, furnished in [(1, 1), (2, 0), (3, None)]:
+            conn.execute(
+                "INSERT INTO messages(channel_username,message_id,text,date) VALUES('source',?,'x','2026-09-29')",
+                (message_id,),
+            )
+            processed_id = conn.execute(
+                "SELECT id FROM messages WHERE message_id=?", (message_id,)
+            ).fetchone()["id"]
+            conn.execute(
+                "INSERT INTO housinglist(processed_message_id,furnished) VALUES(?,?)",
+                (processed_id, furnished),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.initialize_db()
+
+    conn = database.get_connection()
+    try:
+        schema = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(housinglist)")}
+        values = [row["furnished"] for row in conn.execute("SELECT furnished FROM housinglist ORDER BY id")]
+    finally:
+        conn.close()
+
+    assert schema["furnished"] == "TEXT"
+    assert values == ["furnished", "unfurnished", None]
+
+
+def test_database_tab_furnished_edit_uses_normalization_rules(norm_db):
+    row_id = _insert_message(message_id=99)
+    conn = database.get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO housinglist(processed_message_id,furnished) VALUES(?,?)",
+            (row_id, "unfurnished"),
+        )
+        housing_id = conn.execute(
+            "SELECT id FROM housinglist WHERE processed_message_id=?", (row_id,)
+        ).fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "furnished", "yes", "unfurnished", 1485409432,
+    )
+    assert value == "furnished"
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "furnished", "0", "furnished", 1485409432,
+    )
+    assert value == "unfurnished"

@@ -7,7 +7,7 @@ from colorama import Fore
 from ai.ai_service import AIProcessingService
 from ai.classification_service import CategoryClassificationService
 from ai.groq_connection_test import test_groq_connection
-from collection.media_downloader import download_photo_for_record
+from collection.media_downloader import download_photos_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
 from delivery.telegram_transfer import (
     get_ready_transfer_ads,
@@ -44,7 +44,7 @@ class SystemConsoleUI(ConsoleUI):
 
         def download(record):
             future = asyncio.run_coroutine_threadsafe(
-                download_photo_for_record(self.client, record), loop
+                download_photos_for_record(self.client, record), loop
             )
             return future.result()
 

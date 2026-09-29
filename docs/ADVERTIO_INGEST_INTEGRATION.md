@@ -238,9 +238,22 @@ Advertio documents ~5,000 listings/month and recommends concurrency 2–3 despit
 
 Telclaw therefore does not implement an unbounded upload fan-out. `TELCLAW_ADVERTIO_CONCURRENCY` is capped at 3.
 
+## Automatic delivery retry worker
+
+The scheduler runs a dedicated Advertio delivery pass after the processing/classification/extraction stages. It handles persisted `waiting` and `retry` housing records without re-running AI.
+
+To avoid hammering Advertio, the worker receives a cutoff timestamp captured before the current processing/AI pass:
+
+- a `retry` created during the current pass is not attempted again immediately;
+- a `waiting` record created/skipped during the current pass is left for a later cycle;
+- older `waiting`/`retry` records are eligible on the next scheduler cycle;
+- photo media is restored lazily from Telegram when the local cache is missing;
+- operator `advertio` skip requests are consumed by the scheduler, leaving records pending for the next cycle.
+
+This gives transient failures at least one scheduler-cycle delay before another attempt.
+
 ## Future work
 
-1. Add a dedicated Advertio delivery queue/worker for retryable 5xx/network failures.
-2. Add Telegram deletion/update event handling so the Advertio DELETE operation is triggered from a verified source deletion event.
-3. Add an optional connection/test command that verifies `X-Ingest-Key` without creating a lead.
-4. Keep Advertio-specific fields in the housing schema; do not hide required country/province/city data only inside the delivery adapter.
+1. Add Telegram deletion/update event handling so the Advertio DELETE operation is triggered from a verified source deletion event.
+2. Add an optional connection/test command that verifies `X-Ingest-Key` without creating a lead.
+3. Keep Advertio-specific fields in the housing schema; do not hide required country/province/city data only inside the delivery adapter.

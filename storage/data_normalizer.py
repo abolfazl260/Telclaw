@@ -5,6 +5,7 @@ category fields and are persisted in SQLite so Back Office users can manage them
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 import unicodedata
@@ -646,7 +647,7 @@ def extract_telegram_handle(value, *, allow_plain=False):
 
     if text[:1] in "[{":
         try:
-            decoded = __import__("json").loads(text)
+            decoded = json.loads(text)
         except (TypeError, ValueError):
             decoded = None
         if decoded is not None:
@@ -703,7 +704,7 @@ def normalize_contact_phone(value):
 
     if text[:1] in "[{":
         try:
-            decoded = __import__("json").loads(text)
+            decoded = json.loads(text)
         except (TypeError, ValueError):
             decoded = None
         if decoded is not None:

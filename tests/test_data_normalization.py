@@ -553,3 +553,48 @@ def test_housing_bedrooms_defaults_match_advertio_enum(norm_db, value, expected)
         "housinglist", {"bedrooms": value}
     )
     assert normalized["bedrooms"] == expected
+
+
+def test_housing_bedrooms_schema_migrates_integer_to_text_without_data_loss(tmp_path, monkeypatch):
+    db_path = tmp_path / "bedrooms-migration.sqlite3"
+    monkeypatch.setattr(config, "DB_NAME", str(db_path))
+
+    conn = database.get_connection()
+    try:
+        conn.execute("""CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_username TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            text TEXT,
+            date TEXT NOT NULL,
+            UNIQUE(channel_username,message_id)
+        )""")
+        conn.execute("""CREATE TABLE housinglist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            processed_message_id INTEGER NOT NULL UNIQUE,
+            bedrooms INTEGER,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE
+        )""")
+        conn.execute("INSERT INTO messages(channel_username,message_id,text,date) VALUES('source',1,'x','2026-09-29')")
+        message_id = conn.execute("SELECT id FROM messages WHERE message_id=1").fetchone()["id"]
+        conn.execute("INSERT INTO housinglist(processed_message_id,bedrooms) VALUES(?,?)", (message_id, 2))
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.initialize_db()
+
+    conn = database.get_connection()
+    try:
+        schema = {row["name"]: row["type"] for row in conn.execute("PRAGMA table_info(housinglist)")}
+        row = conn.execute("SELECT bedrooms FROM housinglist").fetchone()
+    finally:
+        conn.close()
+
+    assert schema["bedrooms"] == "TEXT"
+    assert row["bedrooms"] == "2"
+
+
+def test_bedrooms_is_available_in_normalization_backoffice_targets(norm_db):
+    assert "bedrooms" in data_normalizer.aliasable_fields()["housinglist"]

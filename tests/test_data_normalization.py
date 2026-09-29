@@ -481,3 +481,31 @@ def test_housing_neighborhood_rules_are_scoped_to_canada(norm_db):
     )
     assert canada["neighborhood"] is None
     assert italy["neighborhood"] == "Multiple"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1 ŸÖÿßŸáŸá", "short_term"),
+    ("1-6 months", "short_term"),
+    ("2 months", "short_term"),
+    ("3 months", "short_term"),
+    ("6 months", "short_term"),
+    ("6 months or less", "short_term"),
+    ("daily", "daily"),
+    ("month", "long_term"),
+    ("monthly", "long_term"),
+    ("Monthly / Short-Term", "short_term"),
+    ("Monthly, Short-Term", "short_term"),
+    ("one month", "short_term"),
+    ("short-term", "short_term"),
+    ("weekly", "short_term"),
+    ("weekly and monthly", "short_term"),
+    ("year", "long_term"),
+    ("yearly", "long_term"),
+    ("null", None),
+    ("", None),
+])
+def test_housing_rent_period_defaults_match_advertio_duration_enum(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"rent_period": value}
+    )
+    assert normalized["rent_period"] == expected

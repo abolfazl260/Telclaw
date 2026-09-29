@@ -999,3 +999,33 @@ def test_manual_availability_edit_uses_date_normalizer(norm_db):
         "housinglist", housing_id, "availability", "10/10/26", None, 1485409432,
     )
     assert value == "2026-10-10"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("fully renovated", "renovated"),
+    ("new", "new"),
+    ("renovated", "renovated"),
+    ("good", "good"),
+    ("null", None),
+    ("newly renovated", "renovated"),
+    ("Fully furnished, clean, ready to move in", "clean"),
+    ("Newly painted", "newly painted"),
+    ("newly built", "new"),
+    ("ready for move-in", None),
+    ("clean and organized", "clean"),
+    ("recently renovated", "renovated"),
+    ("excellent", "excellent"),
+    ("luxury", "luxury"),
+    ("clean", "clean"),
+    ("New and resale", None),
+    ("brand new", "new"),
+    ("almost new", "new"),
+    ("furnished, ready to move in", None),
+    ("modern", "modern"),
+    ("", None),
+])
+def test_housing_property_condition_defaults_are_normalized(norm_db, value, expected):
+    normalized, _ = data_normalizer.normalize_category_data(
+        "housinglist", {"property_condition": value}
+    )
+    assert normalized["property_condition"] == expected

@@ -78,3 +78,13 @@ def test_roommate_age_range_and_gender_use_documented_shapes():
     attrs = json.loads(payload["attributesJson"])
     assert attrs["gender_preference"] == "female"
     assert attrs["age_range"] == [20, 35]
+
+
+def test_canonical_rent_period_maps_to_advertio_rental_duration():
+    short_payload = _service().build_payload(_record(), _housing(rent_period="short_term"))
+    long_payload = _service().build_payload(_record(), _housing(rent_period="long_term"))
+    daily_payload = _service().build_payload(_record(), _housing(rent_period="daily"))
+
+    assert json.loads(short_payload["attributesJson"])["rental_duration"] == "short_term"
+    assert json.loads(long_payload["attributesJson"])["rental_duration"] == "long_term"
+    assert json.loads(daily_payload["attributesJson"])["rental_duration"] == "daily"

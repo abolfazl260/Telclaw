@@ -118,6 +118,7 @@ def _seed_defaults(conn):
         ("housinglist", "province", "ON", "Ontario", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "PE", "Prince Edward Island", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "QC", "Quebec", "CA", "Canadian province code to full name"),
+        ("housinglist", "province", "Quebec", "Quebec", "CA", "Canonical Canadian province name"),
         ("housinglist", "province", "SK", "Saskatchewan", "CA", "Canadian province code to full name"),
         ("housinglist", "province", "YT", "Yukon", "CA", "Canadian territory code to full name"),
         ("housinglist", "province", "Qu√©bec", "Quebec", "CA", "Repair mojibake province name"),

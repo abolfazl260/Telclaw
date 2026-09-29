@@ -135,6 +135,34 @@ def _seed_defaults(conn):
         ("housinglist", "province", "YT", "Yukon", "CA", "Canadian territory code to full name"),
         ("housinglist", "province", "Qu√©bec", "Quebec", "CA", "Repair mojibake province name"),
         ("housinglist", "province", "Lazio", None, "CA", "Invalid Canadian province; do not guess"),
+        ("housinglist", "city", "Bernaby", "Burnaby", "CA", "Correct common city misspelling"),
+        ("housinglist", "city", "C√¥te-Saint-Luc", "Côte-Saint-Luc", "CA", "Repair mojibake city name"),
+        ("housinglist", "city", "Montr√©al", "Montreal", "CA", "Repair mojibake city name"),
+        ("housinglist", "city", "Richmondhill", "Richmond Hill", "CA", "Canonical city spelling"),
+        ("housinglist", "city", "Multiple", None, "CA", "Ambiguous multi-city value"),
+        ("housinglist", "city", "Multiple cities", None, "CA", "Ambiguous multi-city value"),
+        ("housinglist", "city", "RICHMOND HILL & AURORA", None, "CA", "Multiple cities; do not guess"),
+        ("housinglist", "city", "Rome or Blonay", None, "CA", "Multiple/ambiguous cities; do not guess"),
+        ("housinglist", "city", "Ram", None, "CA", "Ambiguous invalid Canadian city"),
+        ("housinglist", "city", "Rim", None, "CA", "Ambiguous invalid Canadian city"),
+        ("housinglist", "city", "Rum", None, "CA", "Ambiguous invalid Canadian city"),
+        ("housinglist", "city", "Rumiyah", None, "CA", "Invalid Canadian city; do not guess"),
+        ("housinglist", "city", "Lanzadel", None, "CA", "Unresolved city value; do not guess"),
+        ("housinglist", "city", "Terrenee", None, "CA", "Unresolved city value; do not guess"),
+        ("housinglist", "city", "Tehran (Rum)", None, "CA", "Ambiguous non-Canadian city value"),
+        ("housinglist", "city", "Caserta", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Cookeville", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "D√ºsseldorf", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Düsseldorf", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Frankfurt", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "K√∂ln", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Köln", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Mashhad", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Roma", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Tehran", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Torino", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Turin", None, "CA", "Known non-Canadian city in Canadian housing scope"),
+        ("housinglist", "city", "Lazio", None, "CA", "Region/non-city value in Canadian housing scope"),
     ])
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(
@@ -250,12 +278,46 @@ def _country_matches(rule, category, field_name, data):
 
 _NULL_LIKE_TEXT = {"", "null", "none", "n/a", "na", "unknown", "not provided", "-"}
 
+_HOUSING_CITY_BY_PROVINCE = {
+    ("Ontario", "Don Mills"): "Toronto",
+    ("Ontario", "Don Valley"): "Toronto",
+    ("Ontario", "East Woodbridge"): "Vaughan",
+    ("Ontario", "Maple"): "Vaughan",
+    ("Ontario", "North York"): "Toronto",
+    ("Ontario", "Oak Ridges"): "Richmond Hill",
+    ("Ontario", "Yonge / Finch"): "Toronto",
+    ("British Columbia", "North Burnaby"): "Burnaby",
+    ("British Columbia", "Yaletown"): "Vancouver",
+}
+
+
+def _normalize_contextual_value(category, field_name, value, data):
+    if category != "housinglist" or field_name != "city":
+        return value
+    country = str(data.get("country_code") or "").strip().upper()
+    if country != "CA":
+        return value
+
+    text = str(value or "").strip()
+    key = _alias_key(text)
+    if key.startswith("rum ("):
+        return None
+
+    province = str(data.get("province") or "").strip()
+    for (expected_province, alias), canonical in _HOUSING_CITY_BY_PROVINCE.items():
+        if _alias_key(province) == _alias_key(expected_province) and key == _alias_key(alias):
+            return canonical
+    return value
+
 
 def _normalize_with_rules(category, field_name, value, data, rules):
     if value is None or isinstance(value, (dict, list, tuple, bool)):
         return value
     if str(value).strip().casefold() in _NULL_LIKE_TEXT:
         return None
+    contextual = _normalize_contextual_value(category, field_name, value, data)
+    if contextual != value:
+        return contextual
     key = _alias_key(value)
     if not key:
         return value

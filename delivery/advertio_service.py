@@ -113,28 +113,52 @@ class AdvertioDeliveryService:
 
     @staticmethod
     def _media_paths(record):
-        path = record.get("media_path")
-        if not path:
-            return []
-        return [path]
+        value = record.get("media_paths")
+        paths = []
+        if isinstance(value, (list, tuple)):
+            paths = [str(path) for path in value if path]
+        elif isinstance(value, str) and value.strip():
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                decoded = []
+            if isinstance(decoded, list):
+                paths = [str(path) for path in decoded if path]
+
+        if not paths and record.get("media_path"):
+            paths = [str(record["media_path"])]
+
+        ordered = []
+        seen = set()
+        for path in paths:
+            if path not in seen:
+                ordered.append(path)
+                seen.add(path)
+        return ordered[:10]
 
     def _cleanup_delivered_media(self, record):
-        """Remove only the delivered record's local media after successful delivery.
+        """Remove all delivered local media after a successful Advertio delivery.
 
         Cleanup is deliberately best-effort: a cleanup failure must never turn a
-        successfully recorded Advertio delivery into a retry/failure.
+        successfully recorded Advertio delivery into a retry/failure. The database
+        paths are cleared only when every local file was removed or already absent.
         """
-        path_value = record.get("media_path")
-        if not path_value:
+        paths = self._media_paths(record)
+        if not paths:
             return
 
-        path = Path(path_value)
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            logger.warning("Advertio media cleanup skipped; file already missing: %s", path)
-        except OSError as exc:
-            logger.error("Advertio media cleanup failed for %s: %s", path, exc)
+        cleanup_failed = False
+        for path_value in paths:
+            path = Path(path_value)
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                logger.warning("Advertio media cleanup skipped; file already missing: %s", path)
+            except OSError as exc:
+                cleanup_failed = True
+                logger.error("Advertio media cleanup failed for %s: %s", path, exc)
+
+        if cleanup_failed:
             return
 
         try:
@@ -142,6 +166,8 @@ class AdvertioDeliveryService:
                 record["message_id"],
                 record["channel_username"],
             )
+            record["media_path"] = None
+            record["media_paths"] = []
         except Exception as exc:
             logger.error(
                 "Advertio media_path DB cleanup failed for message=%s channel=%s: %s",

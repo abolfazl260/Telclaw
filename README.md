@@ -225,6 +225,20 @@ Telegram API credentials are loaded from environment variables and are never com
 1. Copy `.env.example` to `.env`.
 2. Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`.
 
+### Structured data normalization
+
+The Back Office **Normalization** tab manages exact, field-specific alias rules
+for structured category data. Raw Telegram source text is preserved. New AI
+extractions are normalized before persistence and publishing, manual Database-tab
+edits use the same rules, and existing rows can be re-normalized explicitly after
+reviewing the affected counts. Alias matching is case- and accent-insensitive and
+can optionally be scoped by an ISO2 country code. A rule may also map an ambiguous
+value to SQL NULL.
+
+Built-in transfer aliases cover common variants such as Dusseldorf/Düsseldorf,
+Frankfurt (Main)/Frankfurt, LA/Los Angeles and Imam Airport/Tehran. Multi-city
+values such as Dusseldorf/Wuppertal are treated as ambiguous rather than guessed.
+
 ### Back Office settings precedence
 
 The Back Office **Settings** tab exposes the configuration keys documented in

@@ -633,13 +633,20 @@ def normalize_builtin_field_value(category, field_name, value):
     if category == "housinglist" and field_name == "furnished":
         if value is None:
             return None
-        if value is True:
+        if value is True or value == 1:
             return "furnished"
-        if value is False:
+        if value is False or value == 0:
             return "unfurnished"
         text = str(value).strip()
-        if text.casefold() in _NULL_LIKE_TEXT:
+        key = text.casefold()
+        if key in _NULL_LIKE_TEXT:
             return None
+        if key in {"1", "yes", "true", "furnished"}:
+            return "furnished"
+        if key in {"0", "no", "false", "unfurnished"}:
+            return "unfurnished"
+        if key in {"partial", "partially", "partially furnished"}:
+            return "partially"
         return value
 
     if category == "housinglist" and field_name == "bathrooms":

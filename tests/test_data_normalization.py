@@ -598,3 +598,28 @@ def test_housing_bedrooms_schema_migrates_integer_to_text_without_data_loss(tmp_
 
 def test_bedrooms_is_available_in_normalization_backoffice_targets(norm_db):
     assert "bedrooms" in data_normalizer.aliasable_fields()["housinglist"]
+
+
+def test_database_tab_bedrooms_edit_uses_normalization_rules(norm_db):
+    row_id = _insert_message(message_id=77)
+    conn = database.get_connection()
+    try:
+        conn.execute("INSERT INTO housinglist(processed_message_id,bedrooms) VALUES(?,?)", (row_id, "2"))
+        housing_id = conn.execute(
+            "SELECT id FROM housinglist WHERE processed_message_id=?", (row_id,)
+        ).fetchone()["id"]
+        conn.commit()
+    finally:
+        conn.close()
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "bedrooms", "master", "2", 1485409432,
+    )
+    assert value == "1"
+    assert backoffice_data.cell("housinglist", housing_id, "bedrooms")["value"] == "1"
+
+    value = backoffice_data.update_cell(
+        "housinglist", housing_id, "bedrooms", "4", "1", 1485409432,
+    )
+    assert value == "4+"
+    assert backoffice_data.cell("housinglist", housing_id, "bedrooms")["value"] == "4+"

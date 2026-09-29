@@ -8,7 +8,7 @@ from pathlib import Path
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
-from storage.data_normalizer import normalize_housing_area
+from storage.data_normalizer import availability_rent_period, normalize_housing_area, normalize_housing_availability
 from storage.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
@@ -177,14 +177,7 @@ class AdvertioDeliveryService:
 
     @staticmethod
     def _date(value):
-        if not value:
-            return None
-        text = str(value).strip()[:10]
-        try:
-            datetime.strptime(text, "%Y-%m-%d")
-        except ValueError:
-            return None
-        return text
+        return normalize_housing_availability(value)
 
     @classmethod
     def _infer_rental_duration(cls, data, record):
@@ -194,11 +187,13 @@ class AdvertioDeliveryService:
         Advertio enum. Ambiguous/no duration defaults to long_term because this is the safest
         interpretation for ordinary monthly housing rentals and does not invent a short stay.
         """
-        explicit = str(
+        explicit_source = (
             data.get("rental_duration")
             or data.get("rent_period")
+            or availability_rent_period(data.get("availability"))
             or ""
-        ).strip().lower().replace("-", "_").replace(" ", "_")
+        )
+        explicit = str(explicit_source).strip().lower().replace("-", "_").replace(" ", "_")
         aliases = {
             "daily": "daily", "day": "daily", "per_day": "daily", "daily_rental": "daily",
             "short_term": "short_term", "shortterm": "short_term", "short": "short_term",

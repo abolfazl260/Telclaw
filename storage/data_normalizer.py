@@ -5,6 +5,7 @@ category fields and are persisted in SQLite so Back Office users can manage them
 """
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
 from datetime import datetime, timezone
@@ -416,6 +417,55 @@ def _country_matches(rule, category, field_name, data):
 
 _NULL_LIKE_TEXT = {"", "null", "none", "n/a", "na", "unknown", "not provided", "-"}
 
+
+def normalize_builtin_field_value(category, field_name, value):
+    """Apply deterministic non-alias normalization for typed structured fields."""
+    if category == "housinglist" and field_name == "bathrooms":
+        if value is None or isinstance(value, bool):
+            return None
+        text = str(value).strip()
+        if text.casefold() in _NULL_LIKE_TEXT:
+            return None
+        # Values like "2+1" mean two full bathrooms plus an extra partial/secondary
+        # bathroom in this dataset. The product policy is to round the bathroom
+        # count down, so only the first numeric component is relevant.
+        match = re.match(r"^([+-]?\d+(?:\.\d+)?)", text)
+        if not match:
+            return None
+        try:
+            number = float(match.group(1))
+        except ValueError:
+            return None
+        if not math.isfinite(number):
+            return None
+        rounded = math.floor(number)
+        # Advertio accepts bathroom counts from 1 through 10.
+        if rounded < 1 or rounded > 10:
+            return None
+        return rounded
+    return value
+
+
+def normalize_structured_field_value(category, field_name, value, row_data=None):
+    """Normalize one structured field, including typed built-ins and alias rules."""
+    if category not in database.CATEGORY_TABLES or field_name not in database.CATEGORY_TABLES[category]:
+        raise ValueError("Unknown normalization field")
+    data = dict(row_data or {})
+    data[field_name] = value
+    normalized = normalize_builtin_field_value(category, field_name, value)
+    if field_name not in aliasable_fields().get(category, ()):
+        return normalized
+
+    initialize()
+    conn = database.get_connection()
+    try:
+        rules = _rules_for_category(conn, category)
+        data[field_name] = normalized
+        return _normalize_with_rules(category, field_name, normalized, data, rules)
+    finally:
+        conn.close()
+
+
 _HOUSING_CITY_BY_PROVINCE = {
     ("Ontario", "Don Mills"): "Toronto",
     ("Ontario", "Don Valley"): "Toronto",
@@ -514,7 +564,8 @@ def normalize_category_data(category, data, *, conn=None):
             if field_name not in result:
                 continue
             before = result.get(field_name)
-            after = _normalize_with_rules(category, field_name, before, result, rules)
+            built_in = normalize_builtin_field_value(category, field_name, before)
+            after = _normalize_with_rules(category, field_name, built_in, result, rules)
             if after != before:
                 result[field_name] = after
                 changes[field_name] = (before, after)

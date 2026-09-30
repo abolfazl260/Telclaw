@@ -33,6 +33,8 @@ def _plain_ad(record):
         else:
             lines.append(f"{field.replace('_', ' ').title()}: {text}")
     if not lines:
+        # Preserve the established cleaned -> raw fallback for non-transfer ads.
+        # Do not substitute the legacy messages.text compatibility copy.
         fallback = str(record.get("cleaned_text") or record.get("raw_text") or "").strip()
         if fallback:
             lines.append(fallback)

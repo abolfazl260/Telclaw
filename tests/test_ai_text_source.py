@@ -117,7 +117,9 @@ def test_real_sqlite_classification_and_extraction_preserve_fallback_and_statuse
         (102, "raw ignored here", "  Legacy source  ", None, "Legacy source"),
         (103, "  Raw only  🧳  ", None, None, "Raw only  🧳"),
         (104, " Original preserved ", " ", " \t ", "Original preserved"),
-        (105, "  Numeric cleaned fallback ", "", 7, "Numeric cleaned fallback"),
+        # SQLite TEXT affinity converts integers to strings; use BLOB bytes
+        # to represent a malformed persisted non-string cleaned_text value.
+        (105, "  Binary cleaned fallback ", "", b"\\x01", "Binary cleaned fallback"),
         (106, None, None, None, None),
     ]
     for message_id, raw_text, text, cleaned_text, _expected in cases:

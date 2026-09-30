@@ -179,7 +179,19 @@ async def test_crawl_processing_ai_preview_and_editor_are_compatible(
         assert row["raw_text"] == original
         assert row["cleaned_text"] == row["text"] == clean_text(original)
         assert row["processing_status"] == "processed"
-        assert row["classification_status"] == "pending"
+        # These are distinct existing worker contracts: only the app worker
+        # transitions the downstream classifier queue automatically.
+        assert row["classification_status"] == (
+            "waiting" if worker == "core" else "pending"
+        )
+
+    if worker == "core":
+        # This core API is intentionally not the scheduler. Explicitly
+        # hand off test-only fixtures to classification; no product change.
+        for channel, message_id in expected:
+            assert database.update_message(
+                message_id, channel, classification_status="pending"
+            )
 
     provider = FakeAIProvider()
     classification = CategoryClassificationService(

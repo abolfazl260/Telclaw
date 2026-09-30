@@ -586,6 +586,11 @@ th:first-child {z-index:3;background:#eaf0f9}
 .filter-actions button {border:0;background:#1957b8;color:white}
 .filter-actions a {border:1px solid #c8d3e2;background:white;color:#1957b8}
 .column-name {display:block;font-weight:700;margin-bottom:.4rem}
+.column-help {display:block;font-size:11px;font-weight:400;color:#4b6079;max-width:250px}
+.text-mismatch {display:block;font-size:11px;color:#91421e;font-weight:650;margin-top:.25rem}
+.cell-edit-warning {margin:.15rem 0;color:#78512d;font-size:12px;max-width:380px}
+.cell-guard {display:flex;align-items:flex-start;gap:.4rem;font-size:12px}
+.cell-guard input {margin-top:.2rem}
 .filter-control {display:grid;grid-template-columns:minmax(92px,auto) minmax(95px,1fr);gap:.35rem}
 .filter-control select,.filter-control input {font:12px/1.25 system-ui;padding:.35rem;border:1px solid #bcc9d9;
               border-radius:6px;min-width:0;width:100%;background:white}
@@ -612,25 +617,65 @@ document.querySelectorAll('button.edit-cell').forEach(button => button.addEventL
   try {
     const response = await fetch(url, {credentials:'same-origin'});
     if (!response.ok) throw Error(await response.text());
-    const original = (await response.json()).value;
+    const cellData = await response.json();
+    const original = cellData.value;
     const form = document.createElement('form'); form.className = 'cell-editor';
     const input = document.createElement('textarea'); input.value = original === null ? '' : String(original);
     input.setAttribute('aria-label', 'Edit ' + td.dataset.column + ' for row ' + td.dataset.id);
     const nullLabel = document.createElement('label');
     const clear = document.createElement('input'); clear.type = 'checkbox';
     nullLabel.append(clear, document.createTextNode(' Save as NULL'));
+    const warning = document.createElement('p'); warning.className='cell-edit-warning';
+    const column = td.dataset.column;
+    const isMessage = table === 'messages';
+    let rawConfirmation = null;
+    let syncMirror = null;
+    if (isMessage && column === 'raw_text') {
+      warning.textContent = 'Original Telegram source: changing it can affect reprocessing and duplicate checks.';
+      rawConfirmation = document.createElement('input'); rawConfirmation.type='checkbox';
+      const guard = document.createElement('label'); guard.className='cell-guard';
+      guard.append(rawConfirmation, document.createTextNode(
+        'I understand that I am changing the preserved original Telegram source.'));
+      form.append(warning, guard);
+    } else if (isMessage && column === 'text') {
+      warning.textContent = 'Legacy compatibility copy: changing only text may not affect AI, which prefers cleaned_text.';
+      form.append(warning);
+    } else if (isMessage && column === 'cleaned_text') {
+      warning.textContent = 'AI prefers cleaned_text. Saving this field alone leaves legacy text unchanged.';
+      form.append(warning);
+      if (cellData.divergent) {
+        const mismatch = document.createElement('p'); mismatch.className='text-mismatch';
+        mismatch.textContent = 'This row has different text and cleaned_text values.';
+        form.append(mismatch);
+      }
+      syncMirror = document.createElement('input'); syncMirror.type='checkbox';
+      const mirrorLabel = document.createElement('label'); mirrorLabel.className='cell-guard';
+      mirrorLabel.append(syncMirror, document.createTextNode(
+        'Also update legacy text (opt-in, both values checked and audited together).'));
+      form.append(mirrorLabel);
+    }
     const controls = document.createElement('div');
     const save = document.createElement('button'); save.type='submit';save.textContent='Save';
     const cancel = document.createElement('button');cancel.type='button';cancel.className='cancel';cancel.textContent='Cancel';
     controls.append(save,cancel);
     const error = document.createElement('span');error.className='error';error.setAttribute('role','alert');
-    form.append(input,nullLabel,controls,error);td.append(form);
+    form.prepend(input,nullLabel);form.append(controls,error);td.append(form);
     cancel.addEventListener('click', () => {form.remove();button.disabled=false;});
     clear.addEventListener('change', () => {input.disabled=clear.checked;});
     form.addEventListener('submit', async event => {
-      event.preventDefault();save.disabled=true;error.textContent='';
+      event.preventDefault();error.textContent='';
+      if (rawConfirmation && !rawConfirmation.checked) {
+        error.textContent='Confirm editing the original raw_text source before saving';
+        return;
+      }
+      save.disabled=true;
       const payload = new URLSearchParams({csrf, table, id:td.dataset.id, column:td.dataset.column,
-        expected:JSON.stringify(original), value:input.value, make_null:clear.checked?'1':'0'});
+        expected:JSON.stringify(original), value:input.value, make_null:clear.checked?'1':'0',
+        confirm_raw_text:rawConfirmation && rawConfirmation.checked?'1':'0',
+        sync_text:syncMirror && syncMirror.checked?'1':'0'});
+      if (syncMirror && syncMirror.checked) {
+        payload.set('mirror_expected', JSON.stringify(cellData.mirror_value));
+      }
       try {
         const result = await fetch('/data/cell',{method:'POST',body:payload,credentials:'same-origin'});
         if (!result.ok) throw Error(await result.text());
@@ -676,7 +721,7 @@ def _data_url(table, page_number=None, filters=None):
     return "/data?" + urlencode(params)
 
 
-def _filter_header(name, data_type, active):
+def _filter_header(name, data_type, active, table=None):
     numeric = backoffice_data.numeric_filter_type(data_type)
     choices = ([("eq", "="), ("ne", "≠"), ("gt", ">"), ("gte", "≥"), ("lt", "<"), ("lte", "≤"),
                 ("null", "NULL"), ("not_null", "Not NULL")]
@@ -690,7 +735,10 @@ def _filter_header(name, data_type, active):
                       for value, label in choices)
     filtered = "filtered" if active else ""
     escaped_name = _escape(name)
-    return f'''<th class="{filtered}"><span class="column-name">{escaped_name}</span>
+    hint = backoffice_data.TEXT_COLUMN_HELP.get(name) if table == "messages" else None
+    help_label = (f'<small class="column-help" title="{_escape(hint)}">{_escape(hint)}</small>'
+                  if hint else "")
+    return f'''<th class="{filtered}"><span class="column-name">{escaped_name}</span>{help_label}
         <div class="filter-control">
         <select class="filter-op" name="op_{escaped_name}" aria-label="Filter operator for {escaped_name}">{options}</select>
         <input class="filter-value" name="f_{escaped_name}" value="{_escape(current_value)}"
@@ -718,9 +766,14 @@ async def data_page(request):
                 label = "(empty)"
             label = _escape(label)
             if name in editable:
+                mismatch = (table == "messages" and name == "text"
+                            and row.get("processing_status") == "processed"
+                            and row.get("text") != row.get("cleaned_text"))
+                mismatch_label = ('<small class="text-mismatch">Differs from cleaned_text</small>'
+                                  if mismatch else '')
                 columns.append(f'''<td data-id="{row['id']}" data-column="{_escape(name)}">
                     <button type="button" class="edit-cell {'null' if value is None else ''}"
-                    title="Edit this cell">{label}</button></td>''')
+                    title="Edit this cell">{label}</button>{mismatch_label}</td>''')
             else:
                 columns.append(f'<td class="readonly">{label}</td>')
         cells.append('<tr>' + ''.join(columns) + '</tr>')
@@ -733,12 +786,16 @@ async def data_page(request):
                           ("Next", result["page"]+1), ("Last", result["pages"])):
         if 1 <= number <= result["pages"] and number != result["page"]:
             pagination.append(f'<a href="{_escape(_data_url(table, number, result["filters"]))}">{title}</a>')
-    headers = "".join(_filter_header(name, result["columns"][name], result["filters"].get(name))
+    headers = "".join(_filter_header(name, result["columns"][name], result["filters"].get(name), table)
                       for name in names)
     filter_count = len(result["filters"])
     filter_summary = (f'<span class="filter-summary">{filter_count} active filter'
                       f'{"s" if filter_count != 1 else ""}</span>' if filter_count else "")
     csrf = _escape(request["session"]["csrf"])
+    text_help = ('''<p class="muted">Message text fields: raw_text is the original Telegram
+    payload; cleaned_text is the processed AI input; text is a legacy compatibility copy.
+    Edits are independent unless you explicitly opt into synchronizing cleaned_text to text.</p>'''
+                 if table == "messages" else "")
     content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
@@ -747,7 +804,7 @@ async def data_page(request):
     <a class="active" href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
-    <section data-table="{table}"><p>{result['total']} rows · Page {result['page']} of {result['pages']}
+    <section data-table="{table}">{text_help}<p>{result['total']} rows · Page {result['page']} of {result['pages']}
     · {backoffice_data.PAGE_SIZE} per page. Click a blue cell to edit it.</p>
     <form method="get" action="/data" class="filter-form"><input type="hidden" name="table" value="{_escape(table)}">
     <div class="filter-actions"><button type="submit">Apply filters</button>
@@ -1247,10 +1304,16 @@ async def save_data_cell(request):
         expected = json.loads(data.get("expected", ""))
         if expected is not None and not isinstance(expected, (str, int, float)):
             raise ValueError("Invalid previous cell value")
+        sync_text = data.get("sync_text") == "1"
+        mirror_expected = json.loads(data.get("mirror_expected", "")) if sync_text else None
+        if sync_text and mirror_expected is not None and not isinstance(mirror_expected, str):
+            raise ValueError("Invalid legacy text expected value")
         value = backoffice_data.update_cell(
             data.get("table", ""), data.get("id", ""), data.get("column", ""),
             data.get("value", ""), expected, request["session"]["admin_id"],
-            make_null=data.get("make_null") == "1")
+            make_null=data.get("make_null") == "1",
+            confirm_raw_text=data.get("confirm_raw_text") == "1",
+            sync_text=sync_text, mirror_expected=mirror_expected)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         if isinstance(exc, backoffice_data.ConflictError):
             raise web.HTTPConflict(text=str(exc)) from exc

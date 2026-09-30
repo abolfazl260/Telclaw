@@ -22,8 +22,10 @@ class NormalizeStage:
 class CleanTextStage:
     def process(self, record: ProcessingRecord) -> ProcessingRecord:
         data = record.data
-        raw_text = data.get("raw_text", data.get("text", ""))
-        cleaned = clean_text(raw_text)
+        # Older messages may have NULL/empty raw_text but a populated legacy
+        # text field. Prefer an original payload when available; never write it.
+        source_text = data.get("raw_text") or data.get("text") or ""
+        cleaned = clean_text(source_text)
         data["cleaned_text"] = cleaned
         data["text"] = cleaned
         data["is_collectable"] = is_collectable_text(cleaned)

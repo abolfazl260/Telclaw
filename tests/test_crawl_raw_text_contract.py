@@ -28,7 +28,7 @@ PHOTO_CAPTION = (
 )
 
 
-def fake_message(message_id, payload, *, photo=False, forwarded=False, text_fallback=False):
+def fake_message(message_id, payload, *, photo=False, forwarded=False, text_fallback=False, formatted_text=None):
     return SimpleNamespace(
         id=message_id,
         date=datetime(2026, 9, 29, 8, tzinfo=timezone.utc),
@@ -42,7 +42,7 @@ def fake_message(message_id, payload, *, photo=False, forwarded=False, text_fall
             SimpleNamespace(from_id=PeerUser(801)) if forwarded else None
         ),
         forward=None,
-        text="" if text_fallback else payload,
+        text=("" if text_fallback else (formatted_text if formatted_text is not None else payload)),
         raw_text=payload,
         message=payload,
         media=(
@@ -89,7 +89,7 @@ async def test_crawl_preserves_exact_original_text_and_photo_caption(
 
     client = FakeTelegramClient(
         [
-            fake_message(101, ORIGINAL_TEXT),
+            fake_message(101, ORIGINAL_TEXT, formatted_text="[formatted version differs from raw]"),
             fake_message(
                 102,
                 PHOTO_CAPTION,
@@ -235,3 +235,18 @@ def test_previous_messages_prefer_raw_payload_to_edited_legacy_text(
     assert ProcessingService._original_text(history[0]) == (
         "raw   content with original spaces"
     )
+
+
+def test_crawler_prefers_unformatted_original_and_preserves_fallbacks():
+    assert crawler._extract_message_text(
+        fake_message(1, ORIGINAL_TEXT, formatted_text="formatted version")
+    ) == ORIGINAL_TEXT
+    assert crawler._extract_message_text(
+        SimpleNamespace(raw_text=None, message=None, text="fallback   text\nunchanged")
+    ) == "fallback   text\nunchanged"
+    assert crawler._extract_message_text(
+        SimpleNamespace(raw_text="  ", message="caption   line\nuntouched", text="formatted")
+    ) == "caption   line\nuntouched"
+    assert crawler._extract_message_text(
+        SimpleNamespace(raw_text=None, message=None, text=" \n\t ")
+    ) == ""

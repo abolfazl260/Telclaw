@@ -79,6 +79,15 @@ def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule
     assert pairs[0][0]["message_row_id"] == 2
 
 
+def test_new_backoffice_rule_defaults_to_automatic_publishing(rule_db):
+    routing_rules.save_target("Auto", "@autochannel")
+    target = routing_rules.list_targets()[0]
+
+    form = backoffice_web._rule_form(None, target, "csrf")
+    assert '<option value="auto" selected>Automatic</option>' in form
+    assert '<option value="manual" selected>' not in form
+
+
 def test_turkey_rule_routes_and_tracks_each_destination(rule_db):
     routing_rules.save_target("Turkey", "@turkeychannel")
     routing_rules.save_target("Other", "@otherchannel")

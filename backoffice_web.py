@@ -402,8 +402,8 @@ def _rule_form(rule, target, csrf):
         <button type="button" class="add-condition">+ Add condition</button>
         <input type="hidden" name="conditions_json" value="[]"></div>
         <label>Publishing <select name="delivery_mode">
-            <option value="manual" {"selected" if rule.get('delivery_mode','manual')=='manual' else ''}>Manual selection</option>
-            <option value="auto" {"selected" if rule.get('delivery_mode')=='auto' else ''}>Automatic</option>
+            <option value="manual" {"selected" if rule.get('delivery_mode','auto')=='manual' else ''}>Manual selection</option>
+            <option value="auto" {"selected" if rule.get('delivery_mode','auto')=='auto' else ''}>Automatic</option>
         </select></label>
         <label>Priority<input name="priority" type="number" value="{rule.get('priority',100)}" required></label>
         <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>

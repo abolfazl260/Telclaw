@@ -75,8 +75,11 @@ def _extract_sender(message):
 
 
 def _extract_message_text(message):
-    """Extract Telegram text/caption reliably, including media captions."""
-    for attribute in ("text", "raw_text", "message"):
+    """Preserve Telegram's unformatted text/caption before using other fallbacks."""
+    # Telethon's .text can be formatted according to the client's parse mode.
+    # .raw_text is the original plain Telegram payload for raw storage/dedupe.
+    # Never strip or normalize the returned content; only test for blankness.
+    for attribute in ("raw_text", "message", "text"):
         value = getattr(message, attribute, None)
         if isinstance(value, str) and value.strip():
             return value

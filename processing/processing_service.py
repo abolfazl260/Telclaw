@@ -118,11 +118,16 @@ class ProcessingService:
 
                 record = self.pipeline.process(ProcessingRecord(data=dict(data)))
                 result = record.data
+                # Mirror a single derived value in the existing atomic SQLite
+                # UPDATE. raw_text remains the unmodified crawl-time source.
+                cleaned = result.get("cleaned_text")
+                if cleaned is None:
+                    cleaned = result.get("text")
                 self.repository.mark_processed(
                     message_id=result["message_id"],
                     channel_username=result["channel_username"],
-                    cleaned_text=result.get("cleaned_text", ""),
-                    text=result.get("cleaned_text", ""),
+                    cleaned_text=cleaned,
+                    text=cleaned,
                     processing_status="processed",
                     pipeline_version="processing-v1",
                     cleaned_at=datetime.now(timezone.utc).isoformat(),

@@ -99,3 +99,114 @@ including a mismatch between `NULL` and a non-`NULL` value.
 This feature performs **no** historical text reconciliation and **no** schema
 migration. See issue #25 for a separately authorized, dry-run-first approach
 to legacy data corrections.
+
+
+## Explicit, conservative historical reconciliation (issue #25)
+
+The standalone script `scripts/reconcile_message_text.py` runs **only when an
+operator invokes it**. It does not initialize a database, create new tables,
+run during startup, enqueue AI, or send Telegram/Advertio messages. It never
+removes `messages.text` and never modifies `messages.raw_text`.
+
+### Step 1: Read-only dry-run
+
+Run against a **consistent staging backup**, not the active production DB:
+
+```bash
+python scripts/reconcile_message_text.py --database /safe/staging-copy.sqlite3
+```
+
+The default uses SQLite URI `mode=ro` and only `SELECT` queries. It
+displays **aggregates by processing_status**, separate `NULL` and exact `''`
+counts, reason counts, and up to ten example message row IDs. It **never
+prints message text, phone numbers, credentials, or raw payloads**.
+
+Possible reasons include pending/unprocessed records, missing/blank/non-text
+`raw_text`, missing/blank/changed legacy `text`, previously populated or
+inconsistent `cleaned_text`, recorded manual text edits, and missing
+Backoffice audit-history infrastructure. Such rows are **not eligible**.
+If `backoffice_data_edits` is unavailable or structurally incompatible,
+the script cannot verify editing provenance and **skips all processed rows**.
+
+Only rows satisfying **every** condition may be corrected:
+- `processing_status='processed'`;
+- `raw_text` is a nonempty, non-whitespace text string;
+- `cleaned_text IS NULL` (not the same as `''`);
+- `text == processing.cleaner.clean_text(raw_text)`, exactly;
+- `backoffice_data_edits` is available and contains **no recorded edit** to
+  any of these three fields for the row.
+
+These rules deliberately leave many historical disagreements unresolved.
+An empty recorded edit history **cannot prove** no direct SQL edits ever
+happened; treat candidates as conservative suggestions and inspect the source
+system's maintenance history before authorizing changes.
+
+### Step 2: Explicit operator-approved apply (NEVER run automatically)
+
+Stop concurrent writers and arrange an approved maintenance window. On an
+isolated **staging DB** only, after reviewing the dry-run count (for example
+`eligible_rows: 2`):
+
+```bash
+umask 077
+python scripts/reconcile_message_text.py \
+  --database /safe/staging-copy.sqlite3 \
+  --apply \
+  --expect-candidates 2 \
+  --max-updates 2 \
+  --batch-size 25 \
+  --backup /safe/NEW-before-reconcile.sqlite3 \
+  --manifest /safe/NEW-reconciliation-log.jsonl
+```
+
+All three file paths must differ, and backup/manifest destinations **must not
+exist** beforehand. The operator supplies both paths; the tool uses exclusive
+creation with mode `0600`. It creates and verifies a complete SQLite backup
+(using the SQLite backup API plus `PRAGMA quick_check`) **before any
+modification**. It compares candidate count/IDs in the backup to the scanned
+source; disagreement aborts without updating the source. No existing
+backups/manifests are overwritten, renamed or deleted.
+
+`--expect-candidates` must exactly match the dry-run's eligible count, and
+`--max-updates` must cover all eligible rows (maximum 500). The script refuses
+partial automatic selection, missing arguments, zero candidates, or malformed
+schemas. `--batch-size` bounds in-memory scan/update groups (1–500).
+Within one `BEGIN IMMEDIATE` transaction it **rechecks source, legacy,
+cleaned, status and manual-edit history** for each candidate before a
+compare-and-swap `UPDATE messages SET cleaned_text=?`. Concurrently changed
+candidates are skipped. Errors roll back **all** attempted updates.
+
+The separate private JSONL manifest records preparation, candidate IDs, SHA-256
+digests of proposed cleaned values, and final applied/skipped IDs (or a
+`rolled_back` event on failure). It stores **no message body**. Keep the
+backup and manifest together in an access-controlled location. Do not rely on
+a bare SHA-256 digest to reconstruct any original text.
+
+### Manual rollback / recovery
+
+This script has **no destructive automated restore**. The **complete,
+verified SQLite backup** is the recovery source. If rollback is approved:
+
+1. Stop Telclaw and all other database writers. Check whether unrelated
+   legitimate changes occurred **after** the backup; an entire-database
+   rollback would lose them, so do **not** overwrite a live file blindly.
+2. Retain the current DB and WAL/SHM files as an additional protected snapshot.
+   Use SQLite's backup API to restore the before-reconcile snapshot into a
+   **new** private file (e.g. with `umask 077`), never directly over the
+   running database:
+
+   ```bash
+   umask 077
+   python -c 'import sqlite3; src=sqlite3.connect("file:/safe/NEW-before-reconcile.sqlite3?mode=ro",uri=True); dst=sqlite3.connect("/safe/NEW-restored.sqlite3"); src.backup(dst); dst.close(); src.close()'
+   ```
+
+3. Verify `PRAGMA quick_check`, expected row counts and publication history
+   in the restored copy. Follow the project's operational recovery process to
+   replace the offline DB **only after** reviewing concurrent changes.
+4. If any later updates need preserving, reconcile individual corrected
+   `cleaned_text` cells manually using the manifest's IDs and the backup's
+   values, with explicit compare-and-swap guards; do not blindly restore the
+   entire old DB.
+
+Dry-run and apply tests use temporary SQLite fixtures, including backups,
+concurrent changes, audit-history ambiguity and transaction rollback.

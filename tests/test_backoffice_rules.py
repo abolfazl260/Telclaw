@@ -40,6 +40,45 @@ def rule_db(tmp_path, monkeypatch):
     return connection
 
 
+def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
+    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01', origin_city=NULL WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    assert routed_publisher.RoutedPublisher._koolbar_pairs(limit=10) == []
+
+
+def test_legacy_koolbar_rejected_delivery_is_not_automatically_retried(rule_db):
+    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
+    conn.commit()
+    conn.close()
+    routing_rules.record_delivery(1, 1, "rejected", error="missing route")
+
+    assert routed_publisher.RoutedPublisher._koolbar_pairs(limit=10) == []
+
+
+def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule_db):
+    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01', destination_city='' WHERE id=1")
+    conn.execute(
+        "INSERT INTO messages VALUES(2,'transferlist','processed','processed',12,'bob','test','')"
+    )
+    conn.execute(
+        "INSERT INTO transferlist VALUES(2,2,'Berlin','Toronto','DE','CA',200,'2099-01-02')"
+    )
+    conn.commit()
+    conn.close()
+
+    pairs = routed_publisher.RoutedPublisher._koolbar_pairs(limit=1)
+    assert len(pairs) == 1
+    assert pairs[0][0]["message_row_id"] == 2
+
+
 def test_turkey_rule_routes_and_tracks_each_destination(rule_db):
     routing_rules.save_target("Turkey", "@turkeychannel")
     routing_rules.save_target("Other", "@otherchannel")

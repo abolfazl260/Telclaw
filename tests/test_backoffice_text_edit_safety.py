@@ -242,3 +242,26 @@ async def test_http_editor_labels_guards_csrf_and_atomic_sync(text_db):
         ]
     finally:
         await client.close()
+
+
+def test_failed_second_audit_write_rolls_back_both_columns(text_db):
+    """An audit persistence failure cannot partially commit a mirror update."""
+    before = message_row(text_db)
+    with database.get_connection() as conn:
+        conn.execute(
+            """CREATE TRIGGER reject_legacy_audit
+            BEFORE INSERT ON backoffice_data_edits
+            WHEN NEW.column_name = 'text'
+            BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END"""
+        )
+        conn.commit()
+
+    with pytest.raises(ValueError, match="database constraint"):
+        backoffice_data.update_cell(
+            "messages", text_db, "cleaned_text", "Uncommitted AI text",
+            before["cleaned_text"], 1234,
+            sync_text=True, mirror_expected=before["text"],
+        )
+
+    assert message_row(text_db) == before
+    assert audit_rows(text_db) == []

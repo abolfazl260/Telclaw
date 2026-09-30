@@ -9,6 +9,7 @@ import time
 import config
 from ai.extractor import AIExtractionError
 from ai.provider_manager import AIProviderManager
+from ai.text_source import select_source_text
 from storage.message_repository import MessageRepository
 from storage.data_normalizer import normalize_category_data
 from services.stage_control import get_stage_control
@@ -47,7 +48,7 @@ class AIProcessingService:
 
     @staticmethod
     def _source_text(record):
-        return (record.get("cleaned_text") or record.get("text") or record.get("raw_text") or "").strip()
+        return select_source_text(record)
 
     @staticmethod
     def _classification_category(record):

@@ -231,7 +231,10 @@ Telclaw. Avoid repository-wide `text` rename or removal:
 - `tests/test_text_lifecycle_integration.py`: entirely local fake Telegram
   clients crawl two channels, an exact source duplicate, and a media caption;
   both the **core** and **application** processing workers clean records;
-  a fake AI provider classifies/extracts; a structured, **non-sending** routed
+  the core worker retains its historical `classification_status='waiting'`
+  while the app worker advances it to `pending`; the integration test
+  performs an explicit **fixture-only** queue handoff for the core worker.
+  A fake AI provider classifies/extracts; a structured, **non-sending** routed
   preview is rendered; original raw text and all persisted compatibility
   fields are checked. Legacy null raw content, a classification retry,
   Backoffice independent edit, and stage idempotency are covered.

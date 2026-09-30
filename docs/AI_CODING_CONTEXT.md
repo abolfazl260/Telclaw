@@ -136,7 +136,9 @@ Cleaning must never be used to decide whether two original Telegram messages wer
 
 ### Cleaning / normalization
 
-Cleaning produces `cleaned_text` while preserving raw/original text. It may normalize whitespace, remove irrelevant Telegram noise, and prepare text for downstream AI processing according to the current implementation.
+Cleaning produces `cleaned_text` while preserving raw/original text. The **current** `processing/cleaner.py::clean_text` implementation only normalizes whitespace; it does **not** remove emojis, numbers, URLs, phone numbers, or other Telegram content. For newly crawled messages, legacy `messages.text` initially mirrors `raw_text`; after successful processing, the processing services mirror the cleaned result into both `messages.text` and `messages.cleaned_text` for existing consumers. Historical, pending, failed, or manually edited rows may differ, and SQL `NULL` is not the same as an empty string.
+
+**Keep all three columns for backward compatibility; do not drop or rename `messages.text` in this phase.** See [Message text lifecycle and read-only audit](TEXT_LIFECYCLE_AUDIT.md) for exact caller dependencies and read-only mismatch counts.
 
 Do not silently change the raw source field.
 

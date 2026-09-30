@@ -7,7 +7,9 @@ class ClassifierStage:
     """Classify records without coupling the pipeline to an AI provider."""
 
     def process(self, record: ProcessingRecord) -> ProcessingRecord:
-        text = record.data.get("cleaned_text", "")
+        text = record.data.get("cleaned_text")
+        if not isinstance(text, str):
+            text = ""
         record.data.setdefault("classification", "unclassified")
         record.data["classification_text_length"] = len(text)
         return record

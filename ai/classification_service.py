@@ -10,6 +10,7 @@ import time
 
 import config
 from ai.provider_manager import AIProviderManager
+from ai.text_source import select_source_text
 from ai.extractor import AIExtractionError
 from storage.message_repository import MessageRepository
 
@@ -27,7 +28,7 @@ class CategoryClassificationService:
 
     @staticmethod
     def _source_text(record):
-        return (record.get("cleaned_text") or record.get("text") or record.get("raw_text") or "").strip()
+        return select_source_text(record)
 
     @staticmethod
     def _parse_wait_from_error(text):

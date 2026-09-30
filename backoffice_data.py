@@ -14,6 +14,12 @@ TABLES = ("messages", "transferlist", "housinglist", "joblist")
 MESSAGE_EDITABLE = frozenset({"text", "raw_text", "cleaned_text", "date", "channel_name",
                               "sender_username", "sender_type", "message_link"})
 PAGE_SIZE = 25
+TEXT_COLUMN_HELP = {
+    "raw_text": "Original Telegram payload. Preserve for reprocessing and duplicate checks.",
+    "cleaned_text": "Processed text preferred by AI classification and extraction.",
+    "text": "Legacy compatibility copy. Editing only this field may not change AI input.",
+}
+_MIRROR_UNSET = object()
 TEXT_FILTER_OPERATORS = frozenset({
     "contains", "not_contains", "eq", "ne", "starts", "empty", "not_empty", "null", "not_null"
 })
@@ -99,10 +105,17 @@ def cell(table, row_id, column):
         columns = _columns(conn, table)
         if not _editable(table, column, columns):
             raise ValueError("This column is read only")
-        row = conn.execute(f"SELECT {column} AS value FROM {table} WHERE id=?", (row_id,)).fetchone()
+        # Expose the legacy mirror only to an authenticated cell editor. It is
+        # needed for compare-and-swap when the administrator opts into syncing.
+        mirror = ", text AS mirror_value" if table == "messages" and column == "cleaned_text" else ""
+        row = conn.execute(f"SELECT {column} AS value{mirror} FROM {table} WHERE id=?", (row_id,)).fetchone()
         if row is None:
             raise ConflictError("Row no longer exists")
-        return {"value": row["value"], "type": columns[column]}
+        result = {"value": row["value"], "type": columns[column]}
+        if mirror:
+            result["mirror_value"] = row["mirror_value"]
+            result["divergent"] = row["value"] != row["mirror_value"]
+        return result
     finally:
         conn.close()
 
@@ -195,13 +208,25 @@ def _filter_query(columns, filters):
     return clauses, params, active
 
 
-def update_cell(table, row_id, column, value, expected, admin_id, make_null=False):
-    """Compare and update one cell atomically; preserve a per-cell audit trail."""
+def update_cell(table, row_id, column, value, expected, admin_id, make_null=False,
+                confirm_raw_text=False, sync_text=False, mirror_expected=_MIRROR_UNSET):
+    """Compare and update cells atomically with complete per-column auditing.
+
+    Source-text edits require explicit confirmation; clean-to-legacy mirroring
+    is strictly opt-in and CAS-checks both original values in one SQL UPDATE.
+    """
     table = _table(table)
     try:
         row_id, admin_id = int(row_id), int(admin_id)
     except (TypeError, ValueError) as exc:
         raise ValueError("Invalid row or administrator") from exc
+    if table == "messages" and column == "raw_text" and not confirm_raw_text:
+        raise ValueError("Confirm editing the original raw_text source before saving")
+    if sync_text and not (table == "messages" and column == "cleaned_text"):
+        raise ValueError("Legacy text synchronization is available only when editing cleaned_text")
+    if sync_text and (mirror_expected is _MIRROR_UNSET or
+                      (mirror_expected is not None and not isinstance(mirror_expected, str))):
+        raise ValueError("Original legacy text value is required to synchronize")
     initialize()
     conn = get_connection()
     try:
@@ -222,17 +247,30 @@ def update_cell(table, row_id, column, value, expected, admin_id, make_null=Fals
             if table in CATEGORY_TABLES and column in aliasable_fields().get(table, ()):
                 new_value = normalize_field_value(table, column, new_value, dict(current_row))
         # SQLite IS matches NULL safely and compares other scalar values without coercing NULL.
-        cursor = conn.execute(f"UPDATE {table} SET {column}=? WHERE id=? AND {column} IS ?",
-                              (new_value, row_id, expected))
+        # Use one statement for both columns; a stale legacy mirror must not be overwritten.
+        if sync_text:
+            cursor = conn.execute(
+                "UPDATE messages SET cleaned_text=?, text=? "
+                "WHERE id=? AND cleaned_text IS ? AND text IS ?",
+                (new_value, new_value, row_id, expected, mirror_expected),
+            )
+        else:
+            cursor = conn.execute(f"UPDATE {table} SET {column}=? WHERE id=? AND {column} IS ?",
+                                  (new_value, row_id, expected))
         if cursor.rowcount != 1:
             conn.rollback()
             raise ConflictError("Cell changed since you opened it. Reload before editing.")
-        conn.execute("""INSERT INTO backoffice_data_edits
-            (admin_id,table_name,row_id,column_name,old_value,new_value,edited_at)
-            VALUES(?,?,?,?,?,?,?)""",
-            (admin_id, table, row_id, column,
-             json.dumps(expected, ensure_ascii=False), json.dumps(new_value, ensure_ascii=False),
-             datetime.now(timezone.utc).isoformat()))
+        edited_at = datetime.now(timezone.utc).isoformat()
+        changes = [(column, expected, new_value)]
+        if sync_text:
+            changes.append(("text", mirror_expected, new_value))
+        for changed_column, old_value, changed_value in changes:
+            conn.execute("""INSERT INTO backoffice_data_edits
+                (admin_id,table_name,row_id,column_name,old_value,new_value,edited_at)
+                VALUES(?,?,?,?,?,?,?)""",
+                (admin_id, table, row_id, changed_column,
+                 json.dumps(old_value, ensure_ascii=False),
+                 json.dumps(changed_value, ensure_ascii=False), edited_at))
         conn.commit()
         return new_value
     except sqlite3.IntegrityError as exc:

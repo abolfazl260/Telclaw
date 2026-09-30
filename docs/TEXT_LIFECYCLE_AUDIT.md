@@ -66,3 +66,36 @@ The `summary` object contains sums across all groups. These are **diagnostic cou
 - On a live busy database, prefer a consistent SQLite staging backup/snapshot to avoid lock/WAL concerns; protect the snapshot as it contains original user messages even though aggregate output does not.
 - Validate with `python -m pytest -q tests/test_message_text_audit.py` and the repository's normal `python -m pytest -q tests`.
 - The subsequent independent issues address crawler compatibility (#20), processing mirrors (#21), AI fallbacks (#22), delivery (#23), Backoffice controls (#24), **explicitly opt-in** historical reconciliation (#25), and cross-layer regression testing (#26). None authorizes dropping columns or rewriting raw content.
+
+
+## Backoffice manual text-editing safeguards (issue #24)
+
+The authenticated `/data?table=messages` editor keeps all three columns visible
+and filterable under their existing SQL names. It now explains their distinct
+roles and marks **processed** rows where `text` and `cleaned_text` differ,
+including a mismatch between `NULL` and a non-`NULL` value.
+
+- Editing **`raw_text`** requires the admin to tick an explicit confirmation
+  acknowledging that the original Telegram source will be changed. This
+  confirmation is validated by the server, not just JavaScript. The guard
+  changes neither administrator permissions nor other editable columns.
+- Editing **`text`** updates only that legacy compatibility field. Because
+  AI prefers `cleaned_text`, this edit does **not** guarantee a change in
+  AI input. An explanatory warning is displayed.
+- Editing **`cleaned_text`** updates only that field **by default**. An
+  optional, unchecked checkbox enables **also update legacy `text`**.
+  The editor sends both previously read values. The server rejects stale
+  values and updates both columns in **one SQLite UPDATE/transaction**; it
+  audits each column independently in `backoffice_data_edits`. If the
+  accompanying legacy `text` changed since the editor opened, **neither**
+  value is updated.
+- Changing a message's text fields does **not** automatically rerun
+  classification/extraction, correct existing AI results, retract an existing
+  publication, or resend any advertisement. Workflows for these operations
+  remain independent.
+- All normal pagination, column filters, SQL `NULL` versus `''`, CSRF,
+  session checks, optimistic concurrency, and audited edits are preserved.
+
+This feature performs **no** historical text reconciliation and **no** schema
+migration. See issue #25 for a separately authorized, dry-run-first approach
+to legacy data corrections.

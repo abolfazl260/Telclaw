@@ -210,3 +210,49 @@ verified SQLite backup** is the recovery source. If rollback is approved:
 
 Dry-run and apply tests use temporary SQLite fixtures, including backups,
 concurrent changes, audit-history ambiguity and transaction rollback.
+
+
+## Cross-layer and legacy interfaces regression boundary (issue #26)
+
+The word `text` does **not** mean one universal database column throughout
+Telclaw. Avoid repository-wide `text` rename or removal:
+
+| Interface | Existing field names / behavior | Compatibility responsibility |
+| --- | --- | --- |
+| Live SQLite `messages` | `raw_text` (original), `cleaned_text` (AI-preferred normalized), `text` (legacy compatibility) | Keep all three fields. Both processing workers mirror derived text into `cleaned_text` and `text` without altering `raw_text`. |
+| Telethon crawler input | Message attributes `raw_text`, `message`, `text` (formatted fallback) | Read the raw Telegram payload first, retain exact Unicode/spacing, preserve original text/captions and deduplicate by the original source. |
+| CSV-only `TelegramProcessor/modules/cleaner.py` | Dataframe columns `text`, `original_text`, `normalized_text` | This **separate legacy processor** uses emoji-removing/lowercasing normalization. **Do not adopt it as the live SQLite cleaner**, and do not change its CSV field names. |
+| `TelegramProcessor/main.py` | CSV export key `"text": row["text"]` | Preserve the external CSV header and existing downstream readers. This legacy entrypoint imports pandas, which is **not part of** current Telclaw's minimal runtime/test dependencies; its AST contract can be checked without importing the executable. |
+| `monitoring/telegram_monitor.py` and `monitoring/transfer_live.py` | Telegram Bot API update `message["text"]` and formatted command replies | Keep Telegram payload and Bot API reply keys unchanged; these are **not** SQLite `messages.text` columns. |
+| `routed_publisher.py` | Structured category field values, else `cleaned_text` → `raw_text` preview | Existing non-transfer previews need not consume the legacy compatibility column. Keep rendered output, destination selection and retry behavior unchanged. |
+
+### Regression test coverage
+
+- `tests/test_text_lifecycle_integration.py`: entirely local fake Telegram
+  clients crawl two channels, an exact source duplicate, and a media caption;
+  both the **core** and **application** processing workers clean records;
+  a fake AI provider classifies/extracts; a structured, **non-sending** routed
+  preview is rendered; original raw text and all persisted compatibility
+  fields are checked. Legacy null raw content, a classification retry,
+  Backoffice independent edit, and stage idempotency are covered.
+- `tests/test_legacy_text_interfaces.py`: verifies the separate CSV
+  cleaner's normalization, CSV `text` export key and
+  `original_text`/`normalized_text` columns; tests monitor `/status`
+  and `/transferlive` commands using incoming `message["text"]` with
+  entirely local mocked send handlers.
+- The earlier `tests/test_delivery_text_compatibility.py`,
+  `tests/test_processing_text_mirror.py`,
+  `tests/test_backoffice_text_edit_safety.py`, and
+  `tests/test_message_text_reconciliation.py` retain focused tests for
+  retry/send idempotency, SQLite atomicity, CSRF/optimistic concurrency, and
+  read-only historical audits.
+
+Run the existing Python 3.11 suite:
+```bash
+python -m pytest -q tests
+```
+
+**No production module, database schema, CSV exporter, Telegram payload,
+publishing rule, or CI workflow is modified by issue #26.** All integration
+fixtures use temporary SQLite files. The fake Telegram/AI/preview/monitor
+objects must never make real network requests.

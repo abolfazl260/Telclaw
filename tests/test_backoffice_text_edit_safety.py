@@ -16,6 +16,7 @@ from storage import database
 def text_db(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DB_NAME", str(tmp_path / "text-editor.sqlite3"))
     database.initialize_db()
+    backoffice_data.initialize()
     assert database.insert_message(
         "fixture", 99, "Legacy   content", "2026-09-29",
         raw_text="Original  Telegram\ncontent  📦",

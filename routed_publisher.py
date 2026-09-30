@@ -83,12 +83,14 @@ class RoutedPublisher:
                       AND m.ai_status='processed'
                       AND m.ai_category='transferlist'
                       AND t.departure_date IS NOT NULL
+                      AND TRIM(COALESCE(t.origin_city, '')) <> ''
+                      AND TRIM(COALESCE(t.destination_city, '')) <> ''
                       AND date(substr(t.departure_date,1,10)) >= date(?)
                       AND NOT EXISTS (
                           SELECT 1 FROM publishing_deliveries d
                            WHERE d.message_id=m.id
                              AND d.target_id=?
-                             AND d.status='sent'
+                             AND d.status IN ('sent','rejected','sending','uncertain')
                       )
                     ORDER BY t.id ASC
                     LIMIT ?""",

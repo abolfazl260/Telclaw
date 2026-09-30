@@ -81,3 +81,89 @@ def test_sender_and_hash_index_exists():
     conn = _db()
     indexes = {row[1] for row in conn.execute("PRAGMA index_list(messages)").fetchall()}
     assert "idx_messages_sender_content_hash" in indexes
+
+
+
+def _db_with_raw():
+    """Modern message schema with both original and compatibility text fields."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_username TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            sender_id INTEGER,
+            raw_text TEXT,
+            text TEXT,
+            UNIQUE(channel_username, message_id)
+        )"""
+    )
+    return conn
+
+
+def test_backfill_hash_uses_raw_text_not_processed_legacy_copy():
+    conn = _db_with_raw()
+    original = "ORIGINAL  🧳    Tehran to Toronto"
+    cleaned_or_edited = "Edited data that does not match original"
+    conn.execute(
+        "INSERT INTO messages(channel_username,message_id,sender_id,raw_text,text) "
+        "VALUES(?,?,?,?,?)",
+        ("first_channel", 400, 19, original, cleaned_or_edited),
+    )
+
+    ensure_duplicate_schema(conn)
+
+    row = conn.execute(
+        "SELECT raw_text,text,content_hash FROM messages WHERE message_id=400"
+    ).fetchone()
+    assert row["raw_text"] == original
+    assert row["text"] == cleaned_or_edited
+    assert row["content_hash"] == content_hash(original)
+    assert find_duplicate(conn, 19, original)["message_id"] == 400
+    assert find_duplicate(conn, 19, cleaned_or_edited) is None
+    conn.close()
+
+
+def test_hash_backfill_keeps_text_fallback_for_null_or_empty_raw():
+    conn = _db_with_raw()
+    conn.executemany(
+        "INSERT INTO messages(channel_username,message_id,sender_id,raw_text,text) "
+        "VALUES(?,?,?,?,?)",
+        [
+            ("source", 410, 10, None, "legacy payload"),
+            ("source", 411, 11, "", "old empty-raw legacy payload"),
+            ("source", 412, 12, None, None),
+        ],
+    )
+    ensure_duplicate_schema(conn)
+
+    rows = conn.execute(
+        "SELECT message_id,raw_text,text,content_hash FROM messages "
+        "ORDER BY message_id"
+    ).fetchall()
+    assert rows[0]["content_hash"] == content_hash("legacy payload")
+    assert rows[1]["content_hash"] == content_hash("old empty-raw legacy payload")
+    assert rows[2]["content_hash"] is None
+    assert rows[0]["raw_text"] is None
+    assert rows[1]["raw_text"] == ""
+    assert find_duplicate(conn, 10, "legacy payload")["message_id"] == 410
+    conn.close()
+
+
+def test_hash_backfill_never_rewrites_an_existing_fingerprint():
+    conn = _db_with_raw()
+    ensure_duplicate_schema(conn)
+    conn.execute(
+        "INSERT INTO messages(channel_username,message_id,sender_id,raw_text,text,content_hash) "
+        "VALUES(?,?,?,?,?,?)",
+        ("source", 420, 50, "new original", "new cleaned", "existing-fingerprint"),
+    )
+
+    ensure_duplicate_schema(conn)
+
+    row = conn.execute(
+        "SELECT raw_text,text,content_hash FROM messages WHERE message_id=420"
+    ).fetchone()
+    assert tuple(row) == ("new original", "new cleaned", "existing-fingerprint")
+    conn.close()

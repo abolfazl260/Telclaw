@@ -2,6 +2,7 @@
 
 from storage import database
 from storage.location_normalizer import normalize_location
+from storage.data_normalizer import initialize as initialize_normalization, normalize_category_data
 
 
 class MessageRepository:
@@ -9,6 +10,7 @@ class MessageRepository:
 
     def initialize(self):
         database.initialize_db()
+        initialize_normalization()
         self._initialize_transfer_locations()
 
     @staticmethod
@@ -80,8 +82,12 @@ class MessageRepository:
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 
-    def get_advertio_pending(self, limit=100, channel_username=None):
-        return database.get_advertio_pending_messages(limit=limit, channel_username=channel_username)
+    def get_advertio_pending(self, limit=100, channel_username=None, before_datetime=None):
+        return database.get_advertio_pending_messages(
+            limit=limit,
+            channel_username=channel_username,
+            before_datetime=before_datetime,
+        )
 
     def get_latest_message_id(self, channel_username):
         return database.get_latest_message_id(channel_username)
@@ -134,7 +140,8 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def save_category_record(self, processed_message_id, category, data):
-        result = database.save_category_record(processed_message_id, category, data)
+        normalized_data, _ = normalize_category_data(category, data)
+        result = database.save_category_record(processed_message_id, category, normalized_data)
         if category == "transferlist":
             conn = database.get_connection()
             try:
@@ -163,11 +170,11 @@ class MessageRepository:
         )
 
     def clear_media_path(self, message_id, channel_username):
-        """Clear media_path for exactly one delivered message record."""
+        """Clear legacy and ordered local media paths for one delivered record."""
         conn = database.get_connection()
         try:
             cursor = conn.execute(
-                "UPDATE messages SET media_path=NULL WHERE channel_username=? AND message_id=?",
+                "UPDATE messages SET media_path=NULL, media_paths=NULL WHERE channel_username=? AND message_id=?",
                 (channel_username, message_id),
             )
             conn.commit()

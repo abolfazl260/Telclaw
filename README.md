@@ -224,6 +224,33 @@ Telegram API credentials are loaded from environment variables and are never com
 
 1. Copy `.env.example` to `.env`.
 2. Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`.
+
+### Structured data normalization
+
+The Back Office **Normalization** tab manages exact, field-specific alias rules
+for structured category data. Raw Telegram source text is preserved. New AI
+extractions are normalized before persistence and publishing, manual Database-tab
+edits use the same rules, and existing rows can be re-normalized explicitly after
+reviewing the affected counts. Alias matching is case- and accent-insensitive and
+can optionally be scoped by an ISO2 country code. A rule may also map an ambiguous
+value to SQL NULL.
+
+Built-in transfer aliases cover common variants such as Dusseldorf/Düsseldorf,
+Frankfurt (Main)/Frankfurt, LA/Los Angeles and Imam Airport/Tehran. Multi-city
+values such as Dusseldorf/Wuppertal are treated as ambiguous rather than guessed.
+
+### Back Office settings precedence
+
+The Back Office **Settings** tab exposes the configuration keys documented in
+`.env.example`. Values in `.env` remain the defaults. Saving a value in Back
+Office creates a persistent SQLite override; **Use .env default** removes that
+override. Secrets are masked in the web UI.
+
+On startup Telclaw loads `.env`, opens the bootstrap SQLite database, applies
+saved Back Office overrides, and only then initializes the main services. Settings
+that bind listeners or construct long-lived clients are marked **restart required**.
+`TELCLAW_DB_NAME` remains a bootstrap-only `.env` setting because the database
+must be known before stored overrides can be read.
 3. Install dependencies.
 4. Start Telclaw.
 

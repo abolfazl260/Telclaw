@@ -9,6 +9,7 @@ import aiohttp
 
 import config
 from storage import database
+from storage.data_normalizer import normalize_category_data
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class TelegramTransferPublisher:
         )
         text = emoji_pattern.sub("", str(text))
         text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
-        return re.sub(r"[ \\t]{2,}", " ", text).strip()
+        return re.sub(r"[ \t]{2,}", " ", text).strip()
 
     @staticmethod
     def _country_flag(value):
@@ -178,6 +179,7 @@ class TelegramTransferPublisher:
 
     @classmethod
     def format_ad(cls, record, data):
+        data, _ = normalize_category_data("transferlist", data)
         origin = cls._value(data, "origin_city")
         destination = cls._value(data, "destination_city")
         if not origin or not destination:
@@ -187,6 +189,10 @@ class TelegramTransferPublisher:
         ad_number = record.get("ad_number")
         if ad_number is not None:
             lines.append(f"TR-{int(ad_number):06d}")
+            lines.append("")
+        title = cls._remove_emojis(cls._value(data, "title"))
+        if title:
+            lines.append(f"📌 عنوان: {title}")
             lines.append("")
         lines.extend([
             cls._location_line("مبدا", origin, cls._value(data, "origin_country")),

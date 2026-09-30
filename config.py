@@ -58,6 +58,13 @@ TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 TELEGRAM_BOT_TOKEN = os.getenv("TELCLAW_TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = _float_env("TELCLAW_TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", 30, minimum=0)
+BACKOFFICE_ENABLED = os.getenv("TELCLAW_BACKOFFICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+BACKOFFICE_PUBLIC_URL = os.getenv("TELCLAW_BACKOFFICE_PUBLIC_URL", "").strip()
+BACKOFFICE_PUBLIC_PORT = _int_env("TELCLAW_BACKOFFICE_PUBLIC_PORT", 0, minimum=0)
+BACKOFFICE_HOST = os.getenv("TELCLAW_BACKOFFICE_HOST", "127.0.0.1").strip()
+BACKOFFICE_PORT = _int_env("TELCLAW_BACKOFFICE_PORT", 8787, minimum=1)
+BACKOFFICE_TLS_CERT = os.getenv("TELCLAW_BACKOFFICE_TLS_CERT", "").strip()
+BACKOFFICE_TLS_KEY = os.getenv("TELCLAW_BACKOFFICE_TLS_KEY", "").strip()
 
 # AI providers are evaluated strictly in this order.
 _SUPPORTED_AI_PROVIDERS = {"groq", "cloudflare"}

@@ -35,6 +35,18 @@
       "username": "jobfoundtoronto",
       "country": "Canada",
       "description": "Employment opportunities in Toronto."
+    },
+    {
+      "name": "Pars Expert",
+      "username": "parsexpert",
+      "country": "Canada",
+      "description": "Job and professional opportunities for the Iranian community in Canada."
+    },
+    {
+      "name": "Vancouver Hiring",
+      "username": "VancouverHiring",
+      "country": "Canada",
+      "description": "Hiring and job opportunities in Vancouver."
     }
   ],
   "Canada_Immigrate": [
@@ -201,6 +213,54 @@
       "username": "rentvancouver",
       "country": "Canada",
       "description": "Rental listings in British Columbia and Vancouver."
+    },
+    {
+      "name": "Canada Immigration and Residence",
+      "username": "mohajerat_va_eghamat_canada",
+      "country": "Canada",
+      "description": "Canada immigration, residence, and housing-related community."
+    },
+    {
+      "name": "Maskan O Arz",
+      "username": "maskanoarz",
+      "country": "Canada",
+      "description": "Housing and real-estate listings."
+    },
+    {
+      "name": "Toronto Iranians",
+      "username": "Toronto_Iranians",
+      "country": "Canada",
+      "description": "Iranian community in Toronto with housing-related posts."
+    },
+    {
+      "name": "Canada Home",
+      "username": "CanadaHome",
+      "country": "Canada",
+      "description": "Housing and home listings in Canada."
+    },
+    {
+      "name": "Buy House in MT",
+      "username": "buyhouseinMT",
+      "country": "Canada",
+      "description": "Home buying and real-estate listings in Canada."
+    },
+    {
+      "name": "Toronto Apartment House",
+      "username": "Toronto_Apartment_House",
+      "country": "Canada",
+      "description": "Apartment and house listings in Toronto."
+    },
+    {
+      "name": "Khaneyab Toronto",
+      "username": "KhaneyabToronto",
+      "country": "Canada",
+      "description": "Housing and rental listings in Toronto."
+    },
+    {
+      "name": "Luxury Toronto Home",
+      "username": "luxarytorontohome",
+      "country": "Canada",
+      "description": "Luxury housing and real-estate listings in Toronto."
     }
   ],
   "Canada_Flight": [
@@ -317,6 +377,114 @@
       "username": "RezaSBK90",
       "country": "International",
       "description": "Chat group for Iranian passenger cargo transportation services."
+    },
+    {
+      "name": "Iran Canada Cargo",
+      "username": "Iran_Canada_cargo",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping between Iran and Canada."
+    },
+    {
+      "name": "IranCanada Cargo",
+      "username": "IranCanada_Cargo",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping between Iran and Canada."
+    },
+    {
+      "name": "Giti Bar Canada",
+      "username": "gitibar_canada",
+      "country": "Canada",
+      "description": "Passenger cargo and shipping services for Canada."
+    },
+    {
+      "name": "Koolbar London",
+      "username": "koolbarlondon",
+      "country": "United Kingdom",
+      "description": "Passenger cargo and luggage shipping related to London."
+    },
+    {
+      "name": "US Kolbar",
+      "username": "USkolbar",
+      "country": "USA",
+      "description": "Passenger cargo and luggage shipping related to the USA."
+    },
+    {
+      "name": "Coolbar EU Iran",
+      "username": "CoolbarEUIRAN",
+      "country": "Europe",
+      "description": "Passenger cargo and shipping between Europe and Iran."
+    },
+    {
+      "name": "Touring China",
+      "username": "TouringChina",
+      "country": "China",
+      "description": "Travel and cargo related community for China."
+    },
+    {
+      "name": "Sheypoor UK Bar",
+      "username": "SheypoorUkBar",
+      "country": "United Kingdom",
+      "description": "Passenger cargo and luggage shipping related to the UK."
+    },
+    {
+      "name": "Mosafferan",
+      "username": "mosafferan",
+      "country": "International",
+      "description": "Passenger travel and cargo coordination channel."
+    },
+    {
+      "name": "England Tehran Cargo",
+      "username": "ErsalebarazEnglandtoTehranIran",
+      "country": "United Kingdom",
+      "description": "Passenger cargo and shipping between England and Tehran, Iran."
+    },
+    {
+      "name": "Big World Market",
+      "username": "big_world_market",
+      "country": "International",
+      "description": "International marketplace and cargo-related channel."
+    },
+    {
+      "name": "Italy Iran Cargo",
+      "username": "itlayirancargo",
+      "country": "Italy",
+      "description": "Passenger cargo and shipping between Italy and Iran."
+    },
+    {
+      "name": "Post 2 Iran",
+      "username": "post2iran",
+      "country": "International",
+      "description": "Shipping and package delivery to Iran."
+    },
+    {
+      "name": "Ersal Bar",
+      "username": "ersal_bar",
+      "country": "International",
+      "description": "Passenger cargo and shipping coordination."
+    },
+    {
+      "name": "Pars Cargo",
+      "username": "ParsCargo",
+      "country": "International",
+      "description": "Passenger cargo and international shipping coordination."
+    },
+    {
+      "name": "Giti Bar Australia",
+      "username": "gitibar_australia",
+      "country": "Australia",
+      "description": "Passenger cargo and shipping services related to Australia."
+    },
+    {
+      "name": "Koulbaran",
+      "username": "koulbaran",
+      "country": "International",
+      "description": "Passenger cargo and luggage shipping coordination."
+    },
+    {
+      "name": "Deliver 2 You",
+      "username": "deliver2you",
+      "country": "International",
+      "description": "Passenger cargo and delivery coordination."
     }
   ],
   "Canada_Language": [
@@ -351,6 +519,42 @@
       "username": "kioosk1",
       "country": "Canada",
       "description": "Business listings and classifieds platform in Canada."
+    },
+    {
+      "name": "Housing Kooch Canada",
+      "username": "housingkoochcanada",
+      "country": "Canada",
+      "description": "Housing and home listings in Canada."
+    },
+    {
+      "name": "Divare Mehrabani London",
+      "username": "divaremehrabanilondon",
+      "country": "Canada",
+      "description": "Housing and local listings for London, Canada."
+    },
+    {
+      "name": "Divar Agahi Canada",
+      "username": "DivarAgahiCanada",
+      "country": "Canada",
+      "description": "Canadian classifieds and marketplace listings."
+    },
+    {
+      "name": "Iranians of Canada",
+      "username": "Iranians_of_Canada",
+      "country": "Canada",
+      "description": "Iranian community classifieds and marketplace in Canada."
+    },
+    {
+      "name": "Richmond Hill Toronto",
+      "username": "RichmondHillToronto",
+      "country": "Canada",
+      "description": "Local community and marketplace listings in Richmond Hill and Toronto."
+    },
+    {
+      "name": "Divare Canada",
+      "username": "divare_canada",
+      "country": "Canada",
+      "description": "Canadian classifieds and marketplace listings."
     }
   ],
   "Canada_Education": [
@@ -397,6 +601,12 @@
       "username": "canadapa",
       "country": "Canada",
       "description": "Community chat for Canada-related discussions."
+    },
+    {
+      "name": "Move 2 Vancouver",
+      "username": "Move2Vancouver",
+      "country": "Canada",
+      "description": "Community for moving to and living in Vancouver."
     }
   ],
   "Canada_Other": [
@@ -481,6 +691,116 @@
       "username": "work_dubai_uae",
       "country": "UAE",
       "description": "Jobs in Dubai."
+    }
+  ],
+  "Iranian_onlineshop": [
+    {
+      "name": "Arayeshi Arosha",
+      "username": "arayeshi_arosha",
+      "country": "Iran",
+      "description": "Iranian online shop channel."
+    },
+    {
+      "name": "Danjeh Boutique Online",
+      "username": "danjehboutique_online",
+      "country": "Iran",
+      "description": "Iranian online boutique and shopping channel."
+    },
+    {
+      "name": "Mari Online Shop",
+      "username": "Marionlineshop2020",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Istanbul Online Shop",
+      "username": "istanbulonlineshoppp",
+      "country": "Turkey",
+      "description": "Iranian-focused online shopping channel based around Istanbul."
+    },
+    {
+      "name": "Rojaa Shop",
+      "username": "rojaashop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Parish Appo",
+      "username": "parishappo",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Rush Barbari",
+      "username": "rushbarbari",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Simo Online Shopping",
+      "username": "simo_onlineshopping",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Linary Shop",
+      "username": "linaryshop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Saharbanu Shop",
+      "username": "saharbanu_shop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Madame Boutique",
+      "username": "madameboutique",
+      "country": "Iran",
+      "description": "Iranian online boutique and shopping channel."
+    },
+    {
+      "name": "Heraa Club",
+      "username": "heraa_club",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Kabok Online Shop",
+      "username": "kabokonlineshop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Femmora Shop",
+      "username": "femmorashop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Coral Collection Online Shop",
+      "username": "coral_collection_online_shop",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Canada Shopping",
+      "username": "Canada_shopping",
+      "country": "Canada",
+      "description": "Online shopping channel serving Iranian shoppers in Canada."
+    },
+    {
+      "name": "Elvin Shop 2",
+      "username": "elvinshop2",
+      "country": "Iran",
+      "description": "Iranian online shopping channel."
+    },
+    {
+      "name": "Online Shop Italy",
+      "username": "onlineshop_italy",
+      "country": "Italy",
+      "description": "Online shopping channel serving Iranian shoppers in Italy."
     }
   ]
 }

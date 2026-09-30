@@ -23,4 +23,8 @@ Existing housing normalization rules:
 - property_type is apartment, condo, basement, studio, room, or house when supported by the source.
 - bedrooms uses 0, 1, 2, 3, or 4+ as a string when supported.
 - price is a monthly CAD number when supported; do not convert currencies or invent exchange rates.
+- area_unit must be sqm or sqft when the source states the unit; do not guess the unit. Downstream normalization converts sqft areas to square metres for Advertio.
+- furnished must be furnished, unfurnished, or partially when supported by the source; use null when unknown.
+- availability is only the exact move-in/start date. Return YYYY-MM-DD only when the source gives a date with an explicit year; use null for vague values such as "available now", a month without a year, or an end date. Put rental duration such as short-term, long-term, daily, weekly, or monthly in rent_period instead.
+- property_condition is internal Telclaw metadata and is not sent to Advertio. Keep only a concise condition explicitly stated by the source (for example new, renovated, good, excellent, clean, newly painted, modern, luxury). Do not put furnishing or move-in availability text in property_condition; use null when the text is ambiguous.
 - Extract only information actually present or safely normalized from the source.

@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
 
 
@@ -78,3 +80,103 @@ def test_roommate_age_range_and_gender_use_documented_shapes():
     attrs = json.loads(payload["attributesJson"])
     assert attrs["gender_preference"] == "female"
     assert attrs["age_range"] == [20, 35]
+
+
+def test_canonical_rent_period_maps_to_advertio_rental_duration():
+    short_payload = _service().build_payload(_record(), _housing(rent_period="short_term"))
+    long_payload = _service().build_payload(_record(), _housing(rent_period="long_term"))
+    daily_payload = _service().build_payload(_record(), _housing(rent_period="daily"))
+
+    assert json.loads(short_payload["attributesJson"])["rental_duration"] == "short_term"
+    assert json.loads(long_payload["attributesJson"])["rental_duration"] == "long_term"
+    assert json.loads(daily_payload["attributesJson"])["rental_duration"] == "daily"
+
+
+def test_advertio_accepts_all_canonical_bedroom_values():
+    for bedrooms in ("0", "1", "2", "3", "4+"):
+        payload = _service().build_payload(_record(), _housing(bedrooms=bedrooms))
+        assert json.loads(payload["attributesJson"])["bedrooms"] == bedrooms
+
+
+def test_normalized_bathroom_count_reaches_advertio_payload():
+    payload = _service().build_payload(_record(), _housing(bathrooms=3))
+    assert json.loads(payload["attributesJson"])["bathrooms_count"] == 3
+
+
+def test_advertio_converts_square_feet_to_square_metres():
+    payload = _service().build_payload(
+        _record(), _housing(area=1000, area_unit="Sq.Ft")
+    )
+    assert json.loads(payload["attributesJson"])["area"] == 92.9
+
+
+def test_advertio_omits_area_when_unit_is_unknown():
+    payload = _service().build_payload(
+        _record(), _housing(area=100, area_unit=None)
+    )
+    assert "area" not in json.loads(payload["attributesJson"])
+
+
+def test_advertio_accepts_canonical_square_metre_area():
+    payload = _service().build_payload(
+        _record(), _housing(area=100, area_unit="sqm")
+    )
+    assert json.loads(payload["attributesJson"])["area"] == 100
+
+
+@pytest.mark.parametrize("furnished,expected", [
+    ("furnished", "furnished"),
+    ("unfurnished", "unfurnished"),
+    ("partially", "partially"),
+    ("TRUE", "furnished"),
+    ("0", "unfurnished"),
+])
+def test_advertio_furnishing_enum_mapping(furnished, expected):
+    payload = _service().build_payload(
+        _record(), _housing(furnished=furnished)
+    )
+    assert json.loads(payload["attributesJson"])["furnishing"] == expected
+
+
+@pytest.mark.parametrize("availability,expected", [
+    ("9/11/26", "2026-09-11"),
+    ("2026-09-25 to 2026-10-05", "2026-09-25"),
+    ("Oct 01,2026", "2026-10-01"),
+    ("1-Oct-26", "2026-10-01"),
+])
+def test_advertio_normalizes_available_from_date(availability, expected):
+    payload = _service().build_payload(
+        _record(), _housing(availability=availability)
+    )
+    assert json.loads(payload["attributesJson"])["available_from"] == expected
+
+
+@pytest.mark.parametrize("availability", [
+    "Available now",
+    "September",
+    "Early November",
+    "after 2026-11-10",
+])
+def test_advertio_omits_vague_availability(availability):
+    payload = _service().build_payload(
+        _record(), _housing(availability=availability)
+    )
+    assert "available_from" not in json.loads(payload["attributesJson"])
+
+
+def test_advertio_uses_duration_semantics_from_legacy_availability():
+    payload = _service().build_payload(
+        _record(), _housing(availability="short-term", rent_period=None)
+    )
+    attrs = json.loads(payload["attributesJson"])
+    assert attrs["rental_duration"] == "short_term"
+    assert "available_from" not in attrs
+
+
+def test_property_condition_is_not_sent_to_advertio():
+    payload = _service().build_payload(
+        _record(), _housing(property_condition="renovated")
+    )
+    attrs = json.loads(payload["attributesJson"])
+    assert "property_condition" not in attrs
+    assert "condition" not in attrs

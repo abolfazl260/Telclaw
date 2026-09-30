@@ -10,6 +10,7 @@ import config
 from ai.extractor import AIExtractionError
 from ai.provider_manager import AIProviderManager
 from storage.message_repository import MessageRepository
+from storage.data_normalizer import normalize_category_data
 from services.stage_control import get_stage_control
 
 logger = logging.getLogger("telclaw.ai")
@@ -120,19 +121,12 @@ class AIProcessingService:
                 self._rate_limit_wait(exc, rate_limit_attempts)
 
     def _prepare_media_for_advertio(self, record):
-        if record.get("media_type") != "photo":
+        if not self.advertio_service:
             return True
-        existing = record.get("media_path")
-        if existing:
-            from pathlib import Path
-            if Path(existing).is_file():
-                return True
-        if self.media_downloader is None:
-            raise RuntimeError("Telegram media downloader is not configured for this AI run")
-        media_path = self.media_downloader(record)
-        if not media_path:
-            raise RuntimeError("Telegram media download returned no file")
-        record["media_path"] = media_path
+        self.advertio_service.prepare_media_for_delivery(
+            record,
+            media_downloader=self.media_downloader,
+        )
         return True
 
     def _deliver_to_advertio(self, record, category, data):
@@ -153,8 +147,12 @@ class AIProcessingService:
         try:
             print(f"[ADVERTIO] message={record['message_id']} status=request_started")
             result = self.advertio_service.deliver(record, data)
-            status = "already_existed" if result.get("already_existed") else "sent"
-            self.repository.mark_advertio_result(record["message_id"], record["channel_username"], status=status, lead_id=result.get("lead_id"), error=None, processed_at=now)
+            status = self.advertio_service.finalize_successful_delivery(
+                record,
+                result,
+                repository=self.repository,
+                processed_at=now,
+            )
             print(f"[ADVERTIO] {status}: message={record['message_id']} lead={result.get('lead_id')} http={result.get('http_status')}")
             return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0, "skipped": 0}
         except Exception as exc:
@@ -204,6 +202,12 @@ class AIProcessingService:
                 data = result.get("data", {}).get(category)
                 if not isinstance(data, dict):
                     raise AIExtractionError(f"Missing extracted data for classified category: {category}", reason="invalid_provider_output")
+                data, normalization_changes = normalize_category_data(category, data)
+                if normalization_changes:
+                    logger.info(
+                        "[NORMALIZATION] message_id=%s category=%s fields=%s",
+                        record.get("message_id"), category, ",".join(sorted(normalization_changes)),
+                    )
                 self.repository.save_category_record(record["id"], category, data)
                 self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=True, ai_category=category, ai_processed_at=datetime.now(timezone.utc).isoformat())
                 delivery = self._deliver_to_advertio(record, category, data)

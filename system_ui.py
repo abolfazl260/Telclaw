@@ -7,7 +7,7 @@ from colorama import Fore
 from ai.ai_service import AIProcessingService
 from ai.classification_service import CategoryClassificationService
 from ai.groq_connection_test import test_groq_connection
-from collection.media_downloader import download_photo_for_record
+from collection.media_downloader import download_photos_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
 from delivery.telegram_transfer import (
     get_ready_transfer_ads,
@@ -44,7 +44,7 @@ class SystemConsoleUI(ConsoleUI):
 
         def download(record):
             future = asyncio.run_coroutine_threadsafe(
-                download_photo_for_record(self.client, record), loop
+                download_photos_for_record(self.client, record), loop
             )
             return future.result()
 
@@ -416,6 +416,10 @@ class SystemConsoleUI(ConsoleUI):
         self.clear_screen()
         self.show_banner()
         self.show_section_header("Send Transfer Ads")
+        if config.BACKOFFICE_ENABLED:
+            self.show_message("Rule-based publishing is active. Manage destinations in the back office.", Fore.YELLOW)
+            await self.pause()
+            return
         try:
             status = get_transfer_queue_status()
             available = status["waiting"] + status["failed"]
@@ -564,11 +568,29 @@ class SystemConsoleUI(ConsoleUI):
                 await self.pause()
                 return
 
+            media_downloader = None
+            selected = preview[:limit]
+            if any(record.get("media_type") == "photo" for record in selected):
+                client = await self.connect_client()
+                if client is None:
+                    self.show_message(
+                        "Advertio delivery needs a connected Telegram account to prepare listing photos.",
+                        Fore.RED,
+                    )
+                    await self.pause()
+                    return
+                media_downloader = self._make_sync_media_downloader()
+
             self.show_message(
                 "Starting Advertio delivery. No Telegram crawl and no AI extraction will run.",
                 Fore.CYAN,
             )
-            result = await asyncio.to_thread(self.advertio_service.deliver_pending, limit=limit, progress=True)
+            result = await asyncio.to_thread(
+                self.advertio_service.deliver_pending,
+                limit=limit,
+                progress=True,
+                media_downloader=media_downloader,
+            )
             color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
             self.show_message(
                 f"Completed. Found: {result['found']} | Sent: {result['sent']} | "

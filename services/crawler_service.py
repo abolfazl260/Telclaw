@@ -74,29 +74,35 @@ class CrawlerService:
         if spacing < 0:
             raise ValueError("Channel interval cannot be negative")
 
-        jobs = []
+        channels = []
         scheduled_usernames = set()
 
         for category in selected_categories:
             for channel in self.channels_for_category(category):
                 username = channel.get("username")
-                if not username or username in scheduled_usernames:
+                if not username:
                     continue
 
-                scheduled_usernames.add(username)
-                jobs.append(
-                    self.scheduler.schedule_channel(
-                        client,
-                        username,
-                        from_date,
-                        to_date,
-                        interval_minutes=interval_minutes,
-                        start_delay_minutes=spacing * len(jobs),
-                        crawl_mode=crawl_mode,
-                    )
-                )
+                normalized = username.lower().lstrip("@")
+                if normalized in scheduled_usernames:
+                    continue
 
-        return jobs
+                scheduled_usernames.add(normalized)
+                channels.append(username)
+
+        if not channels:
+            return []
+
+        job = self.scheduler.schedule_cycle(
+            client,
+            channels,
+            from_date,
+            to_date,
+            interval_minutes=interval_minutes,
+            channel_interval_minutes=spacing,
+            crawl_mode=crawl_mode,
+        )
+        return [job]
 
     def active_jobs(self):
         return self.scheduler.active_jobs()

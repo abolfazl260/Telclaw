@@ -13,11 +13,28 @@ TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
 CRAWLER_ERRORS_LOG=PROJECT_ROOT / "crawler_errors.log"
 TELEGRAM_MAX_DOCUMENT_BYTES=50*1024*1024
+ADMIN_USER_IDS=frozenset({1485409432, 266809220, 7469291969, 106056586})
+
+def _is_expected_aiohttp_client_noise(record):
+    """Ignore malformed client protocol probes while keeping real server errors visible."""
+    if record.name != "aiohttp.server" or not record.exc_info:
+        return False
+    exc_type, exc, _ = record.exc_info
+    if exc_type is None or exc is None:
+        return False
+    module = getattr(exc_type, "__module__", "")
+    name = getattr(exc_type, "__name__", "")
+    if module != "aiohttp.http_exceptions" or name != "BadHttpMessage":
+        return False
+    detail = str(exc)
+    return "Pause on PRI/Upgrade" in detail or "Invalid method encountered" in detail
+
 
 class _TelegramErrorHandler(logging.Handler):
     def __init__(self,monitor): super().__init__(level=logging.ERROR); self.monitor=monitor
     def emit(self,record):
         if record.name.startswith("monitoring.telegram_monitor"): return
+        if _is_expected_aiohttp_client_noise(record): return
         try: asyncio.get_running_loop().create_task(self.monitor.error(record.levelname,record.name,self.format(record)))
         except RuntimeError: pass
 
@@ -27,8 +44,12 @@ class TelegramMonitor:
     async def start(self):
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
+    def runtime_status(self):
+        task=self._task
+        return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
+                "offset":int(self._offset or 0)}
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -46,6 +67,7 @@ class TelegramMonitor:
                 if not response.ok or not data.get("ok"): raise RuntimeError(f"Telegram API {method} failed: HTTP {response.status}")
                 return data
     async def _send_document(self,chat_id,file_path,caption):
+        if not self._is_admin_chat(chat_id): return
         form=aiohttp.FormData(); file_handle=file_path.open("rb"); form.add_field("chat_id",str(chat_id)); form.add_field("caption",caption); form.add_field("document",file_handle,filename=file_path.name)
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
@@ -69,8 +91,8 @@ class TelegramMonitor:
         ]}
     async def _handle_callback(self,callback):
         callback_id=callback.get("id"); data=str(callback.get("data") or ""); message=callback.get("message") or {}; chat=(message.get("chat") or {}); chat_id=chat.get("id")
+        if not self._is_admin_private_chat(chat,callback.get("from")): return
         if callback_id: await self._api("answerCallbackQuery",{"callback_query_id":callback_id})
-        if chat_id is None: return
         if not self._is_subscribed(chat_id):
             await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
         if data == "refresh:status":
@@ -85,7 +107,7 @@ class TelegramMonitor:
         if update.get("callback_query"):
             await self._handle_callback(update["callback_query"]); return
         message=update.get("message") or {}; chat=message.get("chat") or {}; chat_id=chat.get("id")
-        if chat_id is None:return
+        if not self._is_admin_private_chat(chat,message.get("from")): return
         text=(message.get("text") or "").strip().lower()
         command=text.split(maxsplit=1)[0].split("@",1)[0] if text else ""
         if command == "/start":
@@ -98,6 +120,16 @@ class TelegramMonitor:
         elif command == "/source": await self._send_source_chunks(chat_id)
         elif command == "/down_errors": await self._download_errors(chat_id)
         elif command == "/database": await self._download_database(chat_id)
+        elif command == "/backoffice":
+            if not config.BACKOFFICE_ENABLED:
+                await self._send(chat_id,"Back office is not enabled on this server."); return
+            try:
+                from backoffice_web import issue_link
+                url = issue_link(message["from"]["id"])
+            except (RuntimeError, PermissionError) as exc:
+                logger.error("Back office link unavailable: %s", exc)
+                await self._send(chat_id,"Back office link is unavailable; check server configuration."); return
+            await self._send(chat_id,f'<a href="{html.escape(url, quote=True)}">Open private back office</a>\\nThis link expires in 5 minutes and works once.')
     def _tehran_timestamp(self,value):
         if not value:return "هنوز ثبت نشده"
         try:
@@ -105,7 +137,16 @@ class TelegramMonitor:
             if dt.tzinfo is None: dt=dt.replace(tzinfo=ZoneInfo("UTC"))
             return dt.astimezone(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M:%S")
         except (TypeError,ValueError): return str(value)
-    def _is_subscribed(self,chat_id): return any(int(s["chat_id"])==int(chat_id) for s in database.get_monitor_subscribers())
+    @staticmethod
+    def _is_admin_chat(chat_id):
+        try: return int(chat_id) in ADMIN_USER_IDS
+        except (TypeError, ValueError): return False
+    @classmethod
+    def _is_admin_private_chat(cls,chat,user):
+        if not isinstance(chat,dict) or not isinstance(user,dict): return False
+        return chat.get("type") == "private" and cls._is_admin_chat(user.get("id")) and chat.get("id") == user.get("id")
+    def _is_subscribed(self,chat_id):
+        return self._is_admin_chat(chat_id) and any(int(s["chat_id"])==int(chat_id) for s in database.get_monitor_subscribers())
     async def _download_errors(self,chat_id):
         if not self._is_subscribed(chat_id): await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
         log_path=CRAWLER_ERRORS_LOG
@@ -170,16 +211,46 @@ class TelegramMonitor:
         if current:chunks.append(current)
         for chunk in chunks: await self._send(chat_id,chunk)
     async def _send(self,chat_id,text,reply_markup=None):
+        if not self._is_admin_chat(chat_id): return
         payload={"chat_id":chat_id,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}
         if reply_markup is not None: payload["reply_markup"]=reply_markup
         await self._api("sendMessage",payload)
+    async def broadcast_transfer_live(self):
+        """Send the existing /transferlive report once to every active subscriber."""
+        if not self.enabled:
+            return
+
+        from monitoring.transfer_live import _send_transfer_live
+
+        for subscriber in database.get_monitor_subscribers():
+            chat_id = subscriber.get("chat_id")
+            if not self._is_admin_chat(chat_id):
+                continue
+            try:
+                await _send_transfer_live(self, int(chat_id))
+            except Exception:
+                logger.exception(
+                    "Automatic transfer-live delivery failed for subscriber %s",
+                    chat_id,
+                )
+
     async def broadcast(self,text):
         if not self.enabled:return
         for subscriber in database.get_monitor_subscribers():
+            if not self._is_admin_chat(subscriber.get("chat_id")): continue
             try: await self._send(int(subscriber["chat_id"]),text)
             except Exception: logger.warning("Telegram monitor delivery failed for subscriber %s",subscriber["chat_id"])
-    async def error(self,level,source,message): await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
+    async def error(self,level,source,message):
+        try:
+            database.record_system_activity("error",level,source,str(message)[:4000])
+        except Exception:
+            logger.exception("Failed to persist system error activity")
+        await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
     async def report(self,kind,stats):
+        try:
+            database.record_system_activity(kind,"INFO","telegram_monitor",f"{kind} report",stats)
+        except Exception:
+            logger.exception("Failed to persist %s report activity",kind)
         titles={"crawl":"📥 CRAWL REPORT","processing":"⚙️ PROCESSING REPORT","classification":"🏷️ AI CLASSIFICATION REPORT","ai":"🤖 AI REPORT","advertio":"📤 ADVERTIO REPORT"}; lines=[f"<b>{titles.get(kind,kind.upper()+' REPORT')}</b>",f"🕐 <b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran"]
         for key,value in stats.items():lines.append(f"<b>{html.escape(str(key))}:</b> {html.escape(str(value))}")
         await self.broadcast("\n".join(lines))

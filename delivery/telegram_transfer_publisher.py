@@ -246,6 +246,8 @@ class TelegramTransferPublisher:
 
     @staticmethod
     def _pending_records(limit=100):
+        # Preserve m.raw_text and legacy m.text in this query for compatibility.
+        # The Telegram ad body itself is rendered from transferlist fields.
         conn = database.get_connection()
         try:
             rows = conn.execute("""SELECT m.id AS message_row_id, m.channel_username, m.message_id, m.sender_username,

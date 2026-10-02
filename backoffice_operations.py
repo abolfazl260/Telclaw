@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from datetime import date, datetime, timezone
 
 import config
@@ -49,6 +50,8 @@ class BackofficeOperations:
         self._states = {}
         self._stop_events = {}
         self._fallback_pipeline_lock = asyncio.Lock()
+        self._accounts_cache = []
+        self._accounts_cache_at = 0.0
 
     @property
     def processing(self):
@@ -316,8 +319,18 @@ class BackofficeOperations:
             return getattr(self.console_ui, "client_account", None) or self._account_name
         return self._account_name
 
-    async def list_accounts(self):
-        return await self.accounts.list_accounts()
+    async def list_accounts(self, force=False):
+        now = time.monotonic()
+        if not force and self._accounts_cache_at and now - self._accounts_cache_at < 30:
+            return [dict(item) for item in self._accounts_cache]
+        accounts = await self.accounts.list_accounts()
+        self._accounts_cache = [dict(item) for item in accounts]
+        self._accounts_cache_at = now
+        return [dict(item) for item in self._accounts_cache]
+
+    def _invalidate_accounts_cache(self):
+        self._accounts_cache = []
+        self._accounts_cache_at = 0.0
 
     def _make_sync_media_downloader(self, client):
         loop = asyncio.get_running_loop()
@@ -479,10 +492,16 @@ class BackofficeOperations:
         return await self.accounts.begin_registration(session_name, phone)
 
     async def submit_account_code(self, session_name, code):
-        return await self.accounts.submit_registration_code(session_name, code)
+        result = await self.accounts.submit_registration_code(session_name, code)
+        if result.get("stage") == "complete":
+            self._invalidate_accounts_cache()
+        return result
 
     async def submit_account_password(self, session_name, password):
-        return await self.accounts.submit_registration_password(session_name, password)
+        result = await self.accounts.submit_registration_password(session_name, password)
+        if result.get("stage") == "complete":
+            self._invalidate_accounts_cache()
+        return result
 
     async def cancel_account_registration(self, session_name):
         return await self.accounts.cancel_registration(session_name)

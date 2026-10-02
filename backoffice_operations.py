@@ -17,7 +17,11 @@ from ai.groq_connection_test import test_groq_connection
 from collection.crawler import CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY
 from collection.media_downloader import download_photos_for_record
 from delivery.advertio_service import AdvertioDeliveryService, AdvertioMappingError
-from delivery.telegram_transfer import get_transfer_queue_status
+from delivery.telegram_transfer import (
+    get_transfer_queue_status,
+    get_unsent_transfer_ads,
+    get_unsent_transfer_ads_count,
+)
 from services.account_service import AccountService
 from services.channel_service import ChannelService
 from services.crawler_service import CrawlerService
@@ -509,6 +513,16 @@ class BackofficeOperations:
 
     def transfer_status(self):
         return get_transfer_queue_status()
+
+    def transfer_ads(self, limit=20, offset=0):
+        limit = min(max(int(limit), 1), 100)
+        offset = max(int(offset), 0)
+        return {
+            "total": get_unsent_transfer_ads_count(),
+            "records": get_unsent_transfer_ads(limit=limit, offset=offset),
+            "limit": limit,
+            "offset": offset,
+        }
 
     async def begin_account_registration(self, session_name, phone):
         return await self.accounts.begin_registration(session_name, phone)

@@ -99,7 +99,8 @@ def _pipeline_report(conn):
             "total": 0, "channels": 0, "processing_pending": 0, "processing_failed": 0,
             "classification_pending": 0, "classification_failed": 0, "ai_pending": 0,
             "ai_failed": 0, "advertio_pending": 0, "advertio_failed": 0,
-            "last_crawl": None, "last_processing": None, "last_ai": None, "last_advertio": None,
+            "last_crawl": None, "last_processing": None, "last_classification": None,
+            "last_ai": None, "last_advertio": None,
         }
     columns = _columns(conn, "messages")
     def status_count(column, value, extra=None):
@@ -117,10 +118,13 @@ def _pipeline_report(conn):
         row = conn.execute("SELECT COUNT(DISTINCT channel_username) n FROM messages").fetchone()
         channels = int(row["n"] or 0)
 
-    def max_value(where="1", params=()):
-        if "date" not in columns:
+    def max_column(column, where="1", params=()):
+        if column not in columns:
             return None
-        row = conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}", params).fetchone()
+        row = conn.execute(
+            f"SELECT MAX({column}) value FROM messages WHERE {where}",
+            params,
+        ).fetchone()
         return row["value"] if row and row["value"] else None
 
     advertio_pending = 0
@@ -141,10 +145,11 @@ def _pipeline_report(conn):
         "ai_failed": status_count("ai_status", "failed"),
         "advertio_pending": advertio_pending,
         "advertio_failed": status_count("advertio_status", "failed"),
-        "last_crawl": max_value("collection_status='collected'") if "collection_status" in columns else max_value(),
-        "last_processing": max_value("processing_status='processed'") if "processing_status" in columns else None,
-        "last_ai": max_value("ai_status='processed'") if "ai_status" in columns else None,
-        "last_advertio": max_value("advertio_status='sent'") if "advertio_status" in columns else None,
+        "last_crawl": max_column("date", "collection_status='collected'") if "collection_status" in columns else max_column("date"),
+        "last_processing": max_column("cleaned_at"),
+        "last_classification": max_column("classification_processed_at"),
+        "last_ai": max_column("ai_processed_at"),
+        "last_advertio": max_column("advertio_processed_at"),
     }
 
 
@@ -179,6 +184,63 @@ def _daily_crawl_report(conn, limit=14):
         GROUP BY substr(date,1,10)
         ORDER BY day DESC LIMIT ?"""
     return [dict(row) for row in conn.execute(sql, (min(max(int(limit), 1), 60),)).fetchall()]
+
+
+def _daily_stage_activity_report(conn, limit=14):
+    """Group successful pipeline work by the timestamp of the stage itself."""
+    if not _table_exists(conn, "messages"):
+        return []
+    columns = _columns(conn, "messages")
+    selects = []
+
+    if {"cleaned_at", "processing_status"} <= columns:
+        selects.append(
+            """SELECT substr(cleaned_at,1,10) day, 1 processed, 0 classified, 0 ai_processed, 0 advertio_sent
+                 FROM messages
+                WHERE processing_status='processed'
+                  AND cleaned_at IS NOT NULL AND TRIM(cleaned_at)<>''"""
+        )
+    if {"classification_processed_at", "classification_status"} <= columns:
+        selects.append(
+            """SELECT substr(classification_processed_at,1,10) day, 0 processed, 1 classified, 0 ai_processed, 0 advertio_sent
+                 FROM messages
+                WHERE classification_status='processed'
+                  AND classification_processed_at IS NOT NULL
+                  AND TRIM(classification_processed_at)<>''"""
+        )
+    if {"ai_processed_at", "ai_status"} <= columns:
+        selects.append(
+            """SELECT substr(ai_processed_at,1,10) day, 0 processed, 0 classified, 1 ai_processed, 0 advertio_sent
+                 FROM messages
+                WHERE ai_status='processed'
+                  AND ai_processed_at IS NOT NULL AND TRIM(ai_processed_at)<>''"""
+        )
+    if {"advertio_processed_at", "advertio_status"} <= columns:
+        selects.append(
+            """SELECT substr(advertio_processed_at,1,10) day, 0 processed, 0 classified, 0 ai_processed, 1 advertio_sent
+                 FROM messages
+                WHERE advertio_status='sent'
+                  AND advertio_processed_at IS NOT NULL
+                  AND TRIM(advertio_processed_at)<>''"""
+        )
+
+    if not selects:
+        return []
+
+    sql = f"""SELECT day,
+        SUM(processed) processed,
+        SUM(classified) classified,
+        SUM(ai_processed) ai_processed,
+        SUM(advertio_sent) advertio_sent
+        FROM ({' UNION ALL '.join(selects)})
+        WHERE day IS NOT NULL AND TRIM(day)<>''
+        GROUP BY day
+        ORDER BY day DESC
+        LIMIT ?"""
+    return [
+        dict(row)
+        for row in conn.execute(sql, (min(max(int(limit), 1), 60),)).fetchall()
+    ]
 
 
 def _channel_report(conn):
@@ -418,6 +480,7 @@ def snapshot():
             "database": _database_report(conn),
             "pipeline": _pipeline_report(conn),
             "daily": _daily_crawl_report(conn),
+            "stage_daily": _daily_stage_activity_report(conn),
             "channels": _channel_report(conn),
             "activity": _recent_activity(conn),
             "edits": _recent_edits(conn),

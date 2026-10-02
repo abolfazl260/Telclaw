@@ -280,29 +280,29 @@ def _publishing_diagnostics_html(target, assigned_rules):
     if target.get("chat_id") == "@koolbar_international":
         try:
             legacy = RoutedPublisher.koolbar_diagnostics(limit=50)
-            legacy_slots = max(0, cycle_limit - rule_queue_used) if not queue_error else None
             eligible_count = int(legacy["eligible_count"])
-            if legacy_slots is not None:
-                if eligible_count > 0 and legacy_slots == 0:
+            legacy_slots = None
+            if not queue_error:
+                # Publisher scheduling alternates managed rules and legacy
+                # Koolbar while both have work. With a full normal queue this
+                # guarantees half of an even-sized cycle to Koolbar.
+                normal_share = min(rule_queue_used, (cycle_limit + 1) // 2)
+                legacy_slots = cycle_limit - normal_share
+                if eligible_count > legacy_slots:
                     notes.append(
-                        '<p class="diag-danger"><strong>Koolbar is starved this cycle:</strong> '
-                        'the normal rule queue already occupies all 50 publisher slots, so no legacy Koolbar '
-                        'candidate can be appended.</p>'
-                    )
-                elif eligible_count > legacy_slots:
-                    notes.append(
-                        f'<p class="diag-warning"><strong>Koolbar is partially delayed:</strong> '
-                        f'{eligible_count:,} legacy candidate(s) are eligible but only {legacy_slots:,} slot(s) '
-                        'remain after the normal rule queue in this cycle.</p>'
+                        f'<p class="diag-warning"><strong>Koolbar backlog exceeds one cycle:</strong> '
+                        f'{eligible_count:,} legacy candidate(s) are eligible and the current fair-share '
+                        f'capacity is {legacy_slots:,} slot(s). Remaining candidates continue next cycle.</p>'
                     )
             notes.append(
-                '<p class="diag-info">Koolbar uses the legacy hard-coded transfer path. '
-                'It does not require a Back Office publishing rule.</p>'
+                '<p class="diag-info">Koolbar uses the legacy hard-coded transfer path and does not require '
+                'a Back Office publishing rule. Fair queue scheduling prevents managed rules from consuming '
+                'all publisher slots before Koolbar is considered.</p>'
             )
 
             legacy_cards = [
                 ("Legacy eligible now", eligible_count),
-                ("Legacy slots this cycle", legacy_slots if legacy_slots is not None else "unavailable"),
+                ("Legacy fair-share capacity", legacy_slots if legacy_slots is not None else "unavailable"),
                 ("Eligibility date", legacy.get("today") or "—"),
                 ("Recent transfer rows inspected", len(legacy.get("rows") or [])),
             ]
@@ -1049,7 +1049,7 @@ async def health_page(request):
         f"<tr><th>{_escape(label)}</th><td>{int(pending):,}</td><td>{int(failed):,}</td><td>{_escape(last or '—')}</td></tr>"
         for label, pending, failed, last in (
             ("Processing", pipeline["processing_pending"], pipeline["processing_failed"], pipeline["last_processing"]),
-            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_processing"]),
+            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_classification"]),
             ("AI extraction", pipeline["ai_pending"], pipeline["ai_failed"], pipeline["last_ai"]),
             ("Advertio", pipeline["advertio_pending"], pipeline["advertio_failed"], pipeline["last_advertio"]),
         )
@@ -1064,6 +1064,14 @@ async def health_page(request):
         <td>{int(row.get('ai_processed') or 0):,}</td><td>{int(row.get('advertio_sent') or 0):,}</td>
         <td>{int(row.get('failed') or 0):,}</td></tr>"""
         for row in report["daily"]
+    )
+    stage_daily_rows = "".join(
+        f"""<tr><td>{_escape(row.get('day') or '—')}</td>
+        <td>{int(row.get('processed') or 0):,}</td>
+        <td>{int(row.get('classified') or 0):,}</td>
+        <td>{int(row.get('ai_processed') or 0):,}</td>
+        <td>{int(row.get('advertio_sent') or 0):,}</td></tr>"""
+        for row in report.get("stage_daily", [])
     )
     channel_rows = "".join(
         f"""<tr><td>@{_escape(row.get('channel_username') or '')}</td>
@@ -1140,8 +1148,15 @@ async def health_page(request):
     <div class="scroll"><table><thead><tr><th>Stage</th><th>Pending</th><th>Failed</th><th>Last activity</th></tr></thead>
     <tbody>{stage_rows}</tbody></table></div></section>
 
-    <section><h2>Crawl reports · recent days</h2>
-    <div class="scroll"><table><thead><tr><th>Date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
+    <section><h2>Pipeline activity · by stage time</h2>
+    <p class="muted">Counts are grouped by the timestamp when each stage actually completed, not by the Telegram message date.</p>
+    <div class="scroll"><table><thead><tr><th>Date (UTC)</th><th>Processed</th><th>Classified</th>
+    <th>AI processed</th><th>Advertio sent</th></tr></thead>
+    <tbody>{stage_daily_rows or '<tr><td colspan="5">No stage activity timestamps yet.</td></tr>'}</tbody></table></div></section>
+
+    <section><h2>Message cohort status · by message date</h2>
+    <p class="muted">This cohort view groups messages by their original Telegram date. It is not a record of when classification or AI ran.</p>
+    <div class="scroll"><table><thead><tr><th>Message date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
     <th>AI processed</th><th>Advertio sent</th><th>Failed</th></tr></thead>
     <tbody>{daily_rows or '<tr><td colspan="7">No crawl data yet.</td></tr>'}</tbody></table></div></section>
 

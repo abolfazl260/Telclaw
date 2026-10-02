@@ -209,20 +209,60 @@ class RoutedPublisher:
             "rows": details,
         }
 
+    @staticmethod
+    def _merge_pending_pairs(rule_pairs, koolbar_pairs, limit):
+        """Fairly share one publishing cycle between managed rules and legacy Koolbar."""
+        limit = max(0, int(limit))
+        if limit == 0:
+            return []
+
+        rule_pairs = list(rule_pairs or [])
+        koolbar_pairs = list(koolbar_pairs or [])
+        merged = []
+        seen = set()
+        rule_index = koolbar_index = 0
+
+        def append_unique(pair):
+            record, rule = pair
+            target_id = rule.get("target_id", rule.get("id"))
+            key = (record["message_row_id"], target_id)
+            if key in seen:
+                return False
+            seen.add(key)
+            merged.append(pair)
+            return True
+
+        # Round-robin while both queues have work. This guarantees that a full
+        # managed-rule queue can no longer consume every slot before Koolbar is
+        # considered, while preserving ordering inside each queue.
+        while len(merged) < limit and rule_index < len(rule_pairs) and koolbar_index < len(koolbar_pairs):
+            append_unique(rule_pairs[rule_index])
+            rule_index += 1
+            if len(merged) >= limit:
+                break
+            append_unique(koolbar_pairs[koolbar_index])
+            koolbar_index += 1
+
+        # Let whichever queue still has work use the remaining capacity.
+        while len(merged) < limit and rule_index < len(rule_pairs):
+            append_unique(rule_pairs[rule_index])
+            rule_index += 1
+        while len(merged) < limit and koolbar_index < len(koolbar_pairs):
+            append_unique(koolbar_pairs[koolbar_index])
+            koolbar_index += 1
+
+        return merged
+
     async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
         if routing_rules.is_rate_limited():
             return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
         if pairs is None:
-            pairs = routing_rules.pending(limit)
-            # The legacy Koolbar channel keeps its historical behavior outside
-            # the generic Backoffice rule builder: transferlist only, processed
-            # AI data, and departure date today or later (calendar date).
-            existing = {(record["message_row_id"], rule["target_id"]) for record, rule in pairs}
-            for pair in self._koolbar_pairs(limit):
-                key = (pair[0]["message_row_id"], pair[1]["id"])
-                if key not in existing and len(pairs) < int(limit):
-                    pairs.append(pair)
-                    existing.add(key)
+            rule_pairs = routing_rules.pending(limit)
+            # The legacy Koolbar channel keeps its historical eligibility rules,
+            # but now shares the cycle fairly with managed publishing rules so a
+            # full rule queue cannot starve it indefinitely.
+            koolbar_pairs = self._koolbar_pairs(limit)
+            pairs = self._merge_pending_pairs(rule_pairs, koolbar_pairs, limit)
         result = {"found": len(pairs), "sent": 0, "failed": 0, "rejected": 0}
         blocked_targets = {}
         for record, rule in pairs:

@@ -332,6 +332,10 @@ class BackofficeOperations:
         return download
 
     def start_ai(self, account_name, requested_by=None):
+        account_name = str(account_name or "").strip()
+        if not account_name:
+            raise ValueError("Select a Telegram account for AI extraction")
+
         async def operation(stop_event):
             client = await self._connect_account(account_name)
             self.ai.set_media_downloader(self._make_sync_media_downloader(client))

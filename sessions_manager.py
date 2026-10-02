@@ -93,9 +93,14 @@ async def get_active_accounts():
 
         session_name = os.path.splitext(filename)[0]
         # A Back Office registration deliberately owns an unauthorized session
-        # between the code and optional 2FA steps. Do not treat it as stale.
-        if session_name in _registration_cache:
-            continue
+        # between the code and optional 2FA steps. Do not treat it as stale,
+        # but clean up abandoned registrations once their short TTL expires.
+        registration = _registration_cache.get(session_name)
+        if registration is not None:
+            if _registration_expired(registration):
+                await _discard_registration(session_name)
+            else:
+                continue
         client = None
         preexisting_client = session_name in _client_cache
         try:
@@ -275,11 +280,11 @@ async def begin_account_registration(session_name, phone):
     phone = str(phone or "").strip()
     if not phone:
         raise ValueError("Phone number cannot be empty")
-    if os.path.exists(f"{_session_path(session_name)}.session"):
-        raise ValueError(f"Session '{session_name}' already exists")
     previous = _registration_cache.get(session_name)
     if previous is not None:
         await _discard_registration(session_name)
+    if os.path.exists(f"{_session_path(session_name)}.session"):
+        raise ValueError(f"Session '{session_name}' already exists")
 
     client = create_client(session_name)
     try:

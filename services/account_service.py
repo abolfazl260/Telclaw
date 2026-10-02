@@ -21,6 +21,21 @@ class AccountService:
     async def register(self, session_name):
         return await sessions_manager.register_new_account(session_name)
 
+    async def begin_registration(self, session_name, phone):
+        return await sessions_manager.begin_account_registration(session_name, phone)
+
+    async def submit_registration_code(self, session_name, code):
+        return await sessions_manager.submit_account_registration_code(session_name, code)
+
+    async def submit_registration_password(self, session_name, password):
+        return await sessions_manager.submit_account_registration_password(session_name, password)
+
+    async def cancel_registration(self, session_name):
+        return await sessions_manager.cancel_account_registration(session_name)
+
+    def registration_state(self, session_name=None):
+        return sessions_manager.get_account_registration_state(session_name)
+
     async def disconnect(self, client):
         if client is not None:
             await client.disconnect()

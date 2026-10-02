@@ -21,6 +21,7 @@ class ConsoleUI:
         self.channels = channel_service or ChannelService()
         self.crawler = crawler_service or CrawlerService(self.channels)
         self.client = None
+        self.client_account = None
 
     def clear_screen(self):
         os.system("cls" if os.name == "nt" else "clear")
@@ -82,7 +83,11 @@ class ConsoleUI:
 
     async def connect_client(self, account_name=None):
         if self.client is not None:
-            return self.client
+            if account_name is None or account_name == self.client_account:
+                return self.client
+            await self.accounts.disconnect(self.client)
+            self.client = None
+            self.client_account = None
 
         accounts = await self.accounts.list_accounts()
         if not accounts:
@@ -101,6 +106,7 @@ class ConsoleUI:
         try:
             self.show_message(f"Connecting to Telegram for '{account_name}'...")
             self.client = await self.accounts.connect(account_name)
+            self.client_account = account_name
             self.show_message(f"Connected to '{account_name}'.", Fore.GREEN)
             return self.client
         except Exception as exc:
@@ -287,6 +293,7 @@ class ConsoleUI:
                 self.crawler.stop_all()
                 await self.accounts.disconnect(self.client)
                 self.client = None
+                self.client_account = None
                 break
 
 

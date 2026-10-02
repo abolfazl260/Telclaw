@@ -59,6 +59,39 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## Operations tab
+
+The **Operations** tab mirrors the operational controls from the terminal UI while
+calling the same application services and sharing the same in-process crawler/runtime
+state. Long-running queue commands are started as background jobs so the HTTP request
+returns immediately; while a manual job is active the page refreshes automatically and
+shows the current queue counts plus the last result/error.
+
+Available controls include:
+
+- start/stop the information-processing queue;
+- start/stop AI category classification with a chosen batch size;
+- requeue failed classifications;
+- start/stop AI extraction using an authorized Telegram session for media recovery;
+- send eligible waiting/retry housing listings to Advertio;
+- run the Groq connectivity diagnostic;
+- schedule/stop the same recurring multi-category crawler used by the terminal;
+- view transfer-ad queue status and jump to rule-based Publishing;
+- list crawler channel groups;
+- select/switch/disconnect Telegram sessions;
+- add a Telegram account through the browser verification-code and optional 2FA flow;
+- open the full Back Office Settings and System Health pages.
+
+Manual processing/classification/AI/Advertio runs share the scheduler's pipeline lock,
+so an operator-started queue job cannot overlap the scheduled post-crawl pipeline.
+Processing, classification and AI controls expose a stop request that takes effect at
+the next safe worker boundary. Back Office operational starts/completions/errors are
+also written to the existing `system_activity` timeline.
+
+With Back Office enabled, the old terminal **Transfer Ads → Send in channel** action
+remains intentionally disabled; destination delivery is handled by the Back Office
+Publishing rules instead.
+
 ## System Health tab
 
 The **System Health** tab is a read-only operational dashboard. It shows SQLite
@@ -74,8 +107,8 @@ monitor runtime state, active report subscribers, publishing delivery/resend tot
 and recent audited database edits. Configured channels that have never produced a
 stored message are shown as **not crawled** instead of silently disappearing.
 
-The dashboard only reads operational state; it does not start, stop or retry pipeline
-jobs. Use the page's **Refresh** link to request a fresh snapshot.
+The dashboard itself remains read-only. Use the **Operations** tab to start, stop or
+retry pipeline work, and use the page's **Refresh** link to request a fresh snapshot.
 
 ## Database tab
 

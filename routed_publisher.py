@@ -106,6 +106,109 @@ class RoutedPublisher:
         finally:
             conn.close()
 
+    @staticmethod
+    def koolbar_diagnostics(limit=50):
+        """Return read-only eligibility diagnostics for the legacy Koolbar destination."""
+        today = date.today().isoformat()
+        targets = [
+            target for target in routing_rules.list_targets()
+            if target["chat_id"] == "@koolbar_international"
+        ]
+        if not targets:
+            return {
+                "configured": False,
+                "target_id": None,
+                "target_enabled": False,
+                "today": today,
+                "eligible_count": 0,
+                "rows": [],
+            }
+
+        target = targets[0]
+        conn = get_connection()
+        try:
+            eligible_count = 0
+            if target["enabled"]:
+                eligible_count = int(conn.execute(
+                    """SELECT COUNT(*)
+                         FROM transferlist t
+                         INNER JOIN messages m ON m.id=t.processed_message_id
+                        WHERE m.processing_status='processed'
+                          AND m.ai_status='processed'
+                          AND m.ai_category='transferlist'
+                          AND t.departure_date IS NOT NULL
+                          AND TRIM(COALESCE(t.origin_city, '')) <> ''
+                          AND TRIM(COALESCE(t.destination_city, '')) <> ''
+                          AND date(substr(t.departure_date,1,10)) >= date(?)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM publishing_deliveries d
+                               WHERE d.message_id=m.id
+                                 AND d.target_id=?
+                                 AND d.status IN ('sent','rejected','sending','uncertain')
+                          )""",
+                    (today, target["id"]),
+                ).fetchone()[0])
+
+            rows = conn.execute(
+                """SELECT m.id AS message_row_id, m.message_id AS telegram_source_id,
+                          m.channel_username, m.processing_status, m.ai_status, m.ai_category,
+                          t.origin_city, t.destination_city, t.departure_date,
+                          d.status AS delivery_status, d.error AS delivery_error,
+                          d.updated_at AS delivery_updated_at,
+                          CASE WHEN m.processing_status='processed' THEN 1 ELSE 0 END AS processing_ok,
+                          CASE WHEN m.ai_status='processed' THEN 1 ELSE 0 END AS ai_ok,
+                          CASE WHEN m.ai_category='transferlist' THEN 1 ELSE 0 END AS category_ok,
+                          CASE WHEN TRIM(COALESCE(t.origin_city, '')) <> ''
+                                     AND TRIM(COALESCE(t.destination_city, '')) <> ''
+                               THEN 1 ELSE 0 END AS route_ok,
+                          CASE WHEN t.departure_date IS NOT NULL
+                                     AND date(substr(t.departure_date,1,10)) >= date(?)
+                               THEN 1 ELSE 0 END AS date_ok,
+                          CASE WHEN d.status IS NULL
+                                     OR d.status NOT IN ('sent','rejected','sending','uncertain')
+                               THEN 1 ELSE 0 END AS delivery_ok
+                     FROM transferlist t
+                     INNER JOIN messages m ON m.id=t.processed_message_id
+                     LEFT JOIN publishing_deliveries d
+                       ON d.message_id=m.id AND d.target_id=?
+                    ORDER BY t.id DESC
+                    LIMIT ?""",
+                (today, target["id"], min(max(int(limit), 1), 200)),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        details = []
+        for item in rows:
+            row = dict(item)
+            blockers = []
+            if not target["enabled"]:
+                blockers.append("target disabled")
+            if not row["processing_ok"]:
+                blockers.append("processing_status is not processed")
+            if not row["ai_ok"]:
+                blockers.append("ai_status is not processed")
+            if not row["category_ok"]:
+                blockers.append("ai_category is not transferlist")
+            if not row["route_ok"]:
+                blockers.append("origin or destination is empty")
+            if not row["date_ok"]:
+                blockers.append("departure date is missing, invalid, or in the past")
+            if not row["delivery_ok"]:
+                blockers.append(f"delivery status is {row['delivery_status']}")
+            row["eligible"] = not blockers
+            row["blockers"] = blockers
+            details.append(row)
+
+        return {
+            "configured": True,
+            "target_id": target["id"],
+            "target_enabled": bool(target["enabled"]),
+            "today": today,
+            "eligible_count": eligible_count,
+            "rows": details,
+        }
+
     async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
         if routing_rules.is_rate_limited():
             return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}

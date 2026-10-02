@@ -98,3 +98,22 @@ async def test_listing_accounts_keeps_session_file_on_transient_verification_err
 
     assert await sessions_manager.get_active_accounts() == []
     assert session_file.exists()
+
+
+
+@pytest.mark.asyncio
+async def test_listing_accounts_evicts_cached_session_only_after_explicit_unauthorized(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SESSION_DIR", str(tmp_path))
+    sessions_manager._registration_cache.clear()
+    sessions_manager._client_cache.clear()
+    session_file = tmp_path / "logged-out.session"
+    session_file.write_bytes(b"session")
+    client = FakeClient()
+    client.connected = True
+    client.authorized = False
+    sessions_manager._client_cache["logged-out"] = client
+
+    assert await sessions_manager.get_active_accounts() == []
+    assert client.connected is False
+    assert "logged-out" not in sessions_manager._client_cache
+    assert not session_file.exists()

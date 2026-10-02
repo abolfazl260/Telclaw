@@ -79,6 +79,56 @@ def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule
     assert pairs[0][0]["message_row_id"] == 2
 
 
+def test_legacy_koolbar_diagnostics_explains_eligibility_and_delivery_blockers(rule_db):
+    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    diagnostics = routed_publisher.RoutedPublisher.koolbar_diagnostics(limit=10)
+    assert diagnostics["eligible_count"] == 1
+    assert diagnostics["rows"][0]["eligible"] is True
+    assert diagnostics["rows"][0]["blockers"] == []
+
+    routing_rules.record_delivery(1, 1, "rejected", error="missing route")
+    diagnostics = routed_publisher.RoutedPublisher.koolbar_diagnostics(limit=10)
+    assert diagnostics["eligible_count"] == 0
+    assert diagnostics["rows"][0]["eligible"] is False
+    assert diagnostics["rows"][0]["delivery_status"] == "rejected"
+    assert "delivery status is rejected" in diagnostics["rows"][0]["blockers"]
+
+
+def test_backoffice_diagnostics_surfaces_koolbar_queue_starvation(rule_db, monkeypatch):
+    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    target = routing_rules.list_targets()[0]
+
+    monkeypatch.setattr(
+        backoffice_web.routing_rules,
+        "pending",
+        lambda limit: [(None, {"target_id": 999}) for _ in range(limit)],
+    )
+    monkeypatch.setattr(backoffice_web.routing_rules, "is_rate_limited", lambda: False)
+    monkeypatch.setattr(
+        backoffice_web.RoutedPublisher,
+        "koolbar_diagnostics",
+        lambda limit=50: {
+            "configured": True,
+            "target_id": target["id"],
+            "target_enabled": True,
+            "today": "2099-01-01",
+            "eligible_count": 3,
+            "rows": [],
+        },
+    )
+
+    output = backoffice_web._publishing_diagnostics_html(target, [])
+    assert "Koolbar is starved this cycle" in output
+    assert "50/50" in output
+    assert "Legacy eligible now" in output
+    assert ">3<" in output
+
+
 def test_new_backoffice_rule_defaults_to_automatic_publishing(rule_db):
     routing_rules.save_target("Auto", "@autochannel")
     target = routing_rules.list_targets()[0]

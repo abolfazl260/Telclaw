@@ -97,9 +97,11 @@ async def get_active_accounts():
         if session_name in _registration_cache:
             continue
         client = None
+        preexisting_client = session_name in _client_cache
         try:
             client = create_client(session_name)
-            await client.connect()
+            if not client.is_connected():
+                await client.connect()
             authorized = await client.is_user_authorized()
             if not authorized:
                 _remove_session_files(session_name)
@@ -112,7 +114,8 @@ async def get_active_accounts():
             log_exception(exc, f"Inactive Telegram session: {session_name}")
             _remove_session_files(session_name)
         finally:
-            if client is not None:
+            # Do not disconnect a client already owned by the running crawler/TUI.
+            if client is not None and not preexisting_client:
                 try:
                     if client.is_connected():
                         await client.disconnect()

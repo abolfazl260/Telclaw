@@ -2034,14 +2034,22 @@ async def _check_target_connection(target):
     routing_rules.update_target_connection(target_id, status, detail)
 
 
-def create_app():
+def create_app(console_ui=None):
     routing_rules.initialize()
     initialize_auth()
     backoffice_data.initialize()
     backoffice_settings.initialize()
     data_normalizer.initialize()
     app = web.Application(middlewares=[_security])
+    app["operations"] = BackofficeOperations(console_ui=console_ui)
+
+    async def cleanup_operations(application):
+        await application["operations"].close()
+
+    app.on_cleanup.append(cleanup_operations)
     app.add_routes([web.get("/login", login), web.get("/", index),
+                    web.get("/operations", operations_page),
+                    web.post("/operations/action", operations_action),
                     web.get("/data", data_page), web.get("/normalization", normalization_page),
                     web.get("/health", health_page), web.get("/settings", settings_page),
                     web.post("/normalization/save", save_normalization_alias),

@@ -79,3 +79,22 @@ async def test_account_registration_can_be_cancelled_and_cleans_pending_state(tm
     assert await sessions_manager.cancel_account_registration("cancel-me") is True
     assert sessions_manager.get_account_registration_state("cancel-me") is None
     assert client.connected is False
+
+
+
+@pytest.mark.asyncio
+async def test_listing_accounts_keeps_session_file_on_transient_verification_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SESSION_DIR", str(tmp_path))
+    sessions_manager._registration_cache.clear()
+    sessions_manager._client_cache.clear()
+    session_file = tmp_path / "keep-me.session"
+    session_file.write_bytes(b"session")
+    monkeypatch.setattr(
+        sessions_manager,
+        "create_client",
+        lambda _name: (_ for _ in ()).throw(ConnectionError("temporary network failure")),
+    )
+    monkeypatch.setattr(sessions_manager, "log_exception", lambda *args, **kwargs: None)
+
+    assert await sessions_manager.get_active_accounts() == []
+    assert session_file.exists()

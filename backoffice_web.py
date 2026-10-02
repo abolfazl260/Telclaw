@@ -1263,6 +1263,27 @@ async def operations_page(request):
         transfer_status = {"total": 0, "sent": 0, "waiting": 0, "failed": 0}
         transfer_error = f"{exc.__class__.__name__}: {exc}"
 
+    try:
+        transfer_page = max(1, int(request.query.get("transfer_page", "1")))
+    except (TypeError, ValueError):
+        transfer_page = 1
+    transfer_page_size = 20
+    try:
+        transfer_browser = operations.transfer_ads(
+            limit=transfer_page_size,
+            offset=(transfer_page - 1) * transfer_page_size,
+        )
+        transfer_records = transfer_browser["records"]
+        transfer_total = int(transfer_browser["total"])
+        transfer_browser_error = None
+    except Exception as exc:
+        transfer_records = []
+        transfer_total = 0
+        transfer_browser_error = f"{exc.__class__.__name__}: {exc}"
+    transfer_pages = max(1, (transfer_total + transfer_page_size - 1) // transfer_page_size)
+    if transfer_page > transfer_pages:
+        transfer_page = transfer_pages
+
     notice = request.query.get("notice", "")
     error = request.query.get("error", "")
     banner = ""
@@ -1437,6 +1458,22 @@ async def operations_page(request):
         f"Total: {int(transfer_status.get('total') or 0):,} · Sent: {int(transfer_status.get('sent') or 0):,} · "
         f"Waiting: {int(transfer_status.get('waiting') or 0):,} · Failed: {int(transfer_status.get('failed') or 0):,}"
     )
+    transfer_rows = "".join(
+        f"""<tr><td>{int(record.get('processed_message_id') or 0)}</td>
+        <td>@{_escape(record.get('channel_username') or 'unknown')}</td>
+        <td>{_escape(record.get('origin_city') or record.get('origin_country') or '—')} → {_escape(record.get('destination_city') or record.get('destination_country') or '—')}</td>
+        <td>{_escape(record.get('departure_date') or '—')}</td>
+        <td>{_escape(record.get('price') if record.get('price') is not None else '—')} {_escape(record.get('currency') or '')}</td>
+        <td>{_escape(record.get('contact') or '—')}</td>
+        <td>{_health_badge(record.get('delivery_status') or 'waiting')}</td></tr>"""
+        for record in transfer_records
+    )
+    transfer_nav = []
+    if transfer_page > 1:
+        transfer_nav.append(f'<a href="/operations?transfer_page={transfer_page - 1}">Previous 20</a>')
+    if transfer_page < transfer_pages:
+        transfer_nav.append(f'<a href="/operations?transfer_page={transfer_page + 1}">Next 20</a>')
+    transfer_nav_html = " · ".join(transfer_nav) or "—"
 
     auto_refresh = ""
     if operations.any_running():
@@ -1504,6 +1541,15 @@ async def operations_page(request):
         <p class="muted">With Back Office enabled, terminal direct-send is intentionally replaced by rule-based publishing.</p>
         <div class="ops-links"><a href="/">Open Publishing</a></div></section>
     </div>
+
+    <section><h2>Unsent Transfer Ads</h2>
+      <p class="muted">Same 20-at-a-time unsent queue browser as the terminal Transfer Ads menu.
+      Page {transfer_page}/{transfer_pages} · {transfer_total:,} unsent record(s).</p>
+      {f'<p class="ops-error">{_escape(transfer_browser_error)}</p>' if transfer_browser_error else ''}
+      <div class="scroll"><table><thead><tr><th>Record</th><th>Source</th><th>Route</th><th>Departure</th>
+      <th>Price</th><th>Contact</th><th>Legacy delivery state</th></tr></thead>
+      <tbody>{transfer_rows or '<tr><td colspan="7">No unsent transfer ads.</td></tr>'}</tbody></table></div>
+      <p>{transfer_nav_html}</p></section>
 
     <section><h2>Scheduled Crawler</h2>
       <p>Active jobs: <strong>{int(crawler_status.get('active_jobs') or 0):,}</strong> · Connected account:

@@ -190,6 +190,24 @@ class FakePageOperations:
     def transfer_status(self):
         return {"total": 4, "sent": 1, "waiting": 2, "failed": 1}
 
+    def transfer_ads(self, limit=20, offset=0):
+        return {
+            "total": 1,
+            "limit": limit,
+            "offset": offset,
+            "records": [{
+                "processed_message_id": 44,
+                "channel_username": "source",
+                "origin_city": "Berlin",
+                "destination_city": "Toronto",
+                "departure_date": "2099-01-02",
+                "price": 100,
+                "currency": "CAD",
+                "contact": "@alice",
+                "delivery_status": "waiting",
+            }],
+        }
+
     def account_registration_state(self):
         return None
 
@@ -236,4 +254,37 @@ async def test_operations_page_renders_terminal_controls(monkeypatch):
     assert "Test Groq connection" in response.text
     assert "Add a new Telegram account" in response.text
     assert "Crawler Channels" in response.text
+    assert "Unsent Transfer Ads" in response.text
+    assert "Berlin" in response.text
+    assert "Toronto" in response.text
+    assert "Send eligible existing housing listings to Advertio now?" in response.text
     assert "Log out of Back Office" in response.text
+
+
+
+def test_manual_pipeline_jobs_are_serialized():
+    operations = BackofficeOperations(console_ui=FakeConsole())
+    operations._states["processing"] = {
+        "name": "processing",
+        "status": "running",
+        "started_at": "now",
+        "finished_at": None,
+        "result": None,
+        "error": None,
+        "requested_by": 1,
+        "params": {},
+    }
+    with pytest.raises(RuntimeError, match="manual pipeline operation"):
+        operations.start_classification(batch_size=10, requested_by=1)
+
+
+@pytest.mark.asyncio
+async def test_account_switch_is_blocked_while_crawler_job_is_active():
+    console = FakeConsole()
+    console.client = FakeClient()
+    console.client_account = "primary"
+    console.crawler.jobs["job"] = object()
+    operations = BackofficeOperations(console_ui=console)
+
+    with pytest.raises(RuntimeError, match="Stop active crawler jobs"):
+        await operations.connect_account("secondary", requested_by=1)

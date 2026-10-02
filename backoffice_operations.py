@@ -258,8 +258,14 @@ class BackofficeOperations:
         )
 
     async def retry_failed_classifications(self, requested_by=None):
-        if self.state("classification")["status"] in {"queued", "running", "stopping"}:
-            raise RuntimeError("classification is already running")
+        busy = [
+            name for name in SERIAL_PIPELINE_JOBS
+            if self.state(name)["status"] in {"queued", "running", "stopping"}
+        ]
+        if busy:
+            raise RuntimeError(
+                f"Cannot retry classifications while manual pipeline work is active: {', '.join(sorted(busy))}"
+            )
         retried = await asyncio.to_thread(
             self.classification.repository.retry_failed_classifications
         )

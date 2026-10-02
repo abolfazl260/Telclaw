@@ -116,8 +116,11 @@ async def get_active_accounts():
             meta["status"] = "active"
             accounts.append({"session": session_name, "meta": meta})
         except Exception as exc:
-            log_exception(exc, f"Inactive Telegram session: {session_name}")
-            _remove_session_files(session_name)
+            # A transient Telegram/network/proxy failure does not prove that a
+            # local session is invalid. Keep the session file and simply omit it
+            # from this live availability snapshot. We only delete a session
+            # after Telegram explicitly confirms it is unauthorized above.
+            log_exception(exc, f"Unable to verify Telegram session: {session_name}")
         finally:
             # Do not disconnect a client already owned by the running crawler/TUI.
             if client is not None and not preexisting_client:

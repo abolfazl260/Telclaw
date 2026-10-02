@@ -18,6 +18,7 @@ from storage import data_normalizer
 import backoffice_health
 import routing_rules
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
+from routed_publisher import RoutedPublisher
 from monitoring.telegram_monitor import ADMIN_USER_IDS, get_telegram_monitor
 from storage.database import get_connection
 
@@ -199,6 +200,167 @@ def _select(name, values, selected):
         for v in values) + "</select>"
 
 
+def _publishing_diagnostics_html(target, assigned_rules):
+    """Render on-demand publishing diagnostics without requiring shell/SQL access."""
+    cycle_limit = 50
+    queue_error = None
+    try:
+        rule_queue = routing_rules.pending(cycle_limit)
+    except Exception as exc:
+        rule_queue = []
+        queue_error = f"{exc.__class__.__name__}: {exc}"
+
+    rule_queue_used = len(rule_queue)
+    target_rule_queue = sum(
+        1 for _, rule in rule_queue if int(rule["target_id"]) == int(target["id"])
+    )
+    automatic_rules = sum(
+        1 for rule in assigned_rules
+        if rule.get("enabled") and rule.get("delivery_mode") == "auto"
+    )
+
+    conn = get_connection()
+    try:
+        delivery_counts = {
+            row["status"]: int(row["count"])
+            for row in conn.execute(
+                """SELECT status, COUNT(*) AS count
+                     FROM publishing_deliveries
+                    WHERE target_id=?
+                    GROUP BY status
+                    ORDER BY status""",
+                (int(target["id"]),),
+            ).fetchall()
+        }
+        last_delivery = conn.execute(
+            "SELECT MAX(updated_at) AS updated_at FROM publishing_deliveries WHERE target_id=?",
+            (int(target["id"]),),
+        ).fetchone()["updated_at"]
+    finally:
+        conn.close()
+
+    try:
+        rate_limited = routing_rules.is_rate_limited()
+    except Exception:
+        rate_limited = False
+
+    cards = [
+        ("Target", "enabled" if target.get("enabled") else "disabled"),
+        ("Connection", target.get("connection_status") or "unknown"),
+        ("Automatic rules", automatic_rules),
+        ("Rule queue for target", target_rule_queue),
+        ("Rule queue slots used", f"{rule_queue_used}/{cycle_limit}" if not queue_error else "unavailable"),
+        ("Bot rate limit", "active" if rate_limited else "clear"),
+    ]
+    card_html = "".join(
+        f'<div class="diag-card"><span>{_escape(label)}</span><strong>{_escape(value)}</strong></div>'
+        for label, value in cards
+    )
+
+    status_rows = "".join(
+        f"<tr><td>{_escape(status)}</td><td>{count:,}</td></tr>"
+        for status, count in delivery_counts.items()
+    ) or '<tr><td colspan="2">No delivery records.</td></tr>'
+
+    notes = []
+    if queue_error:
+        notes.append(
+            f'<p class="diag-warning"><strong>Rule queue check failed:</strong> {_escape(queue_error)}</p>'
+        )
+    if not target.get("enabled"):
+        notes.append('<p class="diag-warning">This destination is disabled.</p>')
+    if target.get("connection_status") == "disconnected":
+        notes.append('<p class="diag-warning">Telegram connection is marked disconnected.</p>')
+    if rate_limited:
+        notes.append('<p class="diag-warning">Telegram bot rate limiting is currently active.</p>')
+    if automatic_rules == 0 and target.get("chat_id") != "@koolbar_international":
+        notes.append('<p class="diag-warning">No enabled automatic rule currently feeds this destination.</p>')
+
+    legacy_html = ""
+    if target.get("chat_id") == "@koolbar_international":
+        try:
+            legacy = RoutedPublisher.koolbar_diagnostics(limit=50)
+            legacy_slots = max(0, cycle_limit - rule_queue_used) if not queue_error else None
+            eligible_count = int(legacy["eligible_count"])
+            if legacy_slots is not None:
+                if eligible_count > 0 and legacy_slots == 0:
+                    notes.append(
+                        '<p class="diag-danger"><strong>Koolbar is starved this cycle:</strong> '
+                        'the normal rule queue already occupies all 50 publisher slots, so no legacy Koolbar '
+                        'candidate can be appended.</p>'
+                    )
+                elif eligible_count > legacy_slots:
+                    notes.append(
+                        f'<p class="diag-warning"><strong>Koolbar is partially delayed:</strong> '
+                        f'{eligible_count:,} legacy candidate(s) are eligible but only {legacy_slots:,} slot(s) '
+                        'remain after the normal rule queue in this cycle.</p>'
+                    )
+            notes.append(
+                '<p class="diag-info">Koolbar uses the legacy hard-coded transfer path. '
+                'It does not require a Back Office publishing rule.</p>'
+            )
+
+            legacy_cards = [
+                ("Legacy eligible now", eligible_count),
+                ("Legacy slots this cycle", legacy_slots if legacy_slots is not None else "unavailable"),
+                ("Eligibility date", legacy.get("today") or "—"),
+                ("Recent transfer rows inspected", len(legacy.get("rows") or [])),
+            ]
+            legacy_card_html = "".join(
+                f'<div class="diag-card"><span>{_escape(label)}</span><strong>{_escape(value)}</strong></div>'
+                for label, value in legacy_cards
+            )
+            legacy_rows = []
+            for item in legacy.get("rows") or []:
+                route = f"{item.get('origin_city') or '—'} → {item.get('destination_city') or '—'}"
+                stage = (
+                    f"processing={item.get('processing_status') or '—'}<br>"
+                    f"ai={item.get('ai_status') or '—'}<br>"
+                    f"category={item.get('ai_category') or '—'}"
+                )
+                delivery = item.get("delivery_status") or "none"
+                if item.get("delivery_error"):
+                    delivery += f"<br><span class=\"hint\">{_escape(item.get('delivery_error'))}</span>"
+                blockers = "; ".join(item.get("blockers") or []) or "—"
+                eligibility = (
+                    '<span class="badge connected">eligible</span>'
+                    if item.get("eligible")
+                    else '<span class="badge disconnected">blocked</span>'
+                )
+                legacy_rows.append(
+                    f"""<tr><td>#{int(item['message_row_id'])}<br><span class="hint">Telegram source:
+                    {_escape(item.get('telegram_source_id') or '—')}</span></td>
+                    <td>{_escape(item.get('channel_username') or '—')}</td>
+                    <td>{_escape(route)}</td><td>{_escape(item.get('departure_date') or '—')}</td>
+                    <td>{stage}</td><td>{delivery}</td><td>{eligibility}</td><td>{_escape(blockers)}</td></tr>"""
+                )
+            legacy_html = f"""
+            <h4>Legacy Koolbar eligibility</h4>
+            <div class="diag-grid">{legacy_card_html}</div>
+            <p class="hint">The table below applies the same gates used by the legacy Koolbar publisher to the
+            50 most recent transfer rows. “Legacy eligible now” is counted across the full database.</p>
+            <div class="scroll"><table><thead><tr><th>Message</th><th>Source</th><th>Route</th>
+            <th>Departure</th><th>Pipeline</th><th>Delivery state</th><th>Result</th><th>Blocking reason</th>
+            </tr></thead><tbody>{''.join(legacy_rows) or '<tr><td colspan="8">No transfer rows found.</td></tr>'}
+            </tbody></table></div>"""
+        except Exception as exc:
+            legacy_html = (
+                '<p class="diag-danger"><strong>Legacy Koolbar diagnostics failed:</strong> '
+                f'{_escape(f"{exc.__class__.__name__}: {exc}")}</p>'
+            )
+
+    return f"""<details class="subsection diagnostics" open><summary>Publishing diagnostics</summary>
+        <p class="hint">Read-only operational checks generated from the live SQLite publishing state.
+        Refresh this section after new messages or delivery attempts.</p>
+        <div class="diag-grid">{card_html}</div>
+        {''.join(notes)}
+        <p class="hint">Last delivery state update: {_escape(last_delivery or 'never')}</p>
+        <div class="diag-status"><h4>Delivery states</h4><table><thead><tr><th>Status</th><th>Count</th></tr></thead>
+        <tbody>{status_rows}</tbody></table></div>
+        {legacy_html}
+        </details>"""
+
+
 async def index(request):
     csrf = _escape(request["session"]["csrf"])
     overview = backoffice_health.snapshot()["overview"]
@@ -211,6 +373,7 @@ async def index(request):
     ) or '<span class="hint">No AI providers configured.</span>'
     system = backoffice_health.snapshot()["system"]
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
+    diagnostics_target = str(getattr(request, 'query', {}).get('diagnostics', ''))
     rows = []
     for target in targets:
         assigned = [rule for rule in rules if rule["target_id"] == target["id"]]
@@ -229,6 +392,8 @@ async def index(request):
             + '</td></tr>' for item in history)
         state = target.get('connection_status') or 'unknown'
         opened = str(getattr(request, 'query', {}).get('channel', '')) == str(target['id'])
+        diagnostics_html = (_publishing_diagnostics_html(target, assigned)
+                            if diagnostics_target == str(target['id']) else '')
         rows.append(f'''<details class="channel" id="channel-{target['id']}" {'open' if opened else ''}><summary>
             <span class="channel-name">{_escape(target['label'])}</span>
             <code>{_escape(target['chat_id'])}</code>
@@ -239,6 +404,9 @@ async def index(request):
             · checked: {_escape(target.get('checked_at') or 'never')}</p>
             <form method="post" action="/target/check" class="inline"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="target_id" value="{target['id']}"><button>Check connection</button></form>
+            <a class="button-link" href="/?channel={target['id']}&diagnostics={target['id']}#channel-{target['id']}">
+            {'Refresh diagnostics' if diagnostics_target == str(target['id']) else 'Run publishing diagnostics'}</a>
+            {diagnostics_html}
             <details class="subsection"><summary>Edit channel details</summary>
             <form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="id" value="{target['id']}">
@@ -288,6 +456,14 @@ async def index(request):
     .ad-row pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;background:#f5f7fb;padding:.7rem}}
     .tabs{{display:flex;gap:.6rem;margin:1rem 0}}.tabs a{{padding:.5rem .9rem;border-radius:8px;background:white;color:#1957b8;text-decoration:none}}
     .tabs a.active{{background:#1957b8;color:white}}
+    .button-link{{display:inline-block;padding:.48rem .7rem;border-radius:7px;background:#eef4ff;color:#1957b8;
+      text-decoration:none;font-weight:600;margin:.35rem .2rem}}
+    .diagnostics{{margin-top:.8rem}}.diag-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.65rem;margin:.8rem 0}}
+    .diag-card{{padding:.75rem;border:1px solid #dce4ef;border-radius:10px;background:#f8faff}}
+    .diag-card span{{display:block;color:#526174;font-size:.8rem}}.diag-card strong{{display:block;font-size:1.1rem;margin-top:.15rem}}
+    .diag-warning,.diag-danger,.diag-info{{padding:.65rem .75rem;border-radius:9px}}
+    .diag-warning{{background:#fff3cd;color:#6d5200}}.diag-danger{{background:#ffe1db;color:#8e291a}}
+    .diag-info{{background:#e8f2ff;color:#244e7a}}.diag-status{{max-width:420px;margin:.8rem 0}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
     <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>

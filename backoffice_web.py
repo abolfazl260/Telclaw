@@ -314,11 +314,11 @@ def _publishing_diagnostics_html(target, assigned_rules):
             for item in legacy.get("rows") or []:
                 route = f"{item.get('origin_city') or '—'} → {item.get('destination_city') or '—'}"
                 stage = (
-                    f"processing={item.get('processing_status') or '—'}<br>"
-                    f"ai={item.get('ai_status') or '—'}<br>"
-                    f"category={item.get('ai_category') or '—'}"
+                    f"processing={_escape(item.get('processing_status') or '—')}<br>"
+                    f"ai={_escape(item.get('ai_status') or '—')}<br>"
+                    f"category={_escape(item.get('ai_category') or '—')}"
                 )
-                delivery = item.get("delivery_status") or "none"
+                delivery = _escape(item.get("delivery_status") or "none")
                 if item.get("delivery_error"):
                     delivery += f"<br><span class=\"hint\">{_escape(item.get('delivery_error'))}</span>"
                 blockers = "; ".join(item.get("blockers") or []) or "—"

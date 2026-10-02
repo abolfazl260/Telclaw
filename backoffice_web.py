@@ -1530,6 +1530,8 @@ async def operations_page(request):
     <section><h2>Back Office operation activity</h2>
       <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Operation</th><th>Level</th><th>Message</th><th>Details</th></tr></thead>
       <tbody>{activity_rows or '<tr><td colspan="5">No Back Office operations have run yet.</td></tr>'}</tbody></table></div></section>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}">
+      <button class="secondary">Log out of Back Office</button></form>
     {auto_refresh}
     </body></html>"""
     return web.Response(text=content, content_type="text/html")

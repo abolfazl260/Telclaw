@@ -1346,10 +1346,11 @@ async def operations_page(request):
             f"<td>{_escape(item.get('description') or '—')}</td></tr>"
             for item in (items or []) if isinstance(item, dict)
         )
+        empty_rows = '<tr><td colspan="3">No channels.</td></tr>'
         channel_groups.append(
             f"<details><summary>{_escape(category)} · {len(items or [])} channel(s)</summary>"
             f'<div class="scroll"><table><thead><tr><th>Channel</th><th>Name</th><th>Description</th></tr></thead>'
-            f"<tbody>{rows or '<tr><td colspan=\"3\">No channels.</td></tr>'}</tbody></table></div></details>"
+            f"<tbody>{rows or empty_rows}</tbody></table></div></details>"
         )
 
     today = date.today().isoformat()

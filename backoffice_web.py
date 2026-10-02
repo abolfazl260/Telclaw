@@ -280,29 +280,29 @@ def _publishing_diagnostics_html(target, assigned_rules):
     if target.get("chat_id") == "@koolbar_international":
         try:
             legacy = RoutedPublisher.koolbar_diagnostics(limit=50)
-            legacy_slots = max(0, cycle_limit - rule_queue_used) if not queue_error else None
             eligible_count = int(legacy["eligible_count"])
-            if legacy_slots is not None:
-                if eligible_count > 0 and legacy_slots == 0:
+            legacy_slots = None
+            if not queue_error:
+                # Publisher scheduling alternates managed rules and legacy
+                # Koolbar while both have work. With a full normal queue this
+                # guarantees half of an even-sized cycle to Koolbar.
+                normal_share = min(rule_queue_used, (cycle_limit + 1) // 2)
+                legacy_slots = cycle_limit - normal_share
+                if eligible_count > legacy_slots:
                     notes.append(
-                        '<p class="diag-danger"><strong>Koolbar is starved this cycle:</strong> '
-                        'the normal rule queue already occupies all 50 publisher slots, so no legacy Koolbar '
-                        'candidate can be appended.</p>'
-                    )
-                elif eligible_count > legacy_slots:
-                    notes.append(
-                        f'<p class="diag-warning"><strong>Koolbar is partially delayed:</strong> '
-                        f'{eligible_count:,} legacy candidate(s) are eligible but only {legacy_slots:,} slot(s) '
-                        'remain after the normal rule queue in this cycle.</p>'
+                        f'<p class="diag-warning"><strong>Koolbar backlog exceeds one cycle:</strong> '
+                        f'{eligible_count:,} legacy candidate(s) are eligible and the current fair-share '
+                        f'capacity is {legacy_slots:,} slot(s). Remaining candidates continue next cycle.</p>'
                     )
             notes.append(
-                '<p class="diag-info">Koolbar uses the legacy hard-coded transfer path. '
-                'It does not require a Back Office publishing rule.</p>'
+                '<p class="diag-info">Koolbar uses the legacy hard-coded transfer path and does not require '
+                'a Back Office publishing rule. Fair queue scheduling prevents managed rules from consuming '
+                'all publisher slots before Koolbar is considered.</p>'
             )
 
             legacy_cards = [
                 ("Legacy eligible now", eligible_count),
-                ("Legacy slots this cycle", legacy_slots if legacy_slots is not None else "unavailable"),
+                ("Legacy fair-share capacity", legacy_slots if legacy_slots is not None else "unavailable"),
                 ("Eligibility date", legacy.get("today") or "—"),
                 ("Recent transfer rows inspected", len(legacy.get("rows") or [])),
             ]

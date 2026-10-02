@@ -86,12 +86,13 @@ class SystemConsoleUI(ConsoleUI):
         self.show_section_header("Information Processing Queue")
         self.show_message("Checking the processing queue in the database...", Fore.CYAN)
         try:
-            result = await self._run_with_q_stop(
-                lambda should_stop: asyncio.to_thread(
-                    self.processing_service.process_pending_with_stats,
-                    should_stop=should_stop,
+            async with self.crawler.scheduler._pipeline_lock:
+                result = await self._run_with_q_stop(
+                    lambda should_stop: asyncio.to_thread(
+                        self.processing_service.process_pending_with_stats,
+                        should_stop=should_stop,
+                    )
                 )
-            )
             status = "Stopped" if result.get("stopped") else "Completed"
             self.show_message(
                 f"{status}. Found: {result['found']} | "
@@ -118,12 +119,13 @@ class SystemConsoleUI(ConsoleUI):
                 return
 
             self.ai_service.set_media_downloader(self._make_sync_media_downloader())
-            result = await self._run_with_q_stop(
-                lambda should_stop: asyncio.to_thread(
-                    self.ai_service.process_pending_with_stats,
-                    should_stop=should_stop,
+            async with self.crawler.scheduler._pipeline_lock:
+                result = await self._run_with_q_stop(
+                    lambda should_stop: asyncio.to_thread(
+                        self.ai_service.process_pending_with_stats,
+                        should_stop=should_stop,
+                    )
                 )
-            )
             if result.get("disabled"):
                 self.show_message("AI extraction is disabled in configuration.", Fore.YELLOW)
             else:
@@ -261,7 +263,8 @@ class SystemConsoleUI(ConsoleUI):
                         break
 
         try:
-            await self._run_with_q_stop(process_batches)
+            async with self.crawler.scheduler._pipeline_lock:
+                await self._run_with_q_stop(process_batches)
             color = Fore.GREEN if total_failed == 0 and not stopped else Fore.YELLOW
             status = "Stopped" if stopped else "Completed"
             self.show_message(
@@ -585,12 +588,13 @@ class SystemConsoleUI(ConsoleUI):
                 "Starting Advertio delivery. No Telegram crawl and no AI extraction will run.",
                 Fore.CYAN,
             )
-            result = await asyncio.to_thread(
-                self.advertio_service.deliver_pending,
-                limit=limit,
-                progress=True,
-                media_downloader=media_downloader,
-            )
+            async with self.crawler.scheduler._pipeline_lock:
+                result = await asyncio.to_thread(
+                    self.advertio_service.deliver_pending,
+                    limit=limit,
+                    progress=True,
+                    media_downloader=media_downloader,
+                )
             color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
             self.show_message(
                 f"Completed. Found: {result['found']} | Sent: {result['sent']} | "

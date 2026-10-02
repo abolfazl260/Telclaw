@@ -467,7 +467,7 @@ async def index(request):
     .diag-info{{background:#e8f2ff;color:#244e7a}}.diag-status{{max-width:420px;margin:.8rem 0}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
-    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
@@ -978,7 +978,7 @@ async def data_page(request):
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
     <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a class="active" href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a class="active" href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
     <section data-table="{table}">{text_help}<p>{result['total']} rows · Page {result['page']} of {result['pages']}
@@ -1131,7 +1131,7 @@ async def health_page(request):
     .refresh{{float:right}}@media(max-width:700px){{.health-sections{{grid-template-columns:1fr}}}}
     </style></head><body><h1>Telclaw · System Health</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational reports from SQLite and the running Telegram monitor.</p>
     <div class="health-grid">{pipeline_cards}</div>
 
@@ -1714,7 +1714,7 @@ async def normalization_page(request):
     @media(max-width:700px){{.alias-card form:not(.inline),.new-alias{{grid-template-columns:1fr}}}}
     </style></head><body><h1>Telclaw · Data Normalization</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a class="active" href="/normalization">Normalization</a>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a class="active" href="/normalization">Normalization</a>
     <a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Aliases are exact field-specific mappings for structured category data. Raw Telegram text in
     <code>messages.raw_text</code> is never modified. Matching ignores case and accents, so one Dusseldorf rule also
@@ -1895,7 +1895,7 @@ async def settings_page(request):
     .setting-form input[type=password],.setting-form input[type=number],.setting-form select{{min-width:180px;flex:1}}}}
     </style></head><body><h1>Telclaw · Settings</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
     <p class="muted">Values from <code>.env</code> are defaults. A saved Back Office value overrides that default and is
     persisted in SQLite. Secret values are never rendered in the page. Settings marked restart required are saved immediately
     but need a Telclaw restart for already-created clients, listeners or workers to rebuild safely.</p>

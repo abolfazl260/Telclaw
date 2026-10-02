@@ -40,6 +40,10 @@ async def _run():
     from routed_publisher import RoutedPublisher
     from backoffice_web import create_app, public_origin
 
+    # One shared runtime UI/service graph is used by both the terminal and Back
+    # Office so queue locks, crawler jobs and the active Telegram session agree.
+    system_ui = SystemConsoleUI()
+
     backoffice_runner = None
     backoffice_ready = False
     if config.BACKOFFICE_ENABLED:
@@ -54,7 +58,7 @@ async def _run():
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
                 ssl_context.load_cert_chain(config.BACKOFFICE_TLS_CERT, config.BACKOFFICE_TLS_KEY)
-            backoffice_runner = web.AppRunner(create_app())
+            backoffice_runner = web.AppRunner(create_app(console_ui=system_ui))
             await backoffice_runner.setup()
             await web.TCPSite(backoffice_runner, config.BACKOFFICE_HOST, config.BACKOFFICE_PORT, ssl_context=ssl_context).start()
             backoffice_ready = True
@@ -89,7 +93,7 @@ async def _run():
             logger.error("Telegram transfer publisher disabled: %s", exc)
 
     try:
-        await SystemConsoleUI().run()
+        await system_ui.run()
     finally:
         if transfer_task:
             transfer_task.cancel()

@@ -1284,9 +1284,10 @@ async def operations_page(request):
     ai_running = states["ai"]["status"] in {"queued", "running", "stopping"}
     advertio_running = states["advertio"]["status"] in {"queued", "running", "stopping"}
     groq_running = states["groq"]["status"] in {"queued", "running", "stopping"}
+    pipeline_busy = processing_running or classification_running or ai_running or advertio_running
 
     processing_controls = action_form(
-        "run_processing", "Run Processing", disabled=processing_running
+        "run_processing", "Run Processing", disabled=pipeline_busy
     )
     if processing_running:
         processing_controls += action_form("stop_processing", "Stop Processing", danger=True)
@@ -1299,7 +1300,7 @@ async def operations_page(request):
         "run_classification",
         "Run Classification",
         extra=batch_input,
-        disabled=classification_running,
+        disabled=pipeline_busy,
     )
     classification_controls += action_form(
         "retry_classification",
@@ -1316,7 +1317,7 @@ async def operations_page(request):
         "run_ai",
         "Run AI Extraction",
         extra=f'<label>Telegram account{ai_account_select}</label>',
-        disabled=ai_running or not account_names,
+        disabled=pipeline_busy or not account_names,
     )
     if ai_running:
         ai_controls += action_form("stop_ai", "Stop AI Extraction", danger=True)
@@ -1328,7 +1329,7 @@ async def operations_page(request):
             '<label>Limit<input type="number" name="limit" min="1" value="100"></label>'
             f'<label>Telegram account for missing photos{account_select}</label>'
         ),
-        disabled=advertio_running or not config.ADVERTIO_INGEST_ENABLED,
+        disabled=pipeline_busy or not config.ADVERTIO_INGEST_ENABLED,
     )
 
     groq_controls = action_form(

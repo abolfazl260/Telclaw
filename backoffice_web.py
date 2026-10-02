@@ -1049,7 +1049,7 @@ async def health_page(request):
         f"<tr><th>{_escape(label)}</th><td>{int(pending):,}</td><td>{int(failed):,}</td><td>{_escape(last or '—')}</td></tr>"
         for label, pending, failed, last in (
             ("Processing", pipeline["processing_pending"], pipeline["processing_failed"], pipeline["last_processing"]),
-            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_processing"]),
+            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_classification"]),
             ("AI extraction", pipeline["ai_pending"], pipeline["ai_failed"], pipeline["last_ai"]),
             ("Advertio", pipeline["advertio_pending"], pipeline["advertio_failed"], pipeline["last_advertio"]),
         )
@@ -1064,6 +1064,14 @@ async def health_page(request):
         <td>{int(row.get('ai_processed') or 0):,}</td><td>{int(row.get('advertio_sent') or 0):,}</td>
         <td>{int(row.get('failed') or 0):,}</td></tr>"""
         for row in report["daily"]
+    )
+    stage_daily_rows = "".join(
+        f"""<tr><td>{_escape(row.get('day') or '—')}</td>
+        <td>{int(row.get('processed') or 0):,}</td>
+        <td>{int(row.get('classified') or 0):,}</td>
+        <td>{int(row.get('ai_processed') or 0):,}</td>
+        <td>{int(row.get('advertio_sent') or 0):,}</td></tr>"""
+        for row in report.get("stage_daily", [])
     )
     channel_rows = "".join(
         f"""<tr><td>@{_escape(row.get('channel_username') or '')}</td>
@@ -1140,8 +1148,15 @@ async def health_page(request):
     <div class="scroll"><table><thead><tr><th>Stage</th><th>Pending</th><th>Failed</th><th>Last activity</th></tr></thead>
     <tbody>{stage_rows}</tbody></table></div></section>
 
-    <section><h2>Crawl reports · recent days</h2>
-    <div class="scroll"><table><thead><tr><th>Date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
+    <section><h2>Pipeline activity · by stage time</h2>
+    <p class="muted">Counts are grouped by the timestamp when each stage actually completed, not by the Telegram message date.</p>
+    <div class="scroll"><table><thead><tr><th>Date (UTC)</th><th>Processed</th><th>Classified</th>
+    <th>AI processed</th><th>Advertio sent</th></tr></thead>
+    <tbody>{stage_daily_rows or '<tr><td colspan="5">No stage activity timestamps yet.</td></tr>'}</tbody></table></div></section>
+
+    <section><h2>Message cohort status · by message date</h2>
+    <p class="muted">This cohort view groups messages by their original Telegram date. It is not a record of when classification or AI ran.</p>
+    <div class="scroll"><table><thead><tr><th>Message date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
     <th>AI processed</th><th>Advertio sent</th><th>Failed</th></tr></thead>
     <tbody>{daily_rows or '<tr><td colspan="7">No crawl data yet.</td></tr>'}</tbody></table></div></section>
 

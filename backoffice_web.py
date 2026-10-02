@@ -1305,7 +1305,7 @@ async def operations_page(request):
     classification_controls += action_form(
         "retry_classification",
         "Retry Failed",
-        disabled=classification_running or int(classification.get("failed") or 0) == 0,
+        disabled=pipeline_busy or int(classification.get("failed") or 0) == 0,
     )
     if classification_running:
         classification_controls += action_form(

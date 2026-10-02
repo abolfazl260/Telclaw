@@ -26,11 +26,13 @@ def health_db(tmp_path, monkeypatch):
     conn.execute("""INSERT INTO messages(
         channel_username,message_id,text,date,collection_status,processing_status,
         classification_status,classification_category,ai_status,ai_category,
-        advertio_status,channel_name
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+        advertio_status,channel_name,cleaned_at,classification_processed_at,ai_processed_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         ("crawled_channel", 101, "one", "2026-09-28T08:00:00+00:00",
          "collected", "processed", "processed", "transferlist", "processed",
-         "transferlist", "waiting", "Crawled Channel"))
+         "transferlist", "waiting", "Crawled Channel",
+         "2026-10-02T10:00:00+00:00", "2026-10-02T10:01:00+00:00",
+         "2026-10-02T10:02:00+00:00"))
     conn.execute("""INSERT INTO messages(
         channel_username,message_id,text,date,collection_status,processing_status,
         classification_status,ai_status,advertio_status,channel_name
@@ -48,8 +50,15 @@ def test_health_snapshot_reports_database_crawls_and_channels(health_db):
     assert report["database"]["row_counts"]["messages"] == 2
     assert report["pipeline"]["total"] == 2
     assert report["pipeline"]["processing_pending"] == 1
+    assert report["pipeline"]["last_processing"] == "2026-10-02T10:00:00+00:00"
+    assert report["pipeline"]["last_classification"] == "2026-10-02T10:01:00+00:00"
+    assert report["pipeline"]["last_ai"] == "2026-10-02T10:02:00+00:00"
     assert report["daily"][0]["day"] == "2026-09-28"
     assert report["daily"][0]["crawled"] == 2
+    assert report["stage_daily"][0]["day"] == "2026-10-02"
+    assert report["stage_daily"][0]["processed"] == 1
+    assert report["stage_daily"][0]["classified"] == 1
+    assert report["stage_daily"][0]["ai_processed"] == 1
 
     channels = {row["channel_username"]: row for row in report["channels"]}
     assert channels["crawled_channel"]["messages"] == 2
@@ -75,7 +84,8 @@ async def test_robot_reports_are_persisted_and_rendered_in_health_tab(health_db)
     response = await backoffice_web.health_page({})
     assert response.status == 200
     assert "System Health" in response.text
-    assert "Crawl reports · recent days" in response.text
+    assert "Pipeline activity · by stage time" in response.text
+    assert "Message cohort status · by message date" in response.text
     assert "Crawled channels" in response.text
     assert "Robot &amp; system activity" in response.text
     assert "@crawled_channel" in response.text

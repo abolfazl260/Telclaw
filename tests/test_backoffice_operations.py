@@ -236,3 +236,4 @@ async def test_operations_page_renders_terminal_controls(monkeypatch):
     assert "Test Groq connection" in response.text
     assert "Add a new Telegram account" in response.text
     assert "Crawler Channels" in response.text
+    assert "Log out of Back Office" in response.text

@@ -5,7 +5,7 @@ import ipaddress
 import json
 import secrets
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
@@ -16,6 +16,7 @@ import backoffice_data
 import backoffice_settings
 from storage import data_normalizer
 import backoffice_health
+from backoffice_operations import BackofficeOperations
 import routing_rules
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 from routed_publisher import RoutedPublisher
@@ -1180,6 +1181,459 @@ async def health_page(request):
     return web.Response(text=content, content_type="text/html")
 
 
+
+
+def _operations_redirect(*, notice=None, error=None):
+    query = {}
+    if notice:
+        query["notice"] = str(notice)[:500]
+    if error:
+        query["error"] = str(error)[:1000]
+    suffix = "?" + urlencode(query) if query else ""
+    raise web.HTTPSeeOther("/operations" + suffix)
+
+
+def _operation_state_box(label, state, result_label="Result"):
+    status = state.get("status") or "idle"
+    result = state.get("result")
+    error = state.get("error")
+    details = ""
+    if result is not None:
+        details += f'<div class="op-result"><strong>{_escape(result_label)}:</strong><pre>{_activity_details(result)}</pre></div>'
+    if error:
+        details += f'<div class="op-error"><strong>Error:</strong> {_escape(error)}</div>'
+    return f"""<div class="op-state">
+        <div><strong>{_escape(label)}</strong> {_health_badge(status)}</div>
+        <div class="muted">Started: {_escape(state.get('started_at') or '—')} · Finished: {_escape(state.get('finished_at') or '—')}</div>
+        {details}</div>"""
+
+
+async def operations_page(request):
+    operations = request.app["operations"]
+    csrf = _escape(request["session"]["csrf"])
+    report = backoffice_health.snapshot()
+    pipeline = report["pipeline"]
+    states = operations.states()
+
+    try:
+        accounts = await operations.list_accounts()
+        account_error = None
+    except Exception as exc:
+        accounts = []
+        account_error = f"{exc.__class__.__name__}: {exc}"
+
+    connected_account = operations.connected_account()
+    account_names = [str(item.get("session") or "") for item in accounts if item.get("session")]
+    account_options = "".join(
+        f'<option value="{_escape(name)}" {"selected" if name == connected_account else ""}>{_escape(name)}</option>'
+        for name in account_names
+    )
+    account_select = (
+        f'<select name="account" required><option value="">Select account</option>{account_options}</select>'
+        if account_names else '<select name="account" disabled><option>No authorized accounts</option></select>'
+    )
+
+    try:
+        classification = operations.classification_status()
+    except Exception:
+        classification = {
+            "pending": pipeline["classification_pending"],
+            "processing": 0,
+            "classified": 0,
+            "failed": pipeline["classification_failed"],
+            "eligible_pending": pipeline["classification_pending"],
+        }
+
+    try:
+        crawler_status = operations.crawler_status()
+    except Exception as exc:
+        crawler_status = {"active_jobs": 0, "job_keys": [], "error": str(exc)}
+
+    try:
+        channel_data = operations.channel_data()
+        channel_error = None
+    except Exception as exc:
+        channel_data = {}
+        channel_error = f"{exc.__class__.__name__}: {exc}"
+
+    try:
+        transfer_status = operations.transfer_status()
+        transfer_error = None
+    except Exception as exc:
+        transfer_status = {"total": 0, "sent": 0, "waiting": 0, "failed": 0}
+        transfer_error = f"{exc.__class__.__name__}: {exc}"
+
+    notice = request.query.get("notice", "")
+    error = request.query.get("error", "")
+    banner = ""
+    if notice:
+        banner += f'<p class="ops-notice">{_escape(notice)}</p>'
+    if error:
+        banner += f'<p class="ops-error">{_escape(error)}</p>'
+
+    def action_form(action, button, *, extra="", disabled=False, danger=False):
+        disabled_attr = " disabled" if disabled else ""
+        cls = ' class="danger"' if danger else ""
+        return f"""<form method="post" action="/operations/action" class="inline op-action">
+            <input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="action" value="{_escape(action)}">{extra}
+            <button{cls}{disabled_attr}>{_escape(button)}</button></form>"""
+
+    processing_running = states["processing"]["status"] in {"queued", "running", "stopping"}
+    classification_running = states["classification"]["status"] in {"queued", "running", "stopping"}
+    ai_running = states["ai"]["status"] in {"queued", "running", "stopping"}
+    advertio_running = states["advertio"]["status"] in {"queued", "running", "stopping"}
+    groq_running = states["groq"]["status"] in {"queued", "running", "stopping"}
+
+    processing_controls = action_form(
+        "run_processing", "Run Processing", disabled=processing_running
+    )
+    if processing_running:
+        processing_controls += action_form("stop_processing", "Stop Processing", danger=True)
+
+    batch_input = (
+        f'<label>Batch size<input type="number" name="batch_size" min="1" '
+        f'value="{int(config.AI_CLASSIFICATION_BATCH_SIZE)}"></label>'
+    )
+    classification_controls = action_form(
+        "run_classification",
+        "Run Classification",
+        extra=batch_input,
+        disabled=classification_running,
+    )
+    classification_controls += action_form(
+        "retry_classification",
+        "Retry Failed",
+        disabled=classification_running or int(classification.get("failed") or 0) == 0,
+    )
+    if classification_running:
+        classification_controls += action_form(
+            "stop_classification", "Stop Classification", danger=True
+        )
+
+    ai_account_select = account_select.replace('name="account"', 'name="account"')
+    ai_controls = action_form(
+        "run_ai",
+        "Run AI Extraction",
+        extra=f'<label>Telegram account{ai_account_select}</label>',
+        disabled=ai_running or not account_names,
+    )
+    if ai_running:
+        ai_controls += action_form("stop_ai", "Stop AI Extraction", danger=True)
+
+    advertio_controls = action_form(
+        "run_advertio",
+        "Send eligible ads to Advertio",
+        extra=(
+            '<label>Limit<input type="number" name="limit" min="1" value="100"></label>'
+            f'<label>Telegram account for missing photos{account_select}</label>'
+        ),
+        disabled=advertio_running or not config.ADVERTIO_INGEST_ENABLED,
+    )
+
+    groq_controls = action_form(
+        "run_groq", "Test Groq connection", disabled=groq_running
+    )
+
+    categories = []
+    channel_groups = []
+    for category, items in channel_data.items():
+        categories.append(
+            f'<label class="check"><input type="checkbox" name="category" value="{_escape(category)}"> {_escape(category)}</label>'
+        )
+        rows = "".join(
+            f"<tr><td>@{_escape(item.get('username') or '')}</td><td>{_escape(item.get('name') or '—')}</td>"
+            f"<td>{_escape(item.get('description') or '—')}</td></tr>"
+            for item in (items or []) if isinstance(item, dict)
+        )
+        channel_groups.append(
+            f"<details><summary>{_escape(category)} · {len(items or [])} channel(s)</summary>"
+            f'<div class="scroll"><table><thead><tr><th>Channel</th><th>Name</th><th>Description</th></tr></thead>'
+            f"<tbody>{rows or '<tr><td colspan=\"3\">No channels.</td></tr>'}</tbody></table></div></details>"
+        )
+
+    today = date.today().isoformat()
+    crawl_disabled = not account_names or not categories
+    crawl_form = f"""<form method="post" action="/operations/action" class="ops-form">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <input type="hidden" name="action" value="start_crawler">
+        <label>Telegram account{account_select}</label>
+        <fieldset><legend>Categories</legend><div class="checks">{''.join(categories) or 'No categories configured.'}</div></fieldset>
+        <label>Crawl mode<select name="crawl_mode"><option value="all">All messages</option>
+        <option value="photos_only">Only messages containing photos</option></select></label>
+        <label>From date<input type="date" name="from_date" value="{today}" required></label>
+        <label>To date<input type="date" name="to_date" value="{today}" required></label>
+        <label>Crawl interval (minutes)<input type="number" name="interval_minutes" min="0.1" step="0.1"
+        value="{_escape(getattr(config, 'CRAWL_INTERVAL_MINUTES', 5))}" required></label>
+        <button {"disabled" if crawl_disabled else ""}>Start scheduled crawler</button>
+    </form>"""
+    stop_crawler = action_form(
+        "stop_crawler",
+        f"Stop all crawler jobs ({int(crawler_status.get('active_jobs') or 0)})",
+        disabled=int(crawler_status.get("active_jobs") or 0) == 0,
+        danger=True,
+    )
+
+    registration = operations.account_registration_state()
+    if registration is None:
+        registration_html = f"""<form method="post" action="/operations/action" class="ops-form compact">
+            <input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="action" value="account_begin">
+            <label>New session name<input name="session_name" required autocomplete="off"></label>
+            <label>Phone number<input name="phone" required autocomplete="tel" placeholder="+1..."></label>
+            <button>Add new account</button></form>"""
+    elif registration.get("stage") == "code":
+        session_name = _escape(registration.get("session"))
+        registration_html = f"""<p class="muted">Telegram sent a verification code for session <strong>{session_name}</strong>.</p>
+            <form method="post" action="/operations/action" class="ops-form compact">
+            <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="action" value="account_code">
+            <input type="hidden" name="session_name" value="{session_name}">
+            <label>Verification code<input name="code" required autocomplete="one-time-code"></label><button>Verify code</button></form>
+            {action_form("account_cancel", "Cancel account setup", extra=f'<input type="hidden" name="session_name" value="{session_name}">', danger=True)}"""
+    else:
+        session_name = _escape(registration.get("session"))
+        registration_html = f"""<p class="muted">Two-step verification is required for session <strong>{session_name}</strong>.</p>
+            <form method="post" action="/operations/action" class="ops-form compact">
+            <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="action" value="account_password">
+            <input type="hidden" name="session_name" value="{session_name}">
+            <label>2FA password<input type="password" name="password" required autocomplete="current-password"></label>
+            <button>Complete account login</button></form>
+            {action_form("account_cancel", "Cancel account setup", extra=f'<input type="hidden" name="session_name" value="{session_name}">', danger=True)}"""
+
+    account_rows = "".join(
+        f"<tr><td>{_escape(item.get('session'))}</td><td>{_escape((item.get('meta') or {}).get('username') or '—')}</td>"
+        f"<td>{'connected' if item.get('session') == connected_account else 'available'}</td></tr>"
+        for item in accounts
+    )
+    connect_controls = (
+        action_form(
+            "connect_account",
+            "Select / switch account",
+            extra=f'<label>Account{account_select}</label>',
+            disabled=not account_names,
+        )
+        + action_form(
+            "disconnect_account",
+            "Disconnect active account",
+            disabled=not connected_account,
+            danger=True,
+        )
+    )
+
+    operational_activity = [
+        row for row in report.get("activity", [])
+        if str(row.get("source") or "") == "backoffice.operations"
+    ][:30]
+    activity_rows = "".join(
+        f"""<tr><td>{_escape(row.get('created_at') or '—')}</td><td>{_escape(row.get('kind') or '—')}</td>
+        <td>{_health_badge(row.get('level') or 'INFO')}</td><td>{_escape(row.get('message') or '—')}</td>
+        <td><pre>{_activity_details(row.get('details_data'))}</pre></td></tr>"""
+        for row in operational_activity
+    )
+
+    transfer_summary = (
+        f"Total: {int(transfer_status.get('total') or 0):,} · Sent: {int(transfer_status.get('sent') or 0):,} · "
+        f"Waiting: {int(transfer_status.get('waiting') or 0):,} · Failed: {int(transfer_status.get('failed') or 0):,}"
+    )
+
+    auto_refresh = ""
+    if operations.any_running():
+        auto_refresh = (
+            f'<script nonce="{request["csp_nonce"]}">'
+            'setTimeout(()=>window.location.reload(),3000);'
+            '</script>'
+        )
+
+    content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Operations</title>
+    <style>{_DATA_CSS}
+    body{{max-width:1500px}}.ops-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:1rem}}
+    .op-card{{border:1px solid #dce4ef;border-radius:12px;background:#fff;padding:1rem}}
+    .op-card h2{{margin-top:0}}.op-actions{{display:flex;gap:.5rem;align-items:end;flex-wrap:wrap}}
+    .op-action{{display:flex;gap:.45rem;align-items:end;flex-wrap:wrap;border:0;padding:0;margin:.45rem 0}}
+    .op-action label,.ops-form label{{display:grid;gap:.25rem;font-size:.86rem;color:#536479}}
+    .op-action input,.op-action select,.ops-form input,.ops-form select{{padding:.45rem;border:1px solid #c8d3e2;border-radius:7px}}
+    .op-state{{background:#f8faff;border-radius:9px;padding:.7rem;margin:.6rem 0}}.op-state pre{{margin:.4rem 0 0;max-height:220px;overflow:auto}}
+    .op-error,.ops-error{{background:#ffe0da;color:#8d281b;padding:.65rem;border-radius:8px;margin:.5rem 0}}
+    .ops-notice{{background:#d9f4e5;color:#17633e;padding:.65rem;border-radius:8px}}.ops-form{{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:.7rem}}
+    .ops-form fieldset{{grid-column:1/-1;border:1px solid #dce4ef;border-radius:8px}}.ops-form button{{align-self:end}}
+    .ops-form.compact{{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));align-items:end}}.checks{{display:flex;gap:.7rem;flex-wrap:wrap}}
+    .checks .check{{display:flex;align-items:center;gap:.3rem}}.ops-links{{display:flex;gap:.6rem;flex-wrap:wrap}}
+    .ops-links a{{display:inline-block;padding:.5rem .7rem;border-radius:7px;background:#eef4ff;color:#1957b8;text-decoration:none;font-weight:600}}
+    @media(max-width:760px){{.ops-form{{grid-template-columns:1fr}}}}
+    </style></head><body><h1>Telclaw · Operations</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a><a class="active" href="/operations">Operations</a>
+    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <p class="muted">These controls call the same crawler, processing, classification, extraction, Advertio and account services used by the terminal UI.
+    Long-running queue commands execute in the background; this page refreshes automatically while one is running.</p>
+    {banner}
+
+    <div class="ops-grid">
+      <section class="op-card"><h2>Information Processing Queue</h2>
+        <p>Pending: <strong>{int(pipeline['processing_pending']):,}</strong> · Failed: <strong>{int(pipeline['processing_failed']):,}</strong></p>
+        {_operation_state_box("Processing", states["processing"])}
+        <div class="op-actions">{processing_controls}</div></section>
+
+      <section class="op-card"><h2>AI Category Classification</h2>
+        <p>Eligible pending: <strong>{int(classification.get('eligible_pending') or 0):,}</strong> ·
+        Processing: <strong>{int(classification.get('processing') or 0):,}</strong> · Failed: <strong>{int(classification.get('failed') or 0):,}</strong></p>
+        {_operation_state_box("Classification", states["classification"])}
+        <div class="op-actions">{classification_controls}</div></section>
+
+      <section class="op-card"><h2>AI Extraction Queue</h2>
+        <p>Pending: <strong>{int(pipeline['ai_pending']):,}</strong> · Failed: <strong>{int(pipeline['ai_failed']):,}</strong> ·
+        Enabled: <strong>{'yes' if config.AI_EXTRACTION_ENABLED else 'no'}</strong></p>
+        {_operation_state_box("AI extraction", states["ai"])}
+        <div class="op-actions">{ai_controls}</div></section>
+
+      <section class="op-card"><h2>Advertio Delivery</h2>
+        <p>Pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
+        Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
+        {_operation_state_box("Advertio", states["advertio"])}
+        <div class="op-actions">{advertio_controls}</div></section>
+
+      <section class="op-card"><h2>Groq Connection Test</h2>
+        {_operation_state_box("Groq diagnostic", states["groq"])}
+        <div class="op-actions">{groq_controls}</div></section>
+
+      <section class="op-card"><h2>Transfer Ads</h2>
+        <p>{_escape(transfer_summary)}</p>
+        {f'<p class="ops-error">{_escape(transfer_error)}</p>' if transfer_error else ''}
+        <p class="muted">With Back Office enabled, terminal direct-send is intentionally replaced by rule-based publishing.</p>
+        <div class="ops-links"><a href="/">Open Publishing</a></div></section>
+    </div>
+
+    <section><h2>Scheduled Crawler</h2>
+      <p>Active jobs: <strong>{int(crawler_status.get('active_jobs') or 0):,}</strong> · Connected account:
+      <strong>{_escape(connected_account or 'none')}</strong></p>
+      {crawl_form}<div class="op-actions">{stop_crawler}</div></section>
+
+    <section><h2>Telegram Accounts</h2>
+      {f'<p class="ops-error">{_escape(account_error)}</p>' if account_error else ''}
+      <p>Connected account: <strong>{_escape(connected_account or 'none')}</strong></p>
+      <div class="op-actions">{connect_controls}</div>
+      <div class="scroll"><table><thead><tr><th>Session</th><th>Telegram username</th><th>State</th></tr></thead>
+      <tbody>{account_rows or '<tr><td colspan="3">No authorized Telegram sessions.</td></tr>'}</tbody></table></div>
+      <h3>Add a new Telegram account</h3>{registration_html}</section>
+
+    <section><h2>Crawler Channels</h2>
+      {f'<p class="ops-error">{_escape(channel_error)}</p>' if channel_error else ''}
+      <p class="muted">This is the same read-only channel inventory shown by the terminal Channel Management screen.</p>
+      {''.join(channel_groups) or '<p>No channel groups configured.</p>'}</section>
+
+    <section><h2>Settings</h2>
+      <p class="muted">Terminal settings are represented by the full Back Office settings editor.</p>
+      <div class="ops-links"><a href="/settings">Open Settings</a><a href="/health">Open System Health</a></div></section>
+
+    <section><h2>Back Office operation activity</h2>
+      <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Operation</th><th>Level</th><th>Message</th><th>Details</th></tr></thead>
+      <tbody>{activity_rows or '<tr><td colspan="5">No Back Office operations have run yet.</td></tr>'}</tbody></table></div></section>
+    {auto_refresh}
+    </body></html>"""
+    return web.Response(text=content, content_type="text/html")
+
+
+async def operations_action(request):
+    operations = request.app["operations"]
+    data = await request.post()
+    action = str(data.get("action") or "").strip()
+    admin_id = request["session"]["admin_id"]
+    try:
+        if action == "run_processing":
+            operations.start_processing(admin_id)
+            _operations_redirect(notice="Processing queue started.")
+        if action == "stop_processing":
+            if not operations.request_stop("processing"):
+                raise ValueError("Processing is not running")
+            _operations_redirect(notice="Processing stop requested.")
+
+        if action == "run_classification":
+            batch_size = int(data.get("batch_size") or config.AI_CLASSIFICATION_BATCH_SIZE)
+            operations.start_classification(batch_size, admin_id)
+            _operations_redirect(notice=f"Classification started with batch size {batch_size}.")
+        if action == "stop_classification":
+            if not operations.request_stop("classification"):
+                raise ValueError("Classification is not running")
+            _operations_redirect(notice="Classification stop requested.")
+        if action == "retry_classification":
+            retried = await operations.retry_failed_classifications(admin_id)
+            _operations_redirect(notice=f"Requeued {retried} failed classification(s).")
+
+        if action == "run_ai":
+            operations.start_ai(data.get("account"), admin_id)
+            _operations_redirect(notice="AI extraction queue started.")
+        if action == "stop_ai":
+            if not operations.request_stop("ai"):
+                raise ValueError("AI extraction is not running")
+            _operations_redirect(notice="AI extraction stop requested.")
+
+        if action == "run_advertio":
+            operations.start_advertio(
+                limit=int(data.get("limit") or 100),
+                account_name=data.get("account"),
+                requested_by=admin_id,
+            )
+            _operations_redirect(notice="Advertio delivery started.")
+
+        if action == "run_groq":
+            operations.start_groq_test(admin_id)
+            _operations_redirect(notice="Groq connection test started.")
+
+        if action == "start_crawler":
+            from_date = date.fromisoformat(str(data.get("from_date") or ""))
+            to_date = date.fromisoformat(str(data.get("to_date") or ""))
+            await operations.start_crawler(
+                account_name=data.get("account"),
+                categories=data.getall("category", []),
+                from_date=from_date,
+                to_date=to_date,
+                interval_minutes=float(data.get("interval_minutes") or config.CRAWL_INTERVAL_MINUTES),
+                crawl_mode=str(data.get("crawl_mode") or "all"),
+                requested_by=admin_id,
+            )
+            _operations_redirect(notice="Scheduled crawler started.")
+        if action == "stop_crawler":
+            stopped = operations.stop_crawler(admin_id)
+            _operations_redirect(notice=f"Stopped {stopped} crawler job(s).")
+
+        if action == "connect_account":
+            await operations.connect_account(data.get("account"), admin_id)
+            _operations_redirect(notice=f"Telegram account '{data.get('account')}' selected.")
+        if action == "disconnect_account":
+            await operations.disconnect_account(admin_id)
+            _operations_redirect(notice="Active Telegram account disconnected.")
+
+        if action == "account_begin":
+            result = await operations.begin_account_registration(
+                data.get("session_name"),
+                data.get("phone"),
+            )
+            _operations_redirect(notice=f"Verification code requested for session '{result['session']}'.")
+        if action == "account_code":
+            result = await operations.submit_account_code(
+                data.get("session_name"),
+                data.get("code"),
+            )
+            if result.get("stage") == "password":
+                _operations_redirect(notice="Telegram requires the account's 2FA password.")
+            _operations_redirect(notice=f"Telegram account '{result['session']}' added.")
+        if action == "account_password":
+            result = await operations.submit_account_password(
+                data.get("session_name"),
+                data.get("password"),
+            )
+            _operations_redirect(notice=f"Telegram account '{result['session']}' added.")
+        if action == "account_cancel":
+            await operations.cancel_account_registration(data.get("session_name"))
+            _operations_redirect(notice="Telegram account setup cancelled.")
+
+        raise ValueError("Unknown operation")
+    except web.HTTPException:
+        raise
+    except (ValueError, RuntimeError, PermissionError) as exc:
+        _operations_redirect(error=str(exc))
+    except Exception as exc:
+        _operations_redirect(error=f"{exc.__class__.__name__}: {exc}")
 
 
 def _normalization_target_options(selected=""):

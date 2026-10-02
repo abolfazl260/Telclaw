@@ -26,6 +26,7 @@ from storage import database
 
 
 RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "groq")
+SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio"}
 
 
 def _now_iso():
@@ -143,6 +144,15 @@ class BackofficeOperations:
         existing = self._tasks.get(name)
         if existing is not None and not existing.done():
             raise RuntimeError(f"{name} is already running")
+        if name in SERIAL_PIPELINE_JOBS:
+            busy = [
+                other for other in SERIAL_PIPELINE_JOBS
+                if other != name and self.state(other)["status"] in {"queued", "running", "stopping"}
+            ]
+            if busy:
+                raise RuntimeError(
+                    f"Another manual pipeline operation is already active: {', '.join(sorted(busy))}"
+                )
 
         stop_event = threading.Event()
         self._stop_events[name] = stop_event
@@ -527,4 +537,4 @@ class BackofficeOperations:
             self._account_name = None
 
 
-__all__ = ["BackofficeOperations", "RUNNABLE_PIPELINE_JOBS"]
+__all__ = ["BackofficeOperations", "RUNNABLE_PIPELINE_JOBS", "SERIAL_PIPELINE_JOBS"]

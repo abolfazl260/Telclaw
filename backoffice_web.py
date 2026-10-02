@@ -1292,13 +1292,14 @@ async def operations_page(request):
     if error:
         banner += f'<p class="ops-error">{_escape(error)}</p>'
 
-    def action_form(action, button, *, extra="", disabled=False, danger=False):
+    def action_form(action, button, *, extra="", disabled=False, danger=False, confirm=None):
         disabled_attr = " disabled" if disabled else ""
         cls = ' class="danger"' if danger else ""
+        confirm_attr = f' data-confirm="{_escape(confirm)}"' if confirm else ""
         return f"""<form method="post" action="/operations/action" class="inline op-action">
             <input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="action" value="{_escape(action)}">{extra}
-            <button{cls}{disabled_attr}>{_escape(button)}</button></form>"""
+            <button{cls}{confirm_attr}{disabled_attr}>{_escape(button)}</button></form>"""
 
     processing_running = states["processing"]["status"] in {"queued", "running", "stopping"}
     classification_running = states["classification"]["status"] in {"queued", "running", "stopping"}
@@ -1351,6 +1352,7 @@ async def operations_page(request):
             f'<label>Telegram account for missing photos{account_select}</label>'
         ),
         disabled=pipeline_busy or not config.ADVERTIO_INGEST_ENABLED,
+        confirm="Send eligible existing housing listings to Advertio now?",
     )
 
     groq_controls = action_form(
@@ -1578,6 +1580,11 @@ async def operations_page(request):
       <tbody>{activity_rows or '<tr><td colspan="5">No Back Office operations have run yet.</td></tr>'}</tbody></table></div></section>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}">
       <button class="secondary">Log out of Back Office</button></form>
+    <script nonce="{request['csp_nonce']}">
+    document.querySelectorAll('[data-confirm]').forEach(button=>button.closest('form').addEventListener('submit',event=>{{
+      if(!confirm(button.dataset.confirm)) event.preventDefault();
+    }}));
+    </script>
     {auto_refresh}
     </body></html>"""
     return web.Response(text=content, content_type="text/html")

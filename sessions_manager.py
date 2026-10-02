@@ -109,6 +109,15 @@ async def get_active_accounts():
                 await client.connect()
             authorized = await client.is_user_authorized()
             if not authorized:
+                # Telegram explicitly confirmed the cached/on-disk session is
+                # unauthorized. Disconnect and evict even when another caller
+                # had previously cached this client; otherwise a deleted session
+                # could remain usable through the stale in-process object.
+                try:
+                    if client.is_connected():
+                        await client.disconnect()
+                finally:
+                    _client_cache.pop(session_name, None)
                 _remove_session_files(session_name)
                 continue
 

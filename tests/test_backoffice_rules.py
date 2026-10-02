@@ -99,7 +99,7 @@ def test_legacy_koolbar_diagnostics_explains_eligibility_and_delivery_blockers(r
     assert "delivery status is rejected" in diagnostics["rows"][0]["blockers"]
 
 
-def test_backoffice_diagnostics_surfaces_koolbar_queue_starvation(rule_db, monkeypatch):
+def test_backoffice_diagnostics_reports_koolbar_fair_share(rule_db, monkeypatch):
     routing_rules.save_target("Koolbar International", "@koolbar_international")
     target = routing_rules.list_targets()[0]
 
@@ -117,16 +117,56 @@ def test_backoffice_diagnostics_surfaces_koolbar_queue_starvation(rule_db, monke
             "target_id": target["id"],
             "target_enabled": True,
             "today": "2099-01-01",
-            "eligible_count": 3,
+            "eligible_count": 30,
             "rows": [],
         },
     )
 
     output = backoffice_web._publishing_diagnostics_html(target, [])
-    assert "Koolbar is starved this cycle" in output
+    assert "Fair queue scheduling prevents managed rules" in output
     assert "50/50" in output
-    assert "Legacy eligible now" in output
-    assert ">3<" in output
+    assert "Legacy fair-share capacity" in output
+    assert ">25<" in output
+    assert "Koolbar backlog exceeds one cycle" in output
+
+
+def test_publisher_fairly_merges_rule_and_koolbar_queues():
+    rule_pairs = [
+        ({"message_row_id": index}, {"target_id": 100 + index})
+        for index in range(1, 51)
+    ]
+    koolbar_pairs = [
+        ({"message_row_id": 1000 + index}, {"id": 1, "target_id": 1})
+        for index in range(1, 51)
+    ]
+
+    merged = routed_publisher.RoutedPublisher._merge_pending_pairs(
+        rule_pairs,
+        koolbar_pairs,
+        limit=50,
+    )
+
+    assert len(merged) == 50
+    assert sum(1 for _record, rule in merged if rule.get("target_id") == 1) == 25
+    assert merged[0][0]["message_row_id"] == 1
+    assert merged[1][0]["message_row_id"] == 1001
+
+
+def test_publisher_fair_merge_deduplicates_same_message_and_target():
+    duplicate_rule = ({"message_row_id": 1}, {"target_id": 1})
+    duplicate_koolbar = ({"message_row_id": 1}, {"id": 1, "target_id": 1})
+    extra_koolbar = ({"message_row_id": 2}, {"id": 1, "target_id": 1})
+
+    merged = routed_publisher.RoutedPublisher._merge_pending_pairs(
+        [duplicate_rule],
+        [duplicate_koolbar, extra_koolbar],
+        limit=2,
+    )
+
+    assert [(record["message_row_id"], rule.get("target_id")) for record, rule in merged] == [
+        (1, 1),
+        (2, 1),
+    ]
 
 
 def test_new_backoffice_rule_defaults_to_automatic_publishing(rule_db):

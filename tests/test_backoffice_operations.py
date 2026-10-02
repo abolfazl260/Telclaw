@@ -154,3 +154,85 @@ def test_backoffice_app_exposes_terminal_equivalent_operations_routes():
     paths = {route.resource.canonical for route in app.router.routes()}
     assert "/operations" in paths
     assert "/operations/action" in paths
+
+
+class FakePageOperations:
+    async def list_accounts(self):
+        return [{"session": "primary", "meta": {"username": "tester"}}]
+
+    def connected_account(self):
+        return "primary"
+
+    def states(self):
+        return {
+            name: {
+                "name": name,
+                "status": "idle",
+                "started_at": None,
+                "finished_at": None,
+                "result": None,
+                "error": None,
+                "requested_by": None,
+                "params": {},
+            }
+            for name in ("processing", "classification", "ai", "advertio", "groq")
+        }
+
+    def classification_status(self):
+        return {"pending": 2, "processing": 0, "classified": 5, "failed": 1, "eligible_pending": 2}
+
+    def crawler_status(self):
+        return {"active_jobs": 0, "job_keys": []}
+
+    def channel_data(self):
+        return {"transport": [{"username": "source", "name": "Source", "description": "Transport source"}]}
+
+    def transfer_status(self):
+        return {"total": 4, "sent": 1, "waiting": 2, "failed": 1}
+
+    def account_registration_state(self):
+        return None
+
+    def any_running(self):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_operations_page_renders_terminal_controls(monkeypatch):
+    monkeypatch.setattr(
+        backoffice_web.backoffice_health,
+        "snapshot",
+        lambda: {
+            "pipeline": {
+                "processing_pending": 3,
+                "processing_failed": 0,
+                "classification_pending": 2,
+                "classification_failed": 1,
+                "ai_pending": 1,
+                "ai_failed": 0,
+                "advertio_pending": 1,
+                "advertio_failed": 0,
+            },
+            "activity": [],
+        },
+    )
+
+    class Request(dict):
+        query = {}
+        app = {"operations": FakePageOperations()}
+
+    request = Request({
+        "session": {"csrf": "csrf", "admin_id": 7},
+        "csp_nonce": "nonce",
+    })
+    response = await backoffice_web.operations_page(request)
+
+    assert response.status == 200
+    assert "Run Processing" in response.text
+    assert "Run Classification" in response.text
+    assert "Run AI Extraction" in response.text
+    assert "Start scheduled crawler" in response.text
+    assert "Send eligible ads to Advertio" in response.text
+    assert "Test Groq connection" in response.text
+    assert "Add a new Telegram account" in response.text
+    assert "Crawler Channels" in response.text

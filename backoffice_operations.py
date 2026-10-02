@@ -266,6 +266,10 @@ class BackofficeOperations:
         if not account_name:
             raise ValueError("Select a Telegram account")
 
+        current = self.connected_account()
+        if current and current != account_name and self.crawler.active_jobs():
+            raise RuntimeError("Stop active crawler jobs before switching Telegram accounts")
+
         if self.console_ui is not None:
             client = await self.console_ui.connect_client(account_name)
             if client is None:
@@ -294,6 +298,8 @@ class BackofficeOperations:
         return bool(client)
 
     async def disconnect_account(self, requested_by=None):
+        if self.crawler.active_jobs():
+            raise RuntimeError("Stop active crawler jobs before disconnecting the Telegram account")
         if self.console_ui is not None:
             client = getattr(self.console_ui, "client", None)
             if client is not None:

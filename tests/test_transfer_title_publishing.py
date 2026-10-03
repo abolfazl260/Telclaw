@@ -40,10 +40,15 @@ def test_missing_transfer_title_does_not_render_empty_title_line():
     assert "📌 Title:" not in text
 
 
-def test_transfer_text_cleanup_preserves_ascii_t_characters():
-    assert TelegramTransferPublisher._remove_emojis(
-        "Small package from Tehran to Toronto"
-    ) == "Small package from Tehran to Toronto"
+def test_transfer_text_cleanup_preserves_normal_language_characters():
+    value = "Small luggage written output فارسی 中文"
+    assert TelegramTransferPublisher._remove_emojis(value) == value
+
+
+def test_transfer_text_cleanup_removes_emojis_without_rewriting_words():
+    assert TelegramTransferPublisher._clean_description(
+        "#tag Small luggage ✈️ written output ✅"
+    ) == "Small luggage written output"
 
 
 

@@ -94,7 +94,7 @@ def get_ready_transfer_ads(limit=100):
     try:
         rows = conn.execute(
             """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username,
-                        m.raw_text
+                        m.raw_text, m.text
                  FROM transferlist t
                  INNER JOIN messages m ON m.id = t.processed_message_id
                 WHERE m.processing_status = 'processed'
@@ -121,7 +121,7 @@ def get_unsent_transfer_ads(limit=20, offset=0):
     try:
         rows = conn.execute(
             """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username,
-                        m.raw_text
+                        m.raw_text, m.text
                  FROM transferlist t
                  INNER JOIN messages m ON m.id = t.processed_message_id
                 WHERE NOT EXISTS (
@@ -169,7 +169,7 @@ def get_latest_transfer_ads(limit=20):
     try:
         rows = conn.execute(
             """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username,
-                        m.raw_text
+                        m.raw_text, m.text
                  FROM transferlist t
                  INNER JOIN messages m ON m.id = t.processed_message_id
                 ORDER BY t.id DESC
@@ -360,6 +360,8 @@ def format_transfer_ad(record):
         lines.append(f"💰 Price: {_format_number(record['price'])}{suffix}")
 
     description = record.get("raw_text")
+    if description is None or description == "":
+        description = record.get("text")
     if description is None or description == "":
         description = record.get("description")
     if description:

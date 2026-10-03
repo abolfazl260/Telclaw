@@ -222,6 +222,38 @@ def _format_number(value):
     return str(value)
 
 
+def _clean_description(value):
+    if value is None:
+        return ""
+    text = str(value)
+    emoji_pattern = re.compile(
+        "["
+        "\\U0001F1E6-\\U0001F1FF"
+        "\\U0001F300-\\U0001F5FF"
+        "\\U0001F600-\\U0001F64F"
+        "\\U0001F680-\\U0001F6FF"
+        "\\U0001F700-\\U0001F77F"
+        "\\U0001F780-\\U0001F7FF"
+        "\\U0001F800-\\U0001F8FF"
+        "\\U0001F900-\\U0001F9FF"
+        "\\U0001FA00-\\U0001FAFF"
+        "\\u2600-\\u26FF"
+        "\\u2700-\\u27BF"
+        "]+",
+        flags=re.UNICODE,
+    )
+    text = emoji_pattern.sub("", text)
+    text = "".join(
+        char for char in text
+        if ord(char) not in {0xFE0E, 0xFE0F, 0x200D, 0x20E3}
+    )
+    cleaned_lines = []
+    for line in text.splitlines():
+        words = [word for word in line.split() if not word.startswith("#")]
+        cleaned_lines.append(" ".join(words))
+    return "\n".join(cleaned_lines).strip()
+
+
 def _gregorian_to_jalali(gy, gm, gd):
     """Convert Gregorian date to Solar Hijri/Jalali without external dependencies."""
     g_days_in_month = [31, 29 if (gy % 4 == 0 and (gy % 100 != 0 or gy % 400 == 0)) else 28,
@@ -359,13 +391,9 @@ def format_transfer_ad(record):
         suffix = f" {currency}" if currency else ""
         lines.append(f"💰 Price: {_format_number(record['price'])}{suffix}")
 
-    description = record.get("raw_text")
-    if description is None or description == "":
-        description = record.get("text")
-    if description is None or description == "":
-        description = record.get("description")
+    description = _clean_description(record.get("description"))
     if description:
-        lines.append(f"📝 Description:\n{str(description)}")
+        lines.append(f"📝 Description:\n{description}")
 
     if record.get("features"):
         features = record["features"]

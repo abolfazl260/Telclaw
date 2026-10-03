@@ -79,7 +79,7 @@ class TelegramTransferPublisher:
 
     @staticmethod
     def _remove_emojis(text):
-        """Remove Unicode emoji/pictographic characters from published descriptions."""
+        """Remove emoji/pictographic code points without touching normal language text."""
         if not text:
             return text
         emoji_pattern = re.compile(
@@ -93,14 +93,17 @@ class TelegramTransferPublisher:
             "\\U0001F800-\\U0001F8FF"
             "\\U0001F900-\\U0001F9FF"
             "\\U0001FA00-\\U0001FAFF"
-            "\\U00002702-\\U000027B0"
-            "\\U000024C2-\\U0001F251"
+            "\\u2600-\\u26FF"
+            "\\u2700-\\u27BF"
             "]+",
             flags=re.UNICODE,
         )
         text = emoji_pattern.sub("", str(text))
-        text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
-        return re.sub(r"[ \t]{2,}", " ", text).strip()
+        text = "".join(
+            char for char in text
+            if ord(char) not in {0xFE0E, 0xFE0F, 0x200D, 0x20E3}
+        )
+        return text.strip()
 
     @staticmethod
     def _country_flag(value):
@@ -130,17 +133,17 @@ class TelegramTransferPublisher:
         flag = cls._country_flag(country)
         return f"{flag + ' ' if flag else ''}{label}: {city}"
 
-    @staticmethod
-    def _verbatim_description(record, data):
-        """Prefer preserved source text; use legacy text only for older rows."""
-        for key in ("raw_text", "text"):
-            value = record.get(key)
-            if value is not None and value != "":
-                return str(value)
-        description = data.get("description")
-        if description is None:
+    @classmethod
+    def _clean_description(cls, value):
+        """Use extracted description text, dropping only hashtags and emojis."""
+        if value is None:
             return None
-        return str(description)
+        text = cls._remove_emojis(str(value))
+        cleaned_lines = []
+        for line in text.splitlines():
+            words = [word for word in line.split() if not word.startswith("#")]
+            cleaned_lines.append(" ".join(words))
+        return "\n".join(cleaned_lines).strip() or None
 
     @staticmethod
     def _number(value):
@@ -231,7 +234,7 @@ class TelegramTransferPublisher:
             except ValueError:
                 lines.append(f"📅 Date: {departure_date}")
             lines.append("")
-        description = cls._verbatim_description(record, data)
+        description = cls._clean_description(data.get("description"))
         if description:
             lines.append(f"📝 Description: {description}")
         price = cls._number(data.get("price"))

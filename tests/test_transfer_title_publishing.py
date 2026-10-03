@@ -40,18 +40,24 @@ def test_missing_transfer_title_does_not_render_empty_title_line():
     assert "📌 Title:" not in text
 
 
-def test_transfer_text_cleanup_preserves_ascii_t_characters():
-    assert TelegramTransferPublisher._remove_emojis(
-        "Small package from Tehran to Toronto"
-    ) == "Small package from Tehran to Toronto"
+def test_transfer_text_cleanup_preserves_normal_language_characters():
+    value = "Small luggage written output فارسی 中文"
+    assert TelegramTransferPublisher._remove_emojis(value) == value
+
+
+def test_transfer_text_cleanup_removes_emojis_without_rewriting_words():
+    assert TelegramTransferPublisher._clean_description(
+        "#tag Small luggage ✈️ written output ✅"
+    ) == "Small luggage written output"
 
 
 
-def test_transfer_description_uses_exact_raw_user_text():
-    raw = "#پذیرش_بار\nمبدا: چین ✈️\nتوضیحات :  پذیرش بار تا ۶۰ کیلو"
+def test_transfer_description_uses_cleaned_extracted_text_not_raw_source():
+    raw = "#RAW_SHOULD_NOT_PUBLISH متن خام کاربر ✈️"
+    extracted = "#پذیرش_بار مبدا: چین ✈️\nتوضیحات : پذیرش و ارسال بار مسافری تا ۶۰ کیلو"
     record = _record(
         raw_text=raw,
-        description="AI-generated rewritten description that must not be published",
+        description=extracted,
         cargo_type="passenger cargo",
         weight=60,
         weight_unit="kilogram",
@@ -60,17 +66,18 @@ def test_transfer_description_uses_exact_raw_user_text():
 
     text = TelegramTransferPublisher.format_ad(record, record)
 
-    assert f"📝 Description: {raw}" in text
-    assert "AI-generated rewritten description" not in text
-    assert "✈️" in text
+    assert "📝 Description: مبدا: چین" in text
+    assert "توضیحات : پذیرش و ارسال بار مسافری تا ۶۰ کیلو" in text
+    assert "#پذیرش_بار" not in text
+    assert "#RAW_SHOULD_NOT_PUBLISH" not in text
+    assert "✈️" not in text
     assert "📦 Cargo Type: passenger cargo" in text
     assert "⚖️ Weight: 60 kilogram" in text
     assert "📅 Date: 10/10/2026" in text
     assert "📝 توضیحات:" not in text
 
 
-def test_legacy_transfer_formatter_uses_english_labels_and_raw_text():
-    raw = "متن اصلی کاربر\nبدون بازنویسی ✅"
+def test_legacy_transfer_formatter_uses_cleaned_extracted_description():
     text = format_transfer_ad({
         "origin_city": "China",
         "origin_country": "CN",
@@ -79,14 +86,16 @@ def test_legacy_transfer_formatter_uses_english_labels_and_raw_text():
         "cargo_type": "passenger cargo",
         "weight": 60,
         "weight_unit": "kilogram",
-        "raw_text": raw,
-        "description": "rewritten",
+        "raw_text": "#raw متن خام ✅",
+        "description": "#پذیرش_بار متن اصلاح شده کاربر ✅",
     })
 
     assert "🇨🇳 Origin: China" in text
     assert "🇮🇷 Destination: Iran" in text
     assert "📦 Cargo Type: passenger cargo" in text
     assert "⚖️ Weight: 60 kilogram" in text
-    assert f"📝 Description:\n{raw}" in text
-    assert "rewritten" not in text
+    assert "📝 Description:\nمتن اصلاح شده کاربر" in text
+    assert "#پذیرش_بار" not in text
+    assert "#raw" not in text
+    assert "✅" not in text
     assert "نوع بار:" not in text

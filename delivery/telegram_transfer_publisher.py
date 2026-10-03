@@ -79,7 +79,7 @@ class TelegramTransferPublisher:
 
     @staticmethod
     def _remove_emojis(text):
-        """Remove Unicode emoji/pictographic characters from published descriptions."""
+        """Remove emoji/pictographic code points without touching normal language text."""
         if not text:
             return text
         emoji_pattern = re.compile(
@@ -93,14 +93,15 @@ class TelegramTransferPublisher:
             "\\U0001F800-\\U0001F8FF"
             "\\U0001F900-\\U0001F9FF"
             "\\U0001FA00-\\U0001FAFF"
-            "\\U00002702-\\U000027B0"
-            "\\U000024C2-\\U0001F251"
+            "\\u2600-\\u26FF"
+            "\\u2700-\\u27BF"
             "]+",
             flags=re.UNICODE,
         )
         text = emoji_pattern.sub("", str(text))
-        text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
-        return re.sub(r"[ \t]{2,}", " ", text).strip()
+        for marker in ("\\ufe0e", "\\ufe0f", "\\u200d", "\\u20e3"):
+            text = text.replace(marker, "")
+        return text.strip()
 
     @staticmethod
     def _country_flag(value):
@@ -132,17 +133,15 @@ class TelegramTransferPublisher:
 
     @classmethod
     def _clean_description(cls, value):
-        """Keep the extracted user wording while removing presentation noise."""
+        """Use extracted description text, dropping only hashtags and emojis."""
         if value is None:
             return None
         text = cls._remove_emojis(str(value))
-        # A hashtag is metadata/presentation noise, not part of the ad prose.
-        # Remove the whole hashtag token rather than leaving its marker/slug.
-        text = re.sub(r"(?<!\\S)#[^\\s#]+", "", text, flags=re.UNICODE)
-        text = re.sub(r"[ \\t]{2,}", " ", text)
-        text = re.sub(r" *\\n *", "\\n", text)
-        text = re.sub(r"\\n{3,}", "\\n\\n", text)
-        return text.strip() or None
+        cleaned_lines = []
+        for line in text.splitlines():
+            words = [word for word in line.split() if not word.startswith("#")]
+            cleaned_lines.append(" ".join(words))
+        return "\n".join(cleaned_lines).strip() or None
 
     @staticmethod
     def _number(value):

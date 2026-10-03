@@ -243,8 +243,10 @@ def _clean_description(value):
         flags=re.UNICODE,
     )
     text = emoji_pattern.sub("", text)
-    for marker in ("\\ufe0e", "\\ufe0f", "\\u200d", "\\u20e3"):
-        text = text.replace(marker, "")
+    text = "".join(
+        char for char in text
+        if ord(char) not in {0xFE0E, 0xFE0F, 0x200D, 0x20E3}
+    )
     cleaned_lines = []
     for line in text.splitlines():
         words = [word for word in line.split() if not word.startswith("#")]

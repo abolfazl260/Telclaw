@@ -77,7 +77,7 @@ class RoutedPublisher:
         try:
             rows = conn.execute(
                 """SELECT t.*, m.channel_username, m.message_id, m.message_link,
-                          m.sender_username, m.raw_text, m.ai_category, m.ai_status,
+                          m.sender_username, m.raw_text, m.text, m.ai_category, m.ai_status,
                           m.processing_status, m.id AS message_row_id
                      FROM transferlist t
                      INNER JOIN messages m ON m.id=t.processed_message_id

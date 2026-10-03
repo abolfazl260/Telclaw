@@ -130,17 +130,19 @@ class TelegramTransferPublisher:
         flag = cls._country_flag(country)
         return f"{flag + ' ' if flag else ''}{label}: {city}"
 
-    @staticmethod
-    def _verbatim_description(record, data):
-        """Prefer preserved source text; use legacy text only for older rows."""
-        for key in ("raw_text", "text"):
-            value = record.get(key)
-            if value is not None and value != "":
-                return str(value)
-        description = data.get("description")
-        if description is None:
+    @classmethod
+    def _clean_description(cls, value):
+        """Keep the extracted user wording while removing presentation noise."""
+        if value is None:
             return None
-        return str(description)
+        text = cls._remove_emojis(str(value))
+        # A hashtag is metadata/presentation noise, not part of the ad prose.
+        # Remove the whole hashtag token rather than leaving its marker/slug.
+        text = re.sub(r"(?<!\\S)#[^\\s#]+", "", text, flags=re.UNICODE)
+        text = re.sub(r"[ \\t]{2,}", " ", text)
+        text = re.sub(r" *\\n *", "\\n", text)
+        text = re.sub(r"\\n{3,}", "\\n\\n", text)
+        return text.strip() or None
 
     @staticmethod
     def _number(value):
@@ -231,7 +233,7 @@ class TelegramTransferPublisher:
             except ValueError:
                 lines.append(f"📅 Date: {departure_date}")
             lines.append("")
-        description = cls._verbatim_description(record, data)
+        description = cls._clean_description(data.get("description"))
         if description:
             lines.append(f"📝 Description: {description}")
         price = cls._number(data.get("price"))

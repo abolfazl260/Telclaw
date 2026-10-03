@@ -26,14 +26,14 @@ def rule_db(tmp_path, monkeypatch):
     conn.executescript("""CREATE TABLE messages (
         id INTEGER PRIMARY KEY, ai_category TEXT, ai_status TEXT,
         processing_status TEXT, message_id INTEGER, sender_username TEXT,
-        channel_username TEXT, message_link TEXT);
+        channel_username TEXT, message_link TEXT, raw_text TEXT, text TEXT);
         CREATE TABLE transferlist (id INTEGER PRIMARY KEY,
         processed_message_id INTEGER UNIQUE, origin_city TEXT,
         destination_city TEXT, origin_country TEXT, destination_country TEXT,
         price REAL, departure_date TEXT);
         CREATE TABLE housinglist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         CREATE TABLE joblist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
-        INSERT INTO messages VALUES(1,'transferlist','processed','processed',11,'alice','test','');
+        INSERT INTO messages VALUES(1,'transferlist','processed','processed',11,'alice','test','','original user text','legacy source text');
         INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150,'2020-01-01');""")
     conn.commit()
     conn.close()
@@ -61,12 +61,28 @@ def test_legacy_koolbar_rejected_delivery_is_not_automatically_retried(rule_db):
     assert routed_publisher.RoutedPublisher._koolbar_pairs(limit=10) == []
 
 
+def test_rule_and_koolbar_pairs_carry_raw_source_text(rule_db):
+    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    koolbar = routed_publisher.RoutedPublisher._koolbar_pairs(limit=10)
+    assert koolbar[0][0]["raw_text"] == "original user text"
+
+    routing_rules.save_target("Auto", "@autochannel")
+    routing_rules.save_rule("All transfers", "transferlist", "", "either", 2)
+    managed = routing_rules.pending(limit=10)
+    assert managed[0][0]["raw_text"] == "original user text"
+
+
 def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule_db):
     routing_rules.save_target("Koolbar International", "@koolbar_international")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01', destination_city='' WHERE id=1")
     conn.execute(
-        "INSERT INTO messages VALUES(2,'transferlist','processed','processed',12,'bob','test','')"
+        "INSERT INTO messages VALUES(2,'transferlist','processed','processed',12,'bob','test','','second original user text','second legacy source text')"
     )
     conn.execute(
         "INSERT INTO transferlist VALUES(2,2,'Berlin','Toronto','DE','CA',200,'2099-01-02')"

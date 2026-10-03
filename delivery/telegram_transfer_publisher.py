@@ -131,6 +131,18 @@ class TelegramTransferPublisher:
         return f"{flag + ' ' if flag else ''}{label}: {city}"
 
     @staticmethod
+    def _verbatim_description(record, data):
+        """Prefer preserved source text; use legacy text only for older rows."""
+        for key in ("raw_text", "text"):
+            value = record.get(key)
+            if value is not None and value != "":
+                return str(value)
+        description = data.get("description")
+        if description is None:
+            return None
+        return str(description)
+
+    @staticmethod
     def _number(value):
         if value is None or isinstance(value, bool):
             return None
@@ -192,21 +204,21 @@ class TelegramTransferPublisher:
             lines.append("")
         title = cls._remove_emojis(cls._value(data, "title"))
         if title:
-            lines.append(f"📌 عنوان: {title}")
+            lines.append(f"📌 Title: {title}")
             lines.append("")
         lines.extend([
-            cls._location_line("مبدا", origin, cls._value(data, "origin_country")),
-            cls._location_line("مقصد", destination, cls._value(data, "destination_country")),
+            cls._location_line("Origin", origin, cls._value(data, "origin_country")),
+            cls._location_line("Destination", destination, cls._value(data, "destination_country")),
         ])
         cargo = cls._value(data, "cargo_type")
         if cargo:
-            lines.append(f"📦 نوع بار: {cargo}")
+            lines.append(f"📦 Cargo Type: {cargo}")
         weight = cls._format_weight(data)
         if weight:
-            lines.append(f"⚖️ وزن: {weight}")
+            lines.append(f"⚖️ Weight: {weight}")
         volume = cls._format_volume(data) or cls._infer_volume_from_text(data)
         if volume:
-            lines.append(f"📏 حجم: {volume}")
+            lines.append(f"📏 Volume: {volume}")
         departure_date = cls._value(data, "departure_date")
         if departure_date:
             try:
@@ -215,19 +227,19 @@ class TelegramTransferPublisher:
                 jalali = cls._jalali(gregorian)
                 jy, jm, jd = jalali.split("/")
                 jalali_label = f"{jd}/{jm}/{jy}"
-                lines.append(f"📅 تاریخ: {gregorian_label} | {jalali_label}")
+                lines.append(f"📅 Date: {gregorian_label} | {jalali_label}")
             except ValueError:
-                lines.append(f"📅 تاریخ: {departure_date}")
+                lines.append(f"📅 Date: {departure_date}")
             lines.append("")
-        description = cls._remove_emojis(cls._value(data, "description"))
+        description = cls._verbatim_description(record, data)
         if description:
-            lines.append(f"📝 توضیحات: {description}")
+            lines.append(f"📝 Description: {description}")
         price = cls._number(data.get("price"))
         if price is not None:
-            lines.append(f"💰 هزینه: {price:g} {cls._value(data, 'currency') or 'CAD'}")
+            lines.append(f"💰 Price: {price:g} {cls._value(data, 'currency') or 'CAD'}")
         contact = cls._value(data, "contact")
         if contact:
-            lines.append(f"📞 تماس: {contact}")
+            lines.append(f"📞 Contact: {contact}")
         return "\n".join(lines)
 
     async def _send_message(self, text, reply_markup=None):

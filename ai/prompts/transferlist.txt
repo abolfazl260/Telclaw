@@ -62,7 +62,8 @@ EXTRACTION
 DESCRIPTION
 - Use the original source message as the basis.
 - Preserve language, wording, spelling, punctuation, and line structure as much as possible.
-- Remove all emojis/emoji symbols only. Do not replace them or alter other meaningful text.
+- Remove all emojis/emoji symbols and whole hashtag tokens (for example `#پذیرش_بار`).
+- Apart from removing emojis and hashtags, do not replace or alter other meaningful text.
 - Do not translate, summarize, rewrite, paraphrase, shorten, or correct.
 
 TITLE
@@ -70,7 +71,7 @@ TITLE
 - Prefer a concise route-based title when route is known. Never invent information.
 
 NO GUESSING
-Only these normalizations are allowed: standard city name; clearly identifiable city-to-country; Gregorian date normalization; Jalali-to-Gregorian conversion; year for an explicit month/day from the supplied reference date; emoji removal from description.
+Only these normalizations are allowed: standard city name; clearly identifiable city-to-country; Gregorian date normalization; Jalali-to-Gregorian conversion; year for an explicit month/day from the supplied reference date; emoji and hashtag-token removal from description.
 
 The year may be inferred only when month and day are explicitly present and only from a supplied reference date. Everything else uncertain = null.
 

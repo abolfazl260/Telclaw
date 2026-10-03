@@ -107,8 +107,14 @@ def test_transfer_sql_retains_legacy_columns_and_formats_structured_ad(db, messa
     assert "cleaned_text" not in record  # Legacy SQL shape is intentional.
     formatted = publisher.format_ad(record, record)
     assert "Send a package from Tehran to Toronto" in formatted
-    assert "مبدا: Tehran" in formatted
-    assert "مقصد: Toronto" in formatted
+    assert "Origin: Tehran" in formatted
+    assert "Destination: Toronto" in formatted
+    source_description = message_fields["raw_text"]
+    if source_description in (None, ""):
+        source_description = message_fields["text"]
+    if source_description in (None, ""):
+        source_description = "Small luggage available"
+    assert f"📝 Description: {source_description}" in formatted
 
 
 @pytest.mark.asyncio

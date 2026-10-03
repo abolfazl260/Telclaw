@@ -226,7 +226,7 @@ def _clean_description(value):
     if value is None:
         return ""
     text = str(value)
-    text = re.sub(
+    emoji_pattern = re.compile(
         "["
         "\\U0001F1E6-\\U0001F1FF"
         "\\U0001F300-\\U0001F5FF"
@@ -237,19 +237,19 @@ def _clean_description(value):
         "\\U0001F800-\\U0001F8FF"
         "\\U0001F900-\\U0001F9FF"
         "\\U0001FA00-\\U0001FAFF"
-        "\\U00002702-\\U000027B0"
-        "\\U000024C2-\\U0001F251"
+        "\\u2600-\\u26FF"
+        "\\u2700-\\u27BF"
         "]+",
-        "",
-        text,
         flags=re.UNICODE,
     )
-    text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
-    text = re.sub(r"(?<!\\S)#[^\\s#]+", "", text, flags=re.UNICODE)
-    text = re.sub(r"[ \\t]{2,}", " ", text)
-    text = re.sub(r" *\\n *", "\\n", text)
-    text = re.sub(r"\\n{3,}", "\\n\\n", text)
-    return text.strip()
+    text = emoji_pattern.sub("", text)
+    for marker in ("\\ufe0e", "\\ufe0f", "\\u200d", "\\u20e3"):
+        text = text.replace(marker, "")
+    cleaned_lines = []
+    for line in text.splitlines():
+        words = [word for word in line.split() if not word.startswith("#")]
+        cleaned_lines.append(" ".join(words))
+    return "\n".join(cleaned_lines).strip()
 
 
 def _gregorian_to_jalali(gy, gm, gd):

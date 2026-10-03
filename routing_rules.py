@@ -630,7 +630,7 @@ def pending(limit=100):
         while len(result) < limit:
             placeholders = ",".join("?" for _ in active_categories)
             rows = conn.execute(f"""SELECT id AS message_row_id, ai_category,channel_username,
-                message_id AS telegram_source_id, sender_username, raw_text
+                message_id AS telegram_source_id, sender_username, raw_text, text
                 FROM messages m WHERE ai_status='processed'
                 AND ai_category IN ({placeholders})
                 AND EXISTS (SELECT 1 FROM publishing_rules r

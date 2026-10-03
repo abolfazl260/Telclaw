@@ -83,6 +83,8 @@ def test_legacy_transfer_formatter_uses_english_labels_and_raw_text():
         "description": "rewritten",
     })
 
+    assert "🇨🇳 Origin: China" in text
+    assert "🇮🇷 Destination: Iran" in text
     assert "📦 Cargo Type: passenger cargo" in text
     assert "⚖️ Weight: 60 kilogram" in text
     assert f"📝 Description:\n{raw}" in text

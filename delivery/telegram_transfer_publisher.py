@@ -132,10 +132,11 @@ class TelegramTransferPublisher:
 
     @staticmethod
     def _verbatim_description(record, data):
-        """Prefer the exact crawled Telegram message over AI-derived description text."""
-        raw_text = record.get("raw_text")
-        if raw_text is not None and raw_text != "":
-            return str(raw_text)
+        """Prefer preserved source text; use legacy text only for older rows."""
+        for key in ("raw_text", "text"):
+            value = record.get(key)
+            if value is not None and value != "":
+                return str(value)
         description = data.get("description")
         if description is None:
             return None

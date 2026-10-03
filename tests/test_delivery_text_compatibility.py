@@ -109,12 +109,10 @@ def test_transfer_sql_retains_legacy_columns_and_formats_structured_ad(db, messa
     assert "Send a package from Tehran to Toronto" in formatted
     assert "Origin: Tehran" in formatted
     assert "Destination: Toronto" in formatted
-    source_description = message_fields["raw_text"]
-    if source_description in (None, ""):
-        source_description = message_fields["text"]
-    if source_description in (None, ""):
-        source_description = "Small luggage available"
-    assert f"📝 Description: {source_description}" in formatted
+    assert "📝 Description: Small luggage available" in formatted
+    raw = message_fields["raw_text"]
+    if raw and raw != "Small luggage available":
+        assert f"📝 Description: {raw}" not in formatted
 
 
 @pytest.mark.asyncio

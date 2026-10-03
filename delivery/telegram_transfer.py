@@ -321,13 +321,13 @@ def format_transfer_ad(record):
     origin = str(record.get("origin_city") or "").strip()
     destination = str(record.get("destination_city") or "").strip()
 
-    route = " → ".join(
-        part for part in (
-            _format_location(origin, record.get("origin_country")),
-            _format_location(destination, record.get("destination_country")),
-        ) if part
-    )
-    lines = [route] if route else []
+    lines = []
+    if origin:
+        flag = _country_flag(record.get("origin_country"))
+        lines.append(f"{flag + ' ' if flag else ''}Origin: {origin}")
+    if destination:
+        flag = _country_flag(record.get("destination_country"))
+        lines.append(f"{flag + ' ' if flag else ''}Destination: {destination}")
 
     role = _format_transfer_role(record.get("transfer_role"))
     if role:

@@ -402,6 +402,12 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
                             filter_field="origin_country", filter_value="TR",
                             delivery_mode="manual")
     assert routing_rules.pending() == []
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "Matching messages (1)" in response.text
+    assert "Manual review" in response.text
+    assert "Send now" in response.text
+    assert "<summary>Matching messages" not in response.text
+
     rule, counts, records = routing_rules.rule_matches(1)
     assert rule["delivery_mode"] == "manual"
     assert counts == {"total": 1, "sent": 0}
@@ -413,7 +419,8 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
     with pytest.raises(ValueError):
         routing_rules.selected_pair(1, 1)
     response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
-    assert "1 matching ads" in response.text
+    assert "Matching messages (1)" in response.text
+    assert "Send again" in response.text
     assert "Delete rule" in response.text
     routing_rules.delete_rule(1, 1)
     assert routing_rules.list_rules() == []

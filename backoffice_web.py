@@ -443,11 +443,20 @@ async def index(request):
     .badge{{font-size:.8rem;border-radius:30px;padding:.2rem .55rem;background:#e9eef5}}.badge.connected{{background:#d8f4e6;color:#16653e}}
     .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}
     .rule-panel{{padding:1rem;margin:.8rem 0;border:1px solid #dce4ef;border-radius:10px;background:white}}
-    .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:1rem}}
-    .conditions-editor{{flex:1 1 100%;border:1px solid #dce4ef;border-radius:9px;padding:.7rem;background:#f8faff}}
+    .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:.65rem}}
+    .rule-title h4{{margin:.2rem 0}}.rule-edit{{margin:.65rem 0}}.rule-edit>summary{{cursor:pointer;color:#1957b8;font-weight:600}}
+    .rule-editor{{display:block;padding:.7rem 0}}.rule-form-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.7rem}}
+    .rule-editor label{{display:grid;gap:.25rem}}.delivery-settings{{display:flex;gap:1rem;align-items:end;flex-wrap:wrap;margin:.8rem 0}}
+    .delivery-settings .checkbox-line,.rule-advanced-fields .checkbox-line{{display:flex;align-items:center;gap:.4rem}}
+    .rule-advanced{{margin:.8rem 0;border:1px solid #e1e7ef;border-radius:9px;padding:.6rem .75rem;background:#fbfcff}}
+    .rule-advanced>summary{{cursor:pointer;color:#526174;font-weight:600}}.rule-advanced-fields{{display:flex;gap:1rem;align-items:end;flex-wrap:wrap;padding-top:.7rem}}
+    .conditions-editor{{margin-top:.8rem;border:1px solid #dce4ef;border-radius:9px;padding:.7rem;background:#f8faff}}
     .condition-row{{display:grid;grid-template-columns:90px minmax(140px,1fr) 140px minmax(150px,1fr) auto;gap:.45rem;align-items:center;margin:.45rem 0}}
     .condition-row:first-child .condition-join{{visibility:hidden}}@media(max-width:760px){{.condition-row{{grid-template-columns:1fr}}.condition-row:first-child .condition-join{{display:none}}}}
-    .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
+    .matching-messages{{margin-top:.8rem;border-top:1px solid #e3e8ef;padding-top:.8rem}}.matching-header{{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap}}
+    .matching-header h5{{font-size:1rem;margin:.2rem 0}}.message-row-meta{{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap}}
+    .message-actions{{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.4rem}}.matching-nav{{margin-bottom:0}}
+    .danger{{background:#a53732}}.delete-rule{{padding:.4rem 0 0}}.ad-row{{border-top:1px solid #e4e9ef;padding:.75rem 0}}
     .overview-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem;margin:1rem 0}}
     .overview-card{{padding:1rem;border:1px solid #dce4ef;border-radius:12px;background:#f8faff}}
     .overview-card span{{display:block;color:#526174;font-size:.84rem}}
@@ -567,24 +576,31 @@ def _rule_form(rule, target, csrf):
     conditions = routing_rules.effective_conditions(rule) if rule.get("id") else []
     encoded_conditions = _escape(json.dumps(conditions, ensure_ascii=False, separators=(",", ":")))
     default_category = routing_rules.categories()[0] if routing_rules.categories() else ""
-    return f'''<form method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
+    return f'''<form class="rule-editor" method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="id" value="{rule.get('id','')}">
         <input type="hidden" name="target_id" value="{target['id']}">
+        <div class="rule-form-grid">
         <label>Rule name<input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required></label>
         <label>Topic / category {_select('category', routing_rules.categories(), rule.get('category', default_category))}</label>
         <label>Source channel (optional)<input name="source_channel" placeholder="@source_channel" value="{_escape(rule.get('source_channel'))}"></label>
+        </div>
         <div class="conditions-editor" data-conditions="{encoded_conditions}">
-        <p class="hint">Conditions use the real columns currently stored for the selected topic. Add as many as needed; AND/OR is evaluated from left to right.</p>
+        <p class="hint">Only messages that match these conditions appear below.</p>
         <div class="condition-rows"></div>
         <button type="button" class="add-condition">+ Add condition</button>
         <input type="hidden" name="conditions_json" value="[]"></div>
-        <label>Publishing <select name="delivery_mode">
-            <option value="manual" {"selected" if rule.get('delivery_mode','auto')=='manual' else ''}>Manual selection</option>
+        <div class="delivery-settings">
+        <label>Send mode <select name="delivery_mode">
             <option value="auto" {"selected" if rule.get('delivery_mode','auto')=='auto' else ''}>Automatic</option>
+            <option value="manual" {"selected" if rule.get('delivery_mode','auto')=='manual' else ''}>Manual review</option>
         </select></label>
+        <label class="checkbox-line"><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Rule enabled</label>
+        </div>
+        <details class="rule-advanced"><summary>Advanced settings</summary>
+        <div class="rule-advanced-fields">
         <label>Priority<input name="priority" type="number" value="{rule.get('priority',100)}" required></label>
-        <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
-        <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue after match</label>
+        <label class="checkbox-line"><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue after match</label>
+        </div></details>
         <button>Save rule</button></form>'''
 
 
@@ -597,11 +613,12 @@ def _rule_panel(rule, target, csrf, request):
             pass
     _, counts, records = routing_rules.rule_matches(rule["id"], limit=20, offset=page * 20)
     mode = rule.get("delivery_mode") or "auto"
+    mode_label = "Manual review" if mode == "manual" else "Automatic"
     paused = routing_rules.is_rate_limited()
     entries = []
     for record in records:
         snippet = str(next((record.get(key) for key in ("title", "job_title", "cleaned_text", "raw_text", "description")
-                            if record.get(key)), "Ad details unavailable"))[:220]
+                            if record.get(key)), "Message details unavailable"))[:220]
         try:
             if record["ai_category"] == "transferlist":
                 preview = TelegramTransferPublisher.format_ad(record, record)
@@ -615,10 +632,16 @@ def _rule_panel(rule, target, csrf, request):
         can_send = (mode == "manual" and rule["enabled"] and target["enabled"]
                     and target["connection_status"] != "disconnected" and
                     status not in {"sent", "sending", "uncertain"} and not paused)
+        if status == "sent":
+            status_label = "Delivered"
+        elif status == "not sent" and can_send:
+            status_label = "Ready to send"
+        else:
+            status_label = status.replace("_", " ").title()
         send = (f'''<form method="post" action="/rule/send"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="rule_id" value="{rule['id']}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
-            <button>Send this ad</button></form>''' if can_send else "")
+            <button>Send now</button></form>''' if can_send else "")
         can_resend = (status == "sent" and rule["enabled"] and target["enabled"]
                       and target["connection_status"] != "disconnected" and not paused)
         resend = (f'''<form method="post" action="/rule/resend"><input type="hidden" name="csrf" value="{csrf}">
@@ -631,26 +654,37 @@ def _rule_panel(rule, target, csrf, request):
             <input type="hidden" name="target_id" value="{target['id']}">
             <button data-confirm="Telegram may already have posted this ad. Check the channel before retrying.">Review and retry</button>
             </form>''' if status == "uncertain" else "")
-        entries.append(f'''<div class="ad-row"><strong>Ad #{record['message_row_id']}</strong>
-            · {_escape(record.get('channel_username') or '')} · {_escape(status)}
-            <p>{_escape(snippet)}</p><details><summary>Full ad preview</summary>
-            <pre>{_escape(preview[:4000])}</pre></details>{send}{resend}{uncertain}</div>''')
+        entries.append(f'''<div class="ad-row">
+            <div class="message-row-meta"><strong>Message #{record['message_row_id']}</strong>
+            <span class="badge">{_escape(status_label)}</span>
+            <span class="hint">{_escape(record.get('channel_username') or '')}</span></div>
+            <p>{_escape(snippet)}</p>
+            <details><summary>Full ad preview</summary><pre>{_escape(preview[:4000])}</pre></details>
+            <div class="message-actions">{send}{resend}{uncertain}</div></div>''')
     nav = ""
     for label, p in (("Previous", page - 1), ("Next", page + 1)):
         if p >= 0 and p * 20 < counts["total"] and (p != page):
             nav += (f'<a href="/?channel={target["id"]}&rule={rule["id"]}&page={p}'
                     f'#rule-{rule["id"]}">{label}</a> ')
-    expanded = str(getattr(request, "query", {}).get("rule", "")) == str(rule["id"])
-    return f'''<div class="rule-panel" id="rule-{rule['id']}"><div class="rule-title">
-        <h4>{_escape(rule['name'])}</h4><span class="hint">{counts['total']} matching ads ·
-        {counts['sent']} delivered to this channel · {mode}</span>
-        <form method="post" action="/rule/delete"><input type="hidden" name="csrf" value="{csrf}">
+    mode_help = ("Manual review is enabled. Matching messages stay here until you choose Send now."
+                 if mode == "manual" else
+                 "Automatic delivery is enabled. Matching messages are shown here for visibility.")
+    return f'''<div class="rule-panel" id="rule-{rule['id']}">
+        <div class="rule-title"><h4>{_escape(rule['name'])}</h4>
+        <span class="badge">{_escape(mode_label)}</span>
+        <span class="hint">{counts['total']} matching · {counts['sent']} delivered</span></div>
+        <details class="rule-edit"><summary>Edit rule</summary>
+        {_rule_form(rule, target, csrf)}
+        <form method="post" action="/rule/delete" class="delete-rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="rule_id" value="{rule['id']}">
         <input type="hidden" name="target_id" value="{target['id']}">
         <button class="danger" data-confirm="Delete this rule? Existing delivery history will remain.">Delete rule</button>
-        </form></div><details><summary>Edit rule</summary>{_rule_form(rule, target, csrf)}</details>
-        <details {'open' if expanded else ''}><summary>Matching ads ({counts['total']})</summary>
-        {''.join(entries) or '<p>No matching ads yet.</p>'}<p>{nav}</p></details></div>'''
+        </form></details>
+        <div class="matching-messages">
+        <div class="matching-header"><h5>Matching messages ({counts['total']})</h5>
+        <span class="hint">{_escape(mode_help)}</span></div>
+        {''.join(entries) or '<p class="hint">No messages match this rule yet.</p>'}
+        <p class="matching-nav">{nav}</p></div></div>'''
 
 
 async def save_target(request):

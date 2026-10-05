@@ -42,33 +42,55 @@ def _plain_ad(record):
 
 
 class RoutedPublisher:
+    ADVERTIO_CARGO_CHAT_ID = "@advertio_cargo"
+    LEGACY_KOOLBAR_CHAT_ID = "@koolbar_international"
+    ADVERTIO_CARGO_LABEL = "Advertio Cargo"
+
     def __init__(self, token=None):
         self.token = token or config.TELEGRAM_BOT_TOKEN
         if not self.token:
             raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
         routing_rules.initialize()
-        # Keep the legacy Koolbar destination available without requiring a
-        # Backoffice rule. Its publication eligibility is hard-coded below to
-        # preserve the old channel behavior.
-        if not any(target["chat_id"] == "@koolbar_international" for target in routing_rules.list_targets()):
-            routing_rules.save_target(
-                "Koolbar International",
-                "@koolbar_international",
-                description="Legacy hard-coded transfer destination",
-            )
+        # Keep the historical hard-coded transfer destination, but migrate the
+        # old channel username in-place so its target ID, rules and delivery
+        # history remain intact after the Telegram username rename.
+        targets = routing_rules.list_targets()
+        advertio_target = next(
+            (target for target in targets if target["chat_id"] == self.ADVERTIO_CARGO_CHAT_ID),
+            None,
+        )
+        legacy_target = next(
+            (target for target in targets if target["chat_id"] == self.LEGACY_KOOLBAR_CHAT_ID),
+            None,
+        )
+        if advertio_target is None:
+            if legacy_target is not None:
+                routing_rules.save_target(
+                    self.ADVERTIO_CARGO_LABEL,
+                    self.ADVERTIO_CARGO_CHAT_ID,
+                    enabled=bool(legacy_target["enabled"]),
+                    target_id=legacy_target["id"],
+                    description=legacy_target.get("description") or "Hard-coded Advertio Cargo transfer destination",
+                )
+            else:
+                routing_rules.save_target(
+                    self.ADVERTIO_CARGO_LABEL,
+                    self.ADVERTIO_CARGO_CHAT_ID,
+                    description="Hard-coded Advertio Cargo transfer destination",
+                )
         # _claim() relies on the legacy publication table even when the
         # Backoffice test database has not initialized the legacy publisher.
         TelegramTransferPublisher._ensure_publication_table()
 
     @staticmethod
     def _koolbar_pairs(limit):
-        """Return legacy Koolbar transfer ads with their former eligibility rules."""
+        """Return Advertio Cargo transfer ads with their former eligibility rules."""
         today = date.today().isoformat()
         # Use the routing module to resolve the target so its schema initialization
         # is guaranteed for isolated/test databases as well as the production DB.
         targets = [
             target for target in routing_rules.list_targets()
-            if target["chat_id"] == "@koolbar_international" and target["enabled"]
+            if target["chat_id"] == RoutedPublisher.ADVERTIO_CARGO_CHAT_ID and target["enabled"]
         ]
         if not targets:
             return []
@@ -108,11 +130,11 @@ class RoutedPublisher:
 
     @staticmethod
     def koolbar_diagnostics(limit=50):
-        """Return read-only eligibility diagnostics for the legacy Koolbar destination."""
+        """Return read-only eligibility diagnostics for the Advertio Cargo destination."""
         today = date.today().isoformat()
         targets = [
             target for target in routing_rules.list_targets()
-            if target["chat_id"] == "@koolbar_international"
+            if target["chat_id"] == RoutedPublisher.ADVERTIO_CARGO_CHAT_ID
         ]
         if not targets:
             return {
@@ -211,7 +233,7 @@ class RoutedPublisher:
 
     @staticmethod
     def _merge_pending_pairs(rule_pairs, koolbar_pairs, limit):
-        """Fairly share one publishing cycle between managed rules and legacy Koolbar."""
+        """Fairly share one publishing cycle between managed rules and Advertio Cargo."""
         limit = max(0, int(limit))
         if limit == 0:
             return []
@@ -233,7 +255,7 @@ class RoutedPublisher:
             return True
 
         # Round-robin while both queues have work. This guarantees that a full
-        # managed-rule queue can no longer consume every slot before Koolbar is
+        # managed-rule queue can no longer consume every slot before Advertio Cargo is
         # considered, while preserving ordering inside each queue.
         while len(merged) < limit and rule_index < len(rule_pairs) and koolbar_index < len(koolbar_pairs):
             append_unique(rule_pairs[rule_index])
@@ -258,7 +280,7 @@ class RoutedPublisher:
             return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
         if pairs is None:
             rule_pairs = routing_rules.pending(limit)
-            # The legacy Koolbar channel keeps its historical eligibility rules,
+            # The Advertio Cargo channel keeps its historical eligibility rules,
             # but now shares the cycle fairly with managed publishing rules so a
             # full rule queue cannot starve it indefinitely.
             koolbar_pairs = self._koolbar_pairs(limit)

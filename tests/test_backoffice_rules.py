@@ -40,8 +40,25 @@ def rule_db(tmp_path, monkeypatch):
     return connection
 
 
-def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
+def test_publisher_migrates_legacy_koolbar_target_in_place(rule_db):
     routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.record_delivery(1, 1, "sent", telegram_message_id=900)
+
+    routed_publisher.RoutedPublisher(token="fake-token")
+
+    targets = routing_rules.list_targets()
+    assert len(targets) == 1
+    assert targets[0]["id"] == 1
+    assert targets[0]["label"] == "Advertio Cargo"
+    assert targets[0]["chat_id"] == "@advertio_cargo"
+
+    delivery = routing_rules.recent_deliveries(target_id=1)[0]
+    assert delivery["status"] == "sent"
+    assert delivery["telegram_message_id"] == 900
+
+
+def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01', origin_city=NULL WHERE id=1")
     conn.commit()
@@ -51,7 +68,7 @@ def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
 
 
 def test_legacy_koolbar_rejected_delivery_is_not_automatically_retried(rule_db):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
     conn.commit()
@@ -62,7 +79,7 @@ def test_legacy_koolbar_rejected_delivery_is_not_automatically_retried(rule_db):
 
 
 def test_rule_and_koolbar_pairs_carry_raw_source_text(rule_db):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
     conn.commit()
@@ -78,7 +95,7 @@ def test_rule_and_koolbar_pairs_carry_raw_source_text(rule_db):
 
 
 def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule_db):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01', destination_city='' WHERE id=1")
     conn.execute(
@@ -96,7 +113,7 @@ def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule
 
 
 def test_legacy_koolbar_diagnostics_explains_eligibility_and_delivery_blockers(rule_db):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
     conn.commit()
@@ -116,7 +133,7 @@ def test_legacy_koolbar_diagnostics_explains_eligibility_and_delivery_blockers(r
 
 
 def test_backoffice_diagnostics_reports_koolbar_fair_share(rule_db, monkeypatch):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     target = routing_rules.list_targets()[0]
 
     monkeypatch.setattr(
@@ -143,7 +160,7 @@ def test_backoffice_diagnostics_reports_koolbar_fair_share(rule_db, monkeypatch)
     assert "50/50" in output
     assert "Legacy fair-share capacity" in output
     assert ">25<" in output
-    assert "Koolbar backlog exceeds one cycle" in output
+    assert "Advertio Cargo backlog exceeds one cycle" in output
 
 
 def test_publisher_fairly_merges_rule_and_koolbar_queues():

@@ -274,11 +274,11 @@ def _publishing_diagnostics_html(target, assigned_rules):
         notes.append('<p class="diag-warning">Telegram connection is marked disconnected.</p>')
     if rate_limited:
         notes.append('<p class="diag-warning">Telegram bot rate limiting is currently active.</p>')
-    if automatic_rules == 0 and target.get("chat_id") != "@koolbar_international":
+    if automatic_rules == 0 and target.get("chat_id") != RoutedPublisher.ADVERTIO_CARGO_CHAT_ID:
         notes.append('<p class="diag-warning">No enabled automatic rule currently feeds this destination.</p>')
 
     legacy_html = ""
-    if target.get("chat_id") == "@koolbar_international":
+    if target.get("chat_id") == RoutedPublisher.ADVERTIO_CARGO_CHAT_ID:
         try:
             legacy = RoutedPublisher.koolbar_diagnostics(limit=50)
             eligible_count = int(legacy["eligible_count"])
@@ -286,19 +286,19 @@ def _publishing_diagnostics_html(target, assigned_rules):
             if not queue_error:
                 # Publisher scheduling alternates managed rules and legacy
                 # Koolbar while both have work. With a full normal queue this
-                # guarantees half of an even-sized cycle to Koolbar.
+                # guarantees half of an even-sized cycle to Advertio Cargo.
                 normal_share = min(rule_queue_used, (cycle_limit + 1) // 2)
                 legacy_slots = cycle_limit - normal_share
                 if eligible_count > legacy_slots:
                     notes.append(
-                        f'<p class="diag-warning"><strong>Koolbar backlog exceeds one cycle:</strong> '
+                        f'<p class="diag-warning"><strong>Advertio Cargo backlog exceeds one cycle:</strong> '
                         f'{eligible_count:,} legacy candidate(s) are eligible and the current fair-share '
                         f'capacity is {legacy_slots:,} slot(s). Remaining candidates continue next cycle.</p>'
                     )
             notes.append(
-                '<p class="diag-info">Koolbar uses the legacy hard-coded transfer path and does not require '
+                '<p class="diag-info">Advertio Cargo uses the hard-coded transfer path and does not require '
                 'a Back Office publishing rule. Fair queue scheduling prevents managed rules from consuming '
-                'all publisher slots before Koolbar is considered.</p>'
+                'all publisher slots before Advertio Cargo is considered.</p>'
             )
 
             legacy_cards = [
@@ -336,9 +336,9 @@ def _publishing_diagnostics_html(target, assigned_rules):
                     <td>{stage}</td><td>{delivery}</td><td>{eligibility}</td><td>{_escape(blockers)}</td></tr>"""
                 )
             legacy_html = f"""
-            <h4>Legacy Koolbar eligibility</h4>
+            <h4>Advertio Cargo eligibility</h4>
             <div class="diag-grid">{legacy_card_html}</div>
-            <p class="hint">The table below applies the same gates used by the legacy Koolbar publisher to the
+            <p class="hint">The table below applies the same gates used by the Advertio Cargo publisher to the
             50 most recent transfer rows. “Legacy eligible now” is counted across the full database.</p>
             <div class="scroll"><table><thead><tr><th>Message</th><th>Source</th><th>Route</th>
             <th>Departure</th><th>Pipeline</th><th>Delivery state</th><th>Result</th><th>Blocking reason</th>
@@ -346,7 +346,7 @@ def _publishing_diagnostics_html(target, assigned_rules):
             </tbody></table></div>"""
         except Exception as exc:
             legacy_html = (
-                '<p class="diag-danger"><strong>Legacy Koolbar diagnostics failed:</strong> '
+                '<p class="diag-danger"><strong>Advertio Cargo diagnostics failed:</strong> '
                 f'{_escape(f"{exc.__class__.__name__}: {exc}")}</p>'
             )
 

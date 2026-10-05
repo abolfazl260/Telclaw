@@ -647,19 +647,19 @@ def _rule_panel(rule, target, csrf, request):
         resend = (f'''<form method="post" action="/rule/resend"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="rule_id" value="{rule['id']}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
-            <button data-confirm="This message was already delivered to this channel. Send another copy?">Send again</button>
+            <button data-confirm="This ad was already delivered to this channel. Send another copy?">Send again</button>
             </form>''' if can_resend else "")
         uncertain = (f'''<form method="post" action="/retry"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
             <input type="hidden" name="target_id" value="{target['id']}">
-            <button data-confirm="Telegram may already have posted this message. Check the channel before retrying.">Review and retry</button>
+            <button data-confirm="Telegram may already have posted this ad. Check the channel before retrying.">Review and retry</button>
             </form>''' if status == "uncertain" else "")
         entries.append(f'''<div class="ad-row">
             <div class="message-row-meta"><strong>Message #{record['message_row_id']}</strong>
             <span class="badge">{_escape(status_label)}</span>
             <span class="hint">{_escape(record.get('channel_username') or '')}</span></div>
             <p>{_escape(snippet)}</p>
-            <details><summary>Preview message</summary><pre>{_escape(preview[:4000])}</pre></details>
+            <details><summary>Full ad preview</summary><pre>{_escape(preview[:4000])}</pre></details>
             <div class="message-actions">{send}{resend}{uncertain}</div></div>''')
     nav = ""
     for label, p in (("Previous", page - 1), ("Next", page + 1)):

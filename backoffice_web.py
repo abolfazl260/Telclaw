@@ -5,7 +5,7 @@ import ipaddress
 import json
 import secrets
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urlparse
 
 from aiohttp import web
@@ -16,8 +16,10 @@ import backoffice_data
 import backoffice_settings
 from storage import data_normalizer
 import backoffice_health
+from backoffice_operations import BackofficeOperations
 import routing_rules
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
+from routed_publisher import RoutedPublisher
 from monitoring.telegram_monitor import ADMIN_USER_IDS, get_telegram_monitor
 from storage.database import get_connection
 
@@ -199,6 +201,167 @@ def _select(name, values, selected):
         for v in values) + "</select>"
 
 
+def _publishing_diagnostics_html(target, assigned_rules):
+    """Render on-demand publishing diagnostics without requiring shell/SQL access."""
+    cycle_limit = 50
+    queue_error = None
+    try:
+        rule_queue = routing_rules.pending(cycle_limit)
+    except Exception as exc:
+        rule_queue = []
+        queue_error = f"{exc.__class__.__name__}: {exc}"
+
+    rule_queue_used = len(rule_queue)
+    target_rule_queue = sum(
+        1 for _, rule in rule_queue if int(rule["target_id"]) == int(target["id"])
+    )
+    automatic_rules = sum(
+        1 for rule in assigned_rules
+        if rule.get("enabled") and rule.get("delivery_mode") == "auto"
+    )
+
+    conn = get_connection()
+    try:
+        delivery_counts = {
+            row["status"]: int(row["count"])
+            for row in conn.execute(
+                """SELECT status, COUNT(*) AS count
+                     FROM publishing_deliveries
+                    WHERE target_id=?
+                    GROUP BY status
+                    ORDER BY status""",
+                (int(target["id"]),),
+            ).fetchall()
+        }
+        last_delivery = conn.execute(
+            "SELECT MAX(updated_at) AS updated_at FROM publishing_deliveries WHERE target_id=?",
+            (int(target["id"]),),
+        ).fetchone()["updated_at"]
+    finally:
+        conn.close()
+
+    try:
+        rate_limited = routing_rules.is_rate_limited()
+    except Exception:
+        rate_limited = False
+
+    cards = [
+        ("Target", "enabled" if target.get("enabled") else "disabled"),
+        ("Connection", target.get("connection_status") or "unknown"),
+        ("Automatic rules", automatic_rules),
+        ("Rule queue for target", target_rule_queue),
+        ("Rule queue slots used", f"{rule_queue_used}/{cycle_limit}" if not queue_error else "unavailable"),
+        ("Bot rate limit", "active" if rate_limited else "clear"),
+    ]
+    card_html = "".join(
+        f'<div class="diag-card"><span>{_escape(label)}</span><strong>{_escape(value)}</strong></div>'
+        for label, value in cards
+    )
+
+    status_rows = "".join(
+        f"<tr><td>{_escape(status)}</td><td>{count:,}</td></tr>"
+        for status, count in delivery_counts.items()
+    ) or '<tr><td colspan="2">No delivery records.</td></tr>'
+
+    notes = []
+    if queue_error:
+        notes.append(
+            f'<p class="diag-warning"><strong>Rule queue check failed:</strong> {_escape(queue_error)}</p>'
+        )
+    if not target.get("enabled"):
+        notes.append('<p class="diag-warning">This destination is disabled.</p>')
+    if target.get("connection_status") == "disconnected":
+        notes.append('<p class="diag-warning">Telegram connection is marked disconnected.</p>')
+    if rate_limited:
+        notes.append('<p class="diag-warning">Telegram bot rate limiting is currently active.</p>')
+    if automatic_rules == 0 and target.get("chat_id") != RoutedPublisher.ADVERTIO_CARGO_CHAT_ID:
+        notes.append('<p class="diag-warning">No enabled automatic rule currently feeds this destination.</p>')
+
+    legacy_html = ""
+    if target.get("chat_id") == RoutedPublisher.ADVERTIO_CARGO_CHAT_ID:
+        try:
+            legacy = RoutedPublisher.koolbar_diagnostics(limit=50)
+            eligible_count = int(legacy["eligible_count"])
+            legacy_slots = None
+            if not queue_error:
+                # Publisher scheduling alternates managed rules and legacy
+                # Koolbar while both have work. With a full normal queue this
+                # guarantees half of an even-sized cycle to Advertio Cargo.
+                normal_share = min(rule_queue_used, (cycle_limit + 1) // 2)
+                legacy_slots = cycle_limit - normal_share
+                if eligible_count > legacy_slots:
+                    notes.append(
+                        f'<p class="diag-warning"><strong>Advertio Cargo backlog exceeds one cycle:</strong> '
+                        f'{eligible_count:,} legacy candidate(s) are eligible and the current fair-share '
+                        f'capacity is {legacy_slots:,} slot(s). Remaining candidates continue next cycle.</p>'
+                    )
+            notes.append(
+                '<p class="diag-info">Advertio Cargo uses the hard-coded transfer path and does not require '
+                'a Back Office publishing rule. Fair queue scheduling prevents managed rules from consuming '
+                'all publisher slots before Advertio Cargo is considered.</p>'
+            )
+
+            legacy_cards = [
+                ("Legacy eligible now", eligible_count),
+                ("Legacy fair-share capacity", legacy_slots if legacy_slots is not None else "unavailable"),
+                ("Eligibility date", legacy.get("today") or "—"),
+                ("Recent transfer rows inspected", len(legacy.get("rows") or [])),
+            ]
+            legacy_card_html = "".join(
+                f'<div class="diag-card"><span>{_escape(label)}</span><strong>{_escape(value)}</strong></div>'
+                for label, value in legacy_cards
+            )
+            legacy_rows = []
+            for item in legacy.get("rows") or []:
+                route = f"{item.get('origin_city') or '—'} → {item.get('destination_city') or '—'}"
+                stage = (
+                    f"processing={_escape(item.get('processing_status') or '—')}<br>"
+                    f"ai={_escape(item.get('ai_status') or '—')}<br>"
+                    f"category={_escape(item.get('ai_category') or '—')}"
+                )
+                delivery = _escape(item.get("delivery_status") or "none")
+                if item.get("delivery_error"):
+                    delivery += f"<br><span class=\"hint\">{_escape(item.get('delivery_error'))}</span>"
+                blockers = "; ".join(item.get("blockers") or []) or "—"
+                eligibility = (
+                    '<span class="badge connected">eligible</span>'
+                    if item.get("eligible")
+                    else '<span class="badge disconnected">blocked</span>'
+                )
+                legacy_rows.append(
+                    f"""<tr><td>#{int(item['message_row_id'])}<br><span class="hint">Telegram source:
+                    {_escape(item.get('telegram_source_id') or '—')}</span></td>
+                    <td>{_escape(item.get('channel_username') or '—')}</td>
+                    <td>{_escape(route)}</td><td>{_escape(item.get('departure_date') or '—')}</td>
+                    <td>{stage}</td><td>{delivery}</td><td>{eligibility}</td><td>{_escape(blockers)}</td></tr>"""
+                )
+            legacy_html = f"""
+            <h4>Advertio Cargo eligibility</h4>
+            <div class="diag-grid">{legacy_card_html}</div>
+            <p class="hint">The table below applies the same gates used by the Advertio Cargo publisher to the
+            50 most recent transfer rows. “Legacy eligible now” is counted across the full database.</p>
+            <div class="scroll"><table><thead><tr><th>Message</th><th>Source</th><th>Route</th>
+            <th>Departure</th><th>Pipeline</th><th>Delivery state</th><th>Result</th><th>Blocking reason</th>
+            </tr></thead><tbody>{''.join(legacy_rows) or '<tr><td colspan="8">No transfer rows found.</td></tr>'}
+            </tbody></table></div>"""
+        except Exception as exc:
+            legacy_html = (
+                '<p class="diag-danger"><strong>Advertio Cargo diagnostics failed:</strong> '
+                f'{_escape(f"{exc.__class__.__name__}: {exc}")}</p>'
+            )
+
+    return f"""<details class="subsection diagnostics" open><summary>Publishing diagnostics</summary>
+        <p class="hint">Read-only operational checks generated from the live SQLite publishing state.
+        Refresh this section after new messages or delivery attempts.</p>
+        <div class="diag-grid">{card_html}</div>
+        {''.join(notes)}
+        <p class="hint">Last delivery state update: {_escape(last_delivery or 'never')}</p>
+        <div class="diag-status"><h4>Delivery states</h4><table><thead><tr><th>Status</th><th>Count</th></tr></thead>
+        <tbody>{status_rows}</tbody></table></div>
+        {legacy_html}
+        </details>"""
+
+
 async def index(request):
     csrf = _escape(request["session"]["csrf"])
     overview = backoffice_health.snapshot()["overview"]
@@ -211,6 +374,7 @@ async def index(request):
     ) or '<span class="hint">No AI providers configured.</span>'
     system = backoffice_health.snapshot()["system"]
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
+    diagnostics_target = str(getattr(request, 'query', {}).get('diagnostics', ''))
     rows = []
     for target in targets:
         assigned = [rule for rule in rules if rule["target_id"] == target["id"]]
@@ -229,6 +393,8 @@ async def index(request):
             + '</td></tr>' for item in history)
         state = target.get('connection_status') or 'unknown'
         opened = str(getattr(request, 'query', {}).get('channel', '')) == str(target['id'])
+        diagnostics_html = (_publishing_diagnostics_html(target, assigned)
+                            if diagnostics_target == str(target['id']) else '')
         rows.append(f'''<details class="channel" id="channel-{target['id']}" {'open' if opened else ''}><summary>
             <span class="channel-name">{_escape(target['label'])}</span>
             <code>{_escape(target['chat_id'])}</code>
@@ -239,6 +405,9 @@ async def index(request):
             · checked: {_escape(target.get('checked_at') or 'never')}</p>
             <form method="post" action="/target/check" class="inline"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="target_id" value="{target['id']}"><button>Check connection</button></form>
+            <a class="button-link" href="/?channel={target['id']}&diagnostics={target['id']}#channel-{target['id']}">
+            {'Refresh diagnostics' if diagnostics_target == str(target['id']) else 'Run publishing diagnostics'}</a>
+            {diagnostics_html}
             <details class="subsection"><summary>Edit channel details</summary>
             <form method="post" action="/target"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="id" value="{target['id']}">
@@ -274,11 +443,20 @@ async def index(request):
     .badge{{font-size:.8rem;border-radius:30px;padding:.2rem .55rem;background:#e9eef5}}.badge.connected{{background:#d8f4e6;color:#16653e}}
     .badge.disconnected{{background:#ffe1db;color:#a32e1a}}.hint{{color:#526174}}
     .rule-panel{{padding:1rem;margin:.8rem 0;border:1px solid #dce4ef;border-radius:10px;background:white}}
-    .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:1rem}}
-    .conditions-editor{{flex:1 1 100%;border:1px solid #dce4ef;border-radius:9px;padding:.7rem;background:#f8faff}}
+    .rule-panel form{{border:0}}.rule-title{{display:flex;flex-wrap:wrap;align-items:center;gap:.65rem}}
+    .rule-title h4{{margin:.2rem 0}}.rule-edit{{margin:.65rem 0}}.rule-edit>summary{{cursor:pointer;color:#1957b8;font-weight:600}}
+    .rule-editor{{display:block;padding:.7rem 0}}.rule-form-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.7rem}}
+    .rule-editor label{{display:grid;gap:.25rem}}.delivery-settings{{display:flex;gap:1rem;align-items:end;flex-wrap:wrap;margin:.8rem 0}}
+    .delivery-settings .checkbox-line,.rule-advanced-fields .checkbox-line{{display:flex;align-items:center;gap:.4rem}}
+    .rule-advanced{{margin:.8rem 0;border:1px solid #e1e7ef;border-radius:9px;padding:.6rem .75rem;background:#fbfcff}}
+    .rule-advanced>summary{{cursor:pointer;color:#526174;font-weight:600}}.rule-advanced-fields{{display:flex;gap:1rem;align-items:end;flex-wrap:wrap;padding-top:.7rem}}
+    .conditions-editor{{margin-top:.8rem;border:1px solid #dce4ef;border-radius:9px;padding:.7rem;background:#f8faff}}
     .condition-row{{display:grid;grid-template-columns:90px minmax(140px,1fr) 140px minmax(150px,1fr) auto;gap:.45rem;align-items:center;margin:.45rem 0}}
     .condition-row:first-child .condition-join{{visibility:hidden}}@media(max-width:760px){{.condition-row{{grid-template-columns:1fr}}.condition-row:first-child .condition-join{{display:none}}}}
-    .danger{{background:#a53732}}.ad-row{{border-top:1px solid #e4e9ef;padding:.65rem 0}}
+    .matching-messages{{margin-top:.8rem;border-top:1px solid #e3e8ef;padding-top:.8rem}}.matching-header{{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap}}
+    .matching-header h5{{font-size:1rem;margin:.2rem 0}}.message-row-meta{{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap}}
+    .message-actions{{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.4rem}}.matching-nav{{margin-bottom:0}}
+    .danger{{background:#a53732}}.delete-rule{{padding:.4rem 0 0}}.ad-row{{border-top:1px solid #e4e9ef;padding:.75rem 0}}
     .overview-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem;margin:1rem 0}}
     .overview-card{{padding:1rem;border:1px solid #dce4ef;border-radius:12px;background:#f8faff}}
     .overview-card span{{display:block;color:#526174;font-size:.84rem}}
@@ -288,9 +466,17 @@ async def index(request):
     .ad-row pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:350px;overflow:auto;background:#f5f7fb;padding:.7rem}}
     .tabs{{display:flex;gap:.6rem;margin:1rem 0}}.tabs a{{padding:.5rem .9rem;border-radius:8px;background:white;color:#1957b8;text-decoration:none}}
     .tabs a.active{{background:#1957b8;color:white}}
+    .button-link{{display:inline-block;padding:.48rem .7rem;border-radius:7px;background:#eef4ff;color:#1957b8;
+      text-decoration:none;font-weight:600;margin:.35rem .2rem}}
+    .diagnostics{{margin-top:.8rem}}.diag-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.65rem;margin:.8rem 0}}
+    .diag-card{{padding:.75rem;border:1px solid #dce4ef;border-radius:10px;background:#f8faff}}
+    .diag-card span{{display:block;color:#526174;font-size:.8rem}}.diag-card strong{{display:block;font-size:1.1rem;margin-top:.15rem}}
+    .diag-warning,.diag-danger,.diag-info{{padding:.65rem .75rem;border-radius:9px}}
+    .diag-warning{{background:#fff3cd;color:#6d5200}}.diag-danger{{background:#ffe1db;color:#8e291a}}
+    .diag-info{{background:#e8f2ff;color:#244e7a}}.diag-status{{max-width:420px;margin:.8rem 0}}
     </style></head><body><h1>Telclaw · Publishing rules</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
-    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
@@ -390,24 +576,31 @@ def _rule_form(rule, target, csrf):
     conditions = routing_rules.effective_conditions(rule) if rule.get("id") else []
     encoded_conditions = _escape(json.dumps(conditions, ensure_ascii=False, separators=(",", ":")))
     default_category = routing_rules.categories()[0] if routing_rules.categories() else ""
-    return f'''<form method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
+    return f'''<form class="rule-editor" method="post" action="/rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="id" value="{rule.get('id','')}">
         <input type="hidden" name="target_id" value="{target['id']}">
+        <div class="rule-form-grid">
         <label>Rule name<input name="name" placeholder="Rule name" value="{_escape(rule.get('name'))}" required></label>
         <label>Topic / category {_select('category', routing_rules.categories(), rule.get('category', default_category))}</label>
         <label>Source channel (optional)<input name="source_channel" placeholder="@source_channel" value="{_escape(rule.get('source_channel'))}"></label>
+        </div>
         <div class="conditions-editor" data-conditions="{encoded_conditions}">
-        <p class="hint">Conditions use the real columns currently stored for the selected topic. Add as many as needed; AND/OR is evaluated from left to right.</p>
+        <p class="hint">Only messages that match these conditions appear below.</p>
         <div class="condition-rows"></div>
         <button type="button" class="add-condition">+ Add condition</button>
         <input type="hidden" name="conditions_json" value="[]"></div>
-        <label>Publishing <select name="delivery_mode">
-            <option value="manual" {"selected" if rule.get('delivery_mode','auto')=='manual' else ''}>Manual selection</option>
+        <div class="delivery-settings">
+        <label>Send mode <select name="delivery_mode">
             <option value="auto" {"selected" if rule.get('delivery_mode','auto')=='auto' else ''}>Automatic</option>
+            <option value="manual" {"selected" if rule.get('delivery_mode','auto')=='manual' else ''}>Manual review</option>
         </select></label>
+        <label class="checkbox-line"><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Rule enabled</label>
+        </div>
+        <details class="rule-advanced"><summary>Advanced settings</summary>
+        <div class="rule-advanced-fields">
         <label>Priority<input name="priority" type="number" value="{rule.get('priority',100)}" required></label>
-        <label><input type="checkbox" name="enabled" {"checked" if rule.get('enabled',1) else ""}> Enabled</label>
-        <label><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue after match</label>
+        <label class="checkbox-line"><input type="checkbox" name="continue" {"checked" if not rule.get('stop_on_match',1) else ""}> Continue after match</label>
+        </div></details>
         <button>Save rule</button></form>'''
 
 
@@ -420,11 +613,12 @@ def _rule_panel(rule, target, csrf, request):
             pass
     _, counts, records = routing_rules.rule_matches(rule["id"], limit=20, offset=page * 20)
     mode = rule.get("delivery_mode") or "auto"
+    mode_label = "Manual review" if mode == "manual" else "Automatic"
     paused = routing_rules.is_rate_limited()
     entries = []
     for record in records:
         snippet = str(next((record.get(key) for key in ("title", "job_title", "cleaned_text", "raw_text", "description")
-                            if record.get(key)), "Ad details unavailable"))[:220]
+                            if record.get(key)), "Message details unavailable"))[:220]
         try:
             if record["ai_category"] == "transferlist":
                 preview = TelegramTransferPublisher.format_ad(record, record)
@@ -438,10 +632,16 @@ def _rule_panel(rule, target, csrf, request):
         can_send = (mode == "manual" and rule["enabled"] and target["enabled"]
                     and target["connection_status"] != "disconnected" and
                     status not in {"sent", "sending", "uncertain"} and not paused)
+        if status == "sent":
+            status_label = "Delivered"
+        elif status == "not sent" and can_send:
+            status_label = "Ready to send"
+        else:
+            status_label = status.replace("_", " ").title()
         send = (f'''<form method="post" action="/rule/send"><input type="hidden" name="csrf" value="{csrf}">
             <input type="hidden" name="rule_id" value="{rule['id']}">
             <input type="hidden" name="message_id" value="{record['message_row_id']}">
-            <button>Send this ad</button></form>''' if can_send else "")
+            <button>Send now</button></form>''' if can_send else "")
         can_resend = (status == "sent" and rule["enabled"] and target["enabled"]
                       and target["connection_status"] != "disconnected" and not paused)
         resend = (f'''<form method="post" action="/rule/resend"><input type="hidden" name="csrf" value="{csrf}">
@@ -454,26 +654,37 @@ def _rule_panel(rule, target, csrf, request):
             <input type="hidden" name="target_id" value="{target['id']}">
             <button data-confirm="Telegram may already have posted this ad. Check the channel before retrying.">Review and retry</button>
             </form>''' if status == "uncertain" else "")
-        entries.append(f'''<div class="ad-row"><strong>Ad #{record['message_row_id']}</strong>
-            · {_escape(record.get('channel_username') or '')} · {_escape(status)}
-            <p>{_escape(snippet)}</p><details><summary>Full ad preview</summary>
-            <pre>{_escape(preview[:4000])}</pre></details>{send}{resend}{uncertain}</div>''')
+        entries.append(f'''<div class="ad-row">
+            <div class="message-row-meta"><strong>Message #{record['message_row_id']}</strong>
+            <span class="badge">{_escape(status_label)}</span>
+            <span class="hint">{_escape(record.get('channel_username') or '')}</span></div>
+            <p>{_escape(snippet)}</p>
+            <details><summary>Full ad preview</summary><pre>{_escape(preview[:4000])}</pre></details>
+            <div class="message-actions">{send}{resend}{uncertain}</div></div>''')
     nav = ""
     for label, p in (("Previous", page - 1), ("Next", page + 1)):
         if p >= 0 and p * 20 < counts["total"] and (p != page):
             nav += (f'<a href="/?channel={target["id"]}&rule={rule["id"]}&page={p}'
                     f'#rule-{rule["id"]}">{label}</a> ')
-    expanded = str(getattr(request, "query", {}).get("rule", "")) == str(rule["id"])
-    return f'''<div class="rule-panel" id="rule-{rule['id']}"><div class="rule-title">
-        <h4>{_escape(rule['name'])}</h4><span class="hint">{counts['total']} matching ads ·
-        {counts['sent']} delivered to this channel · {mode}</span>
-        <form method="post" action="/rule/delete"><input type="hidden" name="csrf" value="{csrf}">
+    mode_help = ("Manual review is enabled. Matching messages stay here until you choose Send now."
+                 if mode == "manual" else
+                 "Automatic delivery is enabled. Matching messages are shown here for visibility.")
+    return f'''<div class="rule-panel" id="rule-{rule['id']}">
+        <div class="rule-title"><h4>{_escape(rule['name'])}</h4>
+        <span class="badge">{_escape(mode_label)}</span>
+        <span class="hint">{counts['total']} matching · {counts['sent']} delivered</span></div>
+        <details class="rule-edit"><summary>Edit rule</summary>
+        {_rule_form(rule, target, csrf)}
+        <form method="post" action="/rule/delete" class="delete-rule"><input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="rule_id" value="{rule['id']}">
         <input type="hidden" name="target_id" value="{target['id']}">
         <button class="danger" data-confirm="Delete this rule? Existing delivery history will remain.">Delete rule</button>
-        </form></div><details><summary>Edit rule</summary>{_rule_form(rule, target, csrf)}</details>
-        <details {'open' if expanded else ''}><summary>Matching ads ({counts['total']})</summary>
-        {''.join(entries) or '<p>No matching ads yet.</p>'}<p>{nav}</p></details></div>'''
+        </form></details>
+        <div class="matching-messages">
+        <div class="matching-header"><h5>Matching messages ({counts['total']})</h5>
+        <span class="hint">{_escape(mode_help)}</span></div>
+        {''.join(entries) or '<p class="hint">No messages match this rule yet.</p>'}
+        <p class="matching-nav">{nav}</p></div></div>'''
 
 
 async def save_target(request):
@@ -586,6 +797,11 @@ th:first-child {z-index:3;background:#eaf0f9}
 .filter-actions button {border:0;background:#1957b8;color:white}
 .filter-actions a {border:1px solid #c8d3e2;background:white;color:#1957b8}
 .column-name {display:block;font-weight:700;margin-bottom:.4rem}
+.column-help {display:block;font-size:11px;font-weight:400;color:#4b6079;max-width:250px}
+.text-mismatch {display:block;font-size:11px;color:#91421e;font-weight:650;margin-top:.25rem}
+.cell-edit-warning {margin:.15rem 0;color:#78512d;font-size:12px;max-width:380px}
+.cell-guard {display:flex;align-items:flex-start;gap:.4rem;font-size:12px}
+.cell-guard input {margin-top:.2rem}
 .filter-control {display:grid;grid-template-columns:minmax(92px,auto) minmax(95px,1fr);gap:.35rem}
 .filter-control select,.filter-control input {font:12px/1.25 system-ui;padding:.35rem;border:1px solid #bcc9d9;
               border-radius:6px;min-width:0;width:100%;background:white}
@@ -612,25 +828,65 @@ document.querySelectorAll('button.edit-cell').forEach(button => button.addEventL
   try {
     const response = await fetch(url, {credentials:'same-origin'});
     if (!response.ok) throw Error(await response.text());
-    const original = (await response.json()).value;
+    const cellData = await response.json();
+    const original = cellData.value;
     const form = document.createElement('form'); form.className = 'cell-editor';
     const input = document.createElement('textarea'); input.value = original === null ? '' : String(original);
     input.setAttribute('aria-label', 'Edit ' + td.dataset.column + ' for row ' + td.dataset.id);
     const nullLabel = document.createElement('label');
     const clear = document.createElement('input'); clear.type = 'checkbox';
     nullLabel.append(clear, document.createTextNode(' Save as NULL'));
+    const warning = document.createElement('p'); warning.className='cell-edit-warning';
+    const column = td.dataset.column;
+    const isMessage = table === 'messages';
+    let rawConfirmation = null;
+    let syncMirror = null;
+    if (isMessage && column === 'raw_text') {
+      warning.textContent = 'Original Telegram source: changing it can affect reprocessing and duplicate checks.';
+      rawConfirmation = document.createElement('input'); rawConfirmation.type='checkbox';
+      const guard = document.createElement('label'); guard.className='cell-guard';
+      guard.append(rawConfirmation, document.createTextNode(
+        'I understand that I am changing the preserved original Telegram source.'));
+      form.append(warning, guard);
+    } else if (isMessage && column === 'text') {
+      warning.textContent = 'Legacy compatibility copy: changing only text may not affect AI, which prefers cleaned_text.';
+      form.append(warning);
+    } else if (isMessage && column === 'cleaned_text') {
+      warning.textContent = 'AI prefers cleaned_text. Saving this field alone leaves legacy text unchanged.';
+      form.append(warning);
+      if (cellData.divergent) {
+        const mismatch = document.createElement('p'); mismatch.className='text-mismatch';
+        mismatch.textContent = 'This row has different text and cleaned_text values.';
+        form.append(mismatch);
+      }
+      syncMirror = document.createElement('input'); syncMirror.type='checkbox';
+      const mirrorLabel = document.createElement('label'); mirrorLabel.className='cell-guard';
+      mirrorLabel.append(syncMirror, document.createTextNode(
+        'Also update legacy text (opt-in, both values checked and audited together).'));
+      form.append(mirrorLabel);
+    }
     const controls = document.createElement('div');
     const save = document.createElement('button'); save.type='submit';save.textContent='Save';
     const cancel = document.createElement('button');cancel.type='button';cancel.className='cancel';cancel.textContent='Cancel';
     controls.append(save,cancel);
     const error = document.createElement('span');error.className='error';error.setAttribute('role','alert');
-    form.append(input,nullLabel,controls,error);td.append(form);
+    form.prepend(input,nullLabel);form.append(controls,error);td.append(form);
     cancel.addEventListener('click', () => {form.remove();button.disabled=false;});
     clear.addEventListener('change', () => {input.disabled=clear.checked;});
     form.addEventListener('submit', async event => {
-      event.preventDefault();save.disabled=true;error.textContent='';
+      event.preventDefault();error.textContent='';
+      if (rawConfirmation && !rawConfirmation.checked) {
+        error.textContent='Confirm editing the original raw_text source before saving';
+        return;
+      }
+      save.disabled=true;
       const payload = new URLSearchParams({csrf, table, id:td.dataset.id, column:td.dataset.column,
-        expected:JSON.stringify(original), value:input.value, make_null:clear.checked?'1':'0'});
+        expected:JSON.stringify(original), value:input.value, make_null:clear.checked?'1':'0',
+        confirm_raw_text:rawConfirmation && rawConfirmation.checked?'1':'0',
+        sync_text:syncMirror && syncMirror.checked?'1':'0'});
+      if (syncMirror && syncMirror.checked) {
+        payload.set('mirror_expected', JSON.stringify(cellData.mirror_value));
+      }
       try {
         const result = await fetch('/data/cell',{method:'POST',body:payload,credentials:'same-origin'});
         if (!result.ok) throw Error(await result.text());
@@ -676,7 +932,7 @@ def _data_url(table, page_number=None, filters=None):
     return "/data?" + urlencode(params)
 
 
-def _filter_header(name, data_type, active):
+def _filter_header(name, data_type, active, table=None):
     numeric = backoffice_data.numeric_filter_type(data_type)
     choices = ([("eq", "="), ("ne", "≠"), ("gt", ">"), ("gte", "≥"), ("lt", "<"), ("lte", "≤"),
                 ("null", "NULL"), ("not_null", "Not NULL")]
@@ -690,7 +946,10 @@ def _filter_header(name, data_type, active):
                       for value, label in choices)
     filtered = "filtered" if active else ""
     escaped_name = _escape(name)
-    return f'''<th class="{filtered}"><span class="column-name">{escaped_name}</span>
+    hint = backoffice_data.TEXT_COLUMN_HELP.get(name) if table == "messages" else None
+    help_label = (f'<small class="column-help" title="{_escape(hint)}">{_escape(hint)}</small>'
+                  if hint else "")
+    return f'''<th class="{filtered}"><span class="column-name">{escaped_name}</span>{help_label}
         <div class="filter-control">
         <select class="filter-op" name="op_{escaped_name}" aria-label="Filter operator for {escaped_name}">{options}</select>
         <input class="filter-value" name="f_{escaped_name}" value="{_escape(current_value)}"
@@ -718,9 +977,14 @@ async def data_page(request):
                 label = "(empty)"
             label = _escape(label)
             if name in editable:
+                mismatch = (table == "messages" and name == "text"
+                            and row.get("processing_status") == "processed"
+                            and row.get("text") != row.get("cleaned_text"))
+                mismatch_label = ('<small class="text-mismatch">Differs from cleaned_text</small>'
+                                  if mismatch else '')
                 columns.append(f'''<td data-id="{row['id']}" data-column="{_escape(name)}">
                     <button type="button" class="edit-cell {'null' if value is None else ''}"
-                    title="Edit this cell">{label}</button></td>''')
+                    title="Edit this cell">{label}</button>{mismatch_label}</td>''')
             else:
                 columns.append(f'<td class="readonly">{label}</td>')
         cells.append('<tr>' + ''.join(columns) + '</tr>')
@@ -733,21 +997,25 @@ async def data_page(request):
                           ("Next", result["page"]+1), ("Last", result["pages"])):
         if 1 <= number <= result["pages"] and number != result["page"]:
             pagination.append(f'<a href="{_escape(_data_url(table, number, result["filters"]))}">{title}</a>')
-    headers = "".join(_filter_header(name, result["columns"][name], result["filters"].get(name))
+    headers = "".join(_filter_header(name, result["columns"][name], result["filters"].get(name), table)
                       for name in names)
     filter_count = len(result["filters"])
     filter_summary = (f'<span class="filter-summary">{filter_count} active filter'
                       f'{"s" if filter_count != 1 else ""}</span>' if filter_count else "")
     csrf = _escape(request["session"]["csrf"])
+    text_help = ('''<p class="muted">Message text fields: raw_text is the original Telegram
+    payload; cleaned_text is the processed AI input; text is a legacy compatibility copy.
+    Edits are independent unless you explicitly opt into synchronizing cleaned_text to text.</p>'''
+                 if table == "messages" else "")
     content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
     <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a class="active" href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a class="active" href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
-    <section data-table="{table}"><p>{result['total']} rows · Page {result['page']} of {result['pages']}
+    <section data-table="{table}">{text_help}<p>{result['total']} rows · Page {result['page']} of {result['pages']}
     · {backoffice_data.PAGE_SIZE} per page. Click a blue cell to edit it.</p>
     <form method="get" action="/data" class="filter-form"><input type="hidden" name="table" value="{_escape(table)}">
     <div class="filter-actions"><button type="submit">Apply filters</button>
@@ -816,7 +1084,7 @@ async def health_page(request):
         f"<tr><th>{_escape(label)}</th><td>{int(pending):,}</td><td>{int(failed):,}</td><td>{_escape(last or '—')}</td></tr>"
         for label, pending, failed, last in (
             ("Processing", pipeline["processing_pending"], pipeline["processing_failed"], pipeline["last_processing"]),
-            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_processing"]),
+            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_classification"]),
             ("AI extraction", pipeline["ai_pending"], pipeline["ai_failed"], pipeline["last_ai"]),
             ("Advertio", pipeline["advertio_pending"], pipeline["advertio_failed"], pipeline["last_advertio"]),
         )
@@ -831,6 +1099,14 @@ async def health_page(request):
         <td>{int(row.get('ai_processed') or 0):,}</td><td>{int(row.get('advertio_sent') or 0):,}</td>
         <td>{int(row.get('failed') or 0):,}</td></tr>"""
         for row in report["daily"]
+    )
+    stage_daily_rows = "".join(
+        f"""<tr><td>{_escape(row.get('day') or '—')}</td>
+        <td>{int(row.get('processed') or 0):,}</td>
+        <td>{int(row.get('classified') or 0):,}</td>
+        <td>{int(row.get('ai_processed') or 0):,}</td>
+        <td>{int(row.get('advertio_sent') or 0):,}</td></tr>"""
+        for row in report.get("stage_daily", [])
     )
     channel_rows = "".join(
         f"""<tr><td>@{_escape(row.get('channel_username') or '')}</td>
@@ -889,7 +1165,7 @@ async def health_page(request):
     .refresh{{float:right}}@media(max-width:700px){{.health-sections{{grid-template-columns:1fr}}}}
     </style></head><body><h1>Telclaw · System Health</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational reports from SQLite and the running Telegram monitor.</p>
     <div class="health-grid">{pipeline_cards}</div>
 
@@ -907,8 +1183,15 @@ async def health_page(request):
     <div class="scroll"><table><thead><tr><th>Stage</th><th>Pending</th><th>Failed</th><th>Last activity</th></tr></thead>
     <tbody>{stage_rows}</tbody></table></div></section>
 
-    <section><h2>Crawl reports · recent days</h2>
-    <div class="scroll"><table><thead><tr><th>Date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
+    <section><h2>Pipeline activity · by stage time</h2>
+    <p class="muted">Counts are grouped by the timestamp when each stage actually completed, not by the Telegram message date.</p>
+    <div class="scroll"><table><thead><tr><th>Date (UTC)</th><th>Processed</th><th>Classified</th>
+    <th>AI processed</th><th>Advertio sent</th></tr></thead>
+    <tbody>{stage_daily_rows or '<tr><td colspan="5">No stage activity timestamps yet.</td></tr>'}</tbody></table></div></section>
+
+    <section><h2>Message cohort status · by message date</h2>
+    <p class="muted">This cohort view groups messages by their original Telegram date. It is not a record of when classification or AI ran.</p>
+    <div class="scroll"><table><thead><tr><th>Message date</th><th>Crawled</th><th>Processed</th><th>Classified</th>
     <th>AI processed</th><th>Advertio sent</th><th>Failed</th></tr></thead>
     <tbody>{daily_rows or '<tr><td colspan="7">No crawl data yet.</td></tr>'}</tbody></table></div></section>
 
@@ -932,6 +1215,516 @@ async def health_page(request):
     return web.Response(text=content, content_type="text/html")
 
 
+
+
+def _operations_redirect(*, notice=None, error=None):
+    query = {}
+    if notice:
+        query["notice"] = str(notice)[:500]
+    if error:
+        query["error"] = str(error)[:1000]
+    suffix = "?" + urlencode(query) if query else ""
+    raise web.HTTPSeeOther("/operations" + suffix)
+
+
+def _operation_state_box(label, state, result_label="Result"):
+    status = state.get("status") or "idle"
+    result = state.get("result")
+    error = state.get("error")
+    details = ""
+    if result is not None:
+        details += f'<div class="op-result"><strong>{_escape(result_label)}:</strong><pre>{_activity_details(result)}</pre></div>'
+    if error:
+        details += f'<div class="op-error"><strong>Error:</strong> {_escape(error)}</div>'
+    return f"""<div class="op-state">
+        <div><strong>{_escape(label)}</strong> {_health_badge(status)}</div>
+        <div class="muted">Started: {_escape(state.get('started_at') or '—')} · Finished: {_escape(state.get('finished_at') or '—')}</div>
+        {details}</div>"""
+
+
+async def operations_page(request):
+    operations = request.app["operations"]
+    csrf = _escape(request["session"]["csrf"])
+    report = backoffice_health.snapshot()
+    pipeline = report["pipeline"]
+    states = operations.states()
+
+    try:
+        accounts = await operations.list_accounts()
+        account_error = None
+    except Exception as exc:
+        accounts = []
+        account_error = f"{exc.__class__.__name__}: {exc}"
+
+    connected_account = operations.connected_account()
+    account_names = [str(item.get("session") or "") for item in accounts if item.get("session")]
+    account_options = "".join(
+        f'<option value="{_escape(name)}" {"selected" if name == connected_account else ""}>{_escape(name)}</option>'
+        for name in account_names
+    )
+    account_select = (
+        f'<select name="account" required><option value="">Select account</option>{account_options}</select>'
+        if account_names else '<select name="account" disabled><option>No authorized accounts</option></select>'
+    )
+
+    try:
+        classification = operations.classification_status()
+    except Exception:
+        classification = {
+            "pending": pipeline["classification_pending"],
+            "processing": 0,
+            "classified": 0,
+            "failed": pipeline["classification_failed"],
+            "eligible_pending": pipeline["classification_pending"],
+        }
+
+    try:
+        crawler_status = operations.crawler_status()
+    except Exception as exc:
+        crawler_status = {"active_jobs": 0, "job_keys": [], "error": str(exc)}
+
+    try:
+        channel_data = operations.channel_data()
+        channel_error = None
+    except Exception as exc:
+        channel_data = {}
+        channel_error = f"{exc.__class__.__name__}: {exc}"
+
+    try:
+        transfer_status = operations.transfer_status()
+        transfer_error = None
+    except Exception as exc:
+        transfer_status = {"total": 0, "sent": 0, "waiting": 0, "failed": 0}
+        transfer_error = f"{exc.__class__.__name__}: {exc}"
+
+    try:
+        transfer_page = max(1, int(request.query.get("transfer_page", "1")))
+    except (TypeError, ValueError):
+        transfer_page = 1
+    transfer_page_size = 20
+    try:
+        transfer_browser = operations.transfer_ads(
+            limit=transfer_page_size,
+            offset=(transfer_page - 1) * transfer_page_size,
+        )
+        transfer_records = transfer_browser["records"]
+        transfer_total = int(transfer_browser["total"])
+        transfer_browser_error = None
+    except Exception as exc:
+        transfer_records = []
+        transfer_total = 0
+        transfer_browser_error = f"{exc.__class__.__name__}: {exc}"
+    transfer_pages = max(1, (transfer_total + transfer_page_size - 1) // transfer_page_size)
+    if transfer_page > transfer_pages:
+        transfer_page = transfer_pages
+
+    notice = request.query.get("notice", "")
+    error = request.query.get("error", "")
+    banner = ""
+    if notice:
+        banner += f'<p class="ops-notice">{_escape(notice)}</p>'
+    if error:
+        banner += f'<p class="ops-error">{_escape(error)}</p>'
+
+    def action_form(action, button, *, extra="", disabled=False, danger=False, confirm=None):
+        disabled_attr = " disabled" if disabled else ""
+        cls = ' class="danger"' if danger else ""
+        confirm_attr = f' data-confirm="{_escape(confirm)}"' if confirm else ""
+        return f"""<form method="post" action="/operations/action" class="inline op-action">
+            <input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="action" value="{_escape(action)}">{extra}
+            <button{cls}{confirm_attr}{disabled_attr}>{_escape(button)}</button></form>"""
+
+    processing_running = states["processing"]["status"] in {"queued", "running", "stopping"}
+    classification_running = states["classification"]["status"] in {"queued", "running", "stopping"}
+    ai_running = states["ai"]["status"] in {"queued", "running", "stopping"}
+    advertio_running = states["advertio"]["status"] in {"queued", "running", "stopping"}
+    groq_running = states["groq"]["status"] in {"queued", "running", "stopping"}
+    pipeline_busy = processing_running or classification_running or ai_running or advertio_running
+
+    processing_controls = action_form(
+        "run_processing", "Run Processing", disabled=pipeline_busy
+    )
+    if processing_running:
+        processing_controls += action_form("stop_processing", "Stop Processing", danger=True)
+
+    batch_input = (
+        f'<label>Batch size<input type="number" name="batch_size" min="1" '
+        f'value="{int(config.AI_CLASSIFICATION_BATCH_SIZE)}"></label>'
+    )
+    classification_controls = action_form(
+        "run_classification",
+        "Run Classification",
+        extra=batch_input,
+        disabled=pipeline_busy,
+    )
+    classification_controls += action_form(
+        "retry_classification",
+        "Retry Failed",
+        disabled=pipeline_busy or int(classification.get("failed") or 0) == 0,
+    )
+    if classification_running:
+        classification_controls += action_form(
+            "stop_classification", "Stop Classification", danger=True
+        )
+
+    ai_account_select = account_select.replace('name="account"', 'name="account"')
+    ai_controls = action_form(
+        "run_ai",
+        "Run AI Extraction",
+        extra=f'<label>Telegram account{ai_account_select}</label>',
+        disabled=pipeline_busy or not account_names,
+    )
+    if ai_running:
+        ai_controls += action_form("stop_ai", "Stop AI Extraction", danger=True)
+
+    advertio_controls = action_form(
+        "run_advertio",
+        "Send eligible ads to Advertio",
+        extra=(
+            '<label>Limit<input type="number" name="limit" min="1" value="100"></label>'
+            f'<label>Telegram account for missing photos{account_select}</label>'
+        ),
+        disabled=pipeline_busy or not config.ADVERTIO_INGEST_ENABLED,
+        confirm="Send eligible existing housing listings to Advertio now?",
+    )
+
+    groq_controls = action_form(
+        "run_groq", "Test Groq connection", disabled=groq_running
+    )
+
+    categories = []
+    channel_groups = []
+    for category, items in channel_data.items():
+        categories.append(
+            f'<label class="check"><input type="checkbox" name="category" value="{_escape(category)}"> {_escape(category)}</label>'
+        )
+        rows = "".join(
+            f"<tr><td>@{_escape(item.get('username') or '')}</td><td>{_escape(item.get('name') or '—')}</td>"
+            f"<td>{_escape(item.get('description') or '—')}</td></tr>"
+            for item in (items or []) if isinstance(item, dict)
+        )
+        empty_rows = '<tr><td colspan="3">No channels.</td></tr>'
+        channel_groups.append(
+            f"<details><summary>{_escape(category)} · {len(items or [])} channel(s)</summary>"
+            f'<div class="scroll"><table><thead><tr><th>Channel</th><th>Name</th><th>Description</th></tr></thead>'
+            f"<tbody>{rows or empty_rows}</tbody></table></div></details>"
+        )
+
+    today = date.today().isoformat()
+    crawl_disabled = not account_names or not categories
+    crawl_form = f"""<form method="post" action="/operations/action" class="ops-form">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <input type="hidden" name="action" value="start_crawler">
+        <label>Telegram account{account_select}</label>
+        <fieldset><legend>Categories</legend><div class="checks">{''.join(categories) or 'No categories configured.'}</div></fieldset>
+        <label>Crawl mode<select name="crawl_mode"><option value="all">All messages</option>
+        <option value="photos_only">Only messages containing photos</option></select></label>
+        <label>From date<input type="date" name="from_date" value="{today}" required></label>
+        <label>To date<input type="date" name="to_date" value="{today}" required></label>
+        <label>Crawl interval (minutes)<input type="number" name="interval_minutes" min="0.1" step="0.1"
+        value="{_escape(getattr(config, 'CRAWL_INTERVAL_MINUTES', 5))}" required></label>
+        <button {"disabled" if crawl_disabled else ""}>Start scheduled crawler</button>
+    </form>"""
+    stop_crawler = action_form(
+        "stop_crawler",
+        f"Stop all crawler jobs ({int(crawler_status.get('active_jobs') or 0)})",
+        disabled=int(crawler_status.get("active_jobs") or 0) == 0,
+        danger=True,
+    )
+
+    registration = operations.account_registration_state()
+    if registration is None:
+        registration_html = f"""<form method="post" action="/operations/action" class="ops-form compact">
+            <input type="hidden" name="csrf" value="{csrf}">
+            <input type="hidden" name="action" value="account_begin">
+            <label>New session name<input name="session_name" required autocomplete="off"></label>
+            <label>Phone number<input name="phone" required autocomplete="tel" placeholder="+1..."></label>
+            <button>Add new account</button></form>"""
+    elif registration.get("stage") == "code":
+        session_name = _escape(registration.get("session"))
+        registration_html = f"""<p class="muted">Telegram sent a verification code for session <strong>{session_name}</strong>.</p>
+            <form method="post" action="/operations/action" class="ops-form compact">
+            <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="action" value="account_code">
+            <input type="hidden" name="session_name" value="{session_name}">
+            <label>Verification code<input name="code" required autocomplete="one-time-code"></label><button>Verify code</button></form>
+            {action_form("account_cancel", "Cancel account setup", extra=f'<input type="hidden" name="session_name" value="{session_name}">', danger=True)}"""
+    else:
+        session_name = _escape(registration.get("session"))
+        registration_html = f"""<p class="muted">Two-step verification is required for session <strong>{session_name}</strong>.</p>
+            <form method="post" action="/operations/action" class="ops-form compact">
+            <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="action" value="account_password">
+            <input type="hidden" name="session_name" value="{session_name}">
+            <label>2FA password<input type="password" name="password" required autocomplete="current-password"></label>
+            <button>Complete account login</button></form>
+            {action_form("account_cancel", "Cancel account setup", extra=f'<input type="hidden" name="session_name" value="{session_name}">', danger=True)}"""
+
+    account_rows = "".join(
+        f"<tr><td>{_escape(item.get('session'))}</td><td>{_escape((item.get('meta') or {}).get('username') or '—')}</td>"
+        f"<td>{'connected' if item.get('session') == connected_account else 'available'}</td></tr>"
+        for item in accounts
+    )
+    connect_controls = (
+        action_form(
+            "connect_account",
+            "Select / switch account",
+            extra=f'<label>Account{account_select}</label>',
+            disabled=not account_names,
+        )
+        + action_form(
+            "disconnect_account",
+            "Disconnect active account",
+            disabled=not connected_account,
+            danger=True,
+        )
+    )
+
+    operational_activity = [
+        row for row in report.get("activity", [])
+        if str(row.get("source") or "") == "backoffice.operations"
+    ][:30]
+    activity_rows = "".join(
+        f"""<tr><td>{_escape(row.get('created_at') or '—')}</td><td>{_escape(row.get('kind') or '—')}</td>
+        <td>{_health_badge(row.get('level') or 'INFO')}</td><td>{_escape(row.get('message') or '—')}</td>
+        <td><pre>{_activity_details(row.get('details_data'))}</pre></td></tr>"""
+        for row in operational_activity
+    )
+
+    transfer_summary = (
+        f"Total: {int(transfer_status.get('total') or 0):,} · Sent: {int(transfer_status.get('sent') or 0):,} · "
+        f"Waiting: {int(transfer_status.get('waiting') or 0):,} · Failed: {int(transfer_status.get('failed') or 0):,}"
+    )
+    transfer_rows = "".join(
+        f"""<tr><td>{int(record.get('processed_message_id') or 0)}</td>
+        <td>@{_escape(record.get('channel_username') or 'unknown')}</td>
+        <td>{_escape(record.get('origin_city') or record.get('origin_country') or '—')} → {_escape(record.get('destination_city') or record.get('destination_country') or '—')}</td>
+        <td>{_escape(record.get('departure_date') or '—')}</td>
+        <td>{_escape(record.get('price') if record.get('price') is not None else '—')} {_escape(record.get('currency') or '')}</td>
+        <td>{_escape(record.get('contact') or '—')}</td>
+        <td>{_health_badge(record.get('delivery_status') or 'waiting')}</td></tr>"""
+        for record in transfer_records
+    )
+    transfer_nav = []
+    if transfer_page > 1:
+        transfer_nav.append(f'<a href="/operations?transfer_page={transfer_page - 1}">Previous 20</a>')
+    if transfer_page < transfer_pages:
+        transfer_nav.append(f'<a href="/operations?transfer_page={transfer_page + 1}">Next 20</a>')
+    transfer_nav_html = " · ".join(transfer_nav) or "—"
+
+    auto_refresh = ""
+    if operations.any_running():
+        auto_refresh = (
+            f'<script nonce="{request["csp_nonce"]}">'
+            'setTimeout(()=>window.location.reload(),3000);'
+            '</script>'
+        )
+
+    content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Operations</title>
+    <style>{_DATA_CSS}
+    body{{max-width:1500px}}.ops-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:1rem}}
+    .op-card{{border:1px solid #dce4ef;border-radius:12px;background:#fff;padding:1rem}}
+    .op-card h2{{margin-top:0}}.op-actions{{display:flex;gap:.5rem;align-items:end;flex-wrap:wrap}}
+    .op-action{{display:flex;gap:.45rem;align-items:end;flex-wrap:wrap;border:0;padding:0;margin:.45rem 0}}
+    .op-action label,.ops-form label{{display:grid;gap:.25rem;font-size:.86rem;color:#536479}}
+    .op-action input,.op-action select,.ops-form input,.ops-form select{{padding:.45rem;border:1px solid #c8d3e2;border-radius:7px}}
+    .op-state{{background:#f8faff;border-radius:9px;padding:.7rem;margin:.6rem 0}}.op-state pre{{margin:.4rem 0 0;max-height:220px;overflow:auto}}
+    .op-error,.ops-error{{background:#ffe0da;color:#8d281b;padding:.65rem;border-radius:8px;margin:.5rem 0}}
+    .ops-notice{{background:#d9f4e5;color:#17633e;padding:.65rem;border-radius:8px}}.ops-form{{display:grid;grid-template-columns:repeat(2,minmax(180px,1fr));gap:.7rem}}
+    .ops-form fieldset{{grid-column:1/-1;border:1px solid #dce4ef;border-radius:8px}}.ops-form button{{align-self:end}}
+    .ops-form.compact{{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));align-items:end}}.checks{{display:flex;gap:.7rem;flex-wrap:wrap}}
+    .checks .check{{display:flex;align-items:center;gap:.3rem}}.ops-links{{display:flex;gap:.6rem;flex-wrap:wrap}}
+    .ops-links a{{display:inline-block;padding:.5rem .7rem;border-radius:7px;background:#eef4ff;color:#1957b8;text-decoration:none;font-weight:600}}
+    @media(max-width:760px){{.ops-form{{grid-template-columns:1fr}}}}
+    </style></head><body><h1>Telclaw · Operations</h1>
+    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a><a class="active" href="/operations">Operations</a>
+    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <p class="muted">These controls call the same crawler, processing, classification, extraction, Advertio and account services used by the terminal UI.
+    Long-running queue commands execute in the background; this page refreshes automatically while one is running.</p>
+    {banner}
+
+    <div class="ops-grid">
+      <section class="op-card"><h2>Information Processing Queue</h2>
+        <p>Pending: <strong>{int(pipeline['processing_pending']):,}</strong> · Failed: <strong>{int(pipeline['processing_failed']):,}</strong></p>
+        {_operation_state_box("Processing", states["processing"])}
+        <div class="op-actions">{processing_controls}</div></section>
+
+      <section class="op-card"><h2>AI Category Classification</h2>
+        <p>Eligible pending: <strong>{int(classification.get('eligible_pending') or 0):,}</strong> ·
+        Processing: <strong>{int(classification.get('processing') or 0):,}</strong> · Failed: <strong>{int(classification.get('failed') or 0):,}</strong></p>
+        {_operation_state_box("Classification", states["classification"])}
+        <div class="op-actions">{classification_controls}</div></section>
+
+      <section class="op-card"><h2>AI Extraction Queue</h2>
+        <p>Pending: <strong>{int(pipeline['ai_pending']):,}</strong> · Failed: <strong>{int(pipeline['ai_failed']):,}</strong> ·
+        Enabled: <strong>{'yes' if config.AI_EXTRACTION_ENABLED else 'no'}</strong></p>
+        {_operation_state_box("AI extraction", states["ai"])}
+        <div class="op-actions">{ai_controls}</div></section>
+
+      <section class="op-card"><h2>Advertio Delivery</h2>
+        <p>Pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
+        Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
+        {_operation_state_box("Advertio", states["advertio"])}
+        <div class="op-actions">{advertio_controls}</div></section>
+
+      <section class="op-card"><h2>Groq Connection Test</h2>
+        {_operation_state_box("Groq diagnostic", states["groq"])}
+        <div class="op-actions">{groq_controls}</div></section>
+
+      <section class="op-card"><h2>Transfer Ads</h2>
+        <p>{_escape(transfer_summary)}</p>
+        {f'<p class="ops-error">{_escape(transfer_error)}</p>' if transfer_error else ''}
+        <p class="muted">With Back Office enabled, terminal direct-send is intentionally replaced by rule-based publishing.</p>
+        <div class="ops-links"><a href="/">Open Publishing</a></div></section>
+    </div>
+
+    <section><h2>Unsent Transfer Ads</h2>
+      <p class="muted">Same 20-at-a-time unsent queue browser as the terminal Transfer Ads menu.
+      Page {transfer_page}/{transfer_pages} · {transfer_total:,} unsent record(s).</p>
+      {f'<p class="ops-error">{_escape(transfer_browser_error)}</p>' if transfer_browser_error else ''}
+      <div class="scroll"><table><thead><tr><th>Record</th><th>Source</th><th>Route</th><th>Departure</th>
+      <th>Price</th><th>Contact</th><th>Legacy delivery state</th></tr></thead>
+      <tbody>{transfer_rows or '<tr><td colspan="7">No unsent transfer ads.</td></tr>'}</tbody></table></div>
+      <p>{transfer_nav_html}</p></section>
+
+    <section><h2>Scheduled Crawler</h2>
+      <p>Active jobs: <strong>{int(crawler_status.get('active_jobs') or 0):,}</strong> · Connected account:
+      <strong>{_escape(connected_account or 'none')}</strong></p>
+      {crawl_form}<div class="op-actions">{stop_crawler}</div></section>
+
+    <section><h2>Telegram Accounts</h2>
+      {f'<p class="ops-error">{_escape(account_error)}</p>' if account_error else ''}
+      <p>Connected account: <strong>{_escape(connected_account or 'none')}</strong></p>
+      <div class="op-actions">{connect_controls}</div>
+      <div class="scroll"><table><thead><tr><th>Session</th><th>Telegram username</th><th>State</th></tr></thead>
+      <tbody>{account_rows or '<tr><td colspan="3">No authorized Telegram sessions.</td></tr>'}</tbody></table></div>
+      <h3>Add a new Telegram account</h3>{registration_html}</section>
+
+    <section><h2>Crawler Channels</h2>
+      {f'<p class="ops-error">{_escape(channel_error)}</p>' if channel_error else ''}
+      <p class="muted">This is the same read-only channel inventory shown by the terminal Channel Management screen.</p>
+      {''.join(channel_groups) or '<p>No channel groups configured.</p>'}</section>
+
+    <section><h2>Settings</h2>
+      <p class="muted">Terminal settings are represented by the full Back Office settings editor.</p>
+      <div class="ops-links"><a href="/settings">Open Settings</a><a href="/health">Open System Health</a></div></section>
+
+    <section><h2>Back Office operation activity</h2>
+      <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Operation</th><th>Level</th><th>Message</th><th>Details</th></tr></thead>
+      <tbody>{activity_rows or '<tr><td colspan="5">No Back Office operations have run yet.</td></tr>'}</tbody></table></div></section>
+    <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}">
+      <button class="secondary">Log out of Back Office</button></form>
+    <script nonce="{request['csp_nonce']}">
+    document.querySelectorAll('[data-confirm]').forEach(button=>button.closest('form').addEventListener('submit',event=>{{
+      if(!confirm(button.dataset.confirm)) event.preventDefault();
+    }}));
+    </script>
+    {auto_refresh}
+    </body></html>"""
+    return web.Response(text=content, content_type="text/html")
+
+
+async def operations_action(request):
+    operations = request.app["operations"]
+    data = await request.post()
+    action = str(data.get("action") or "").strip()
+    admin_id = request["session"]["admin_id"]
+    try:
+        if action == "run_processing":
+            operations.start_processing(admin_id)
+            _operations_redirect(notice="Processing queue started.")
+        if action == "stop_processing":
+            if not operations.request_stop("processing"):
+                raise ValueError("Processing is not running")
+            _operations_redirect(notice="Processing stop requested.")
+
+        if action == "run_classification":
+            batch_size = int(data.get("batch_size") or config.AI_CLASSIFICATION_BATCH_SIZE)
+            operations.start_classification(batch_size, admin_id)
+            _operations_redirect(notice=f"Classification started with batch size {batch_size}.")
+        if action == "stop_classification":
+            if not operations.request_stop("classification"):
+                raise ValueError("Classification is not running")
+            _operations_redirect(notice="Classification stop requested.")
+        if action == "retry_classification":
+            retried = await operations.retry_failed_classifications(admin_id)
+            _operations_redirect(notice=f"Requeued {retried} failed classification(s).")
+
+        if action == "run_ai":
+            operations.start_ai(data.get("account"), admin_id)
+            _operations_redirect(notice="AI extraction queue started.")
+        if action == "stop_ai":
+            if not operations.request_stop("ai"):
+                raise ValueError("AI extraction is not running")
+            _operations_redirect(notice="AI extraction stop requested.")
+
+        if action == "run_advertio":
+            operations.start_advertio(
+                limit=int(data.get("limit") or 100),
+                account_name=data.get("account"),
+                requested_by=admin_id,
+            )
+            _operations_redirect(notice="Advertio delivery started.")
+
+        if action == "run_groq":
+            operations.start_groq_test(admin_id)
+            _operations_redirect(notice="Groq connection test started.")
+
+        if action == "start_crawler":
+            from_date = date.fromisoformat(str(data.get("from_date") or ""))
+            to_date = date.fromisoformat(str(data.get("to_date") or ""))
+            await operations.start_crawler(
+                account_name=data.get("account"),
+                categories=data.getall("category", []),
+                from_date=from_date,
+                to_date=to_date,
+                interval_minutes=float(data.get("interval_minutes") or config.CRAWL_INTERVAL_MINUTES),
+                crawl_mode=str(data.get("crawl_mode") or "all"),
+                requested_by=admin_id,
+            )
+            _operations_redirect(notice="Scheduled crawler started.")
+        if action == "stop_crawler":
+            stopped = operations.stop_crawler(admin_id)
+            _operations_redirect(notice=f"Stopped {stopped} crawler job(s).")
+
+        if action == "connect_account":
+            await operations.connect_account(data.get("account"), admin_id)
+            _operations_redirect(notice=f"Telegram account '{data.get('account')}' selected.")
+        if action == "disconnect_account":
+            await operations.disconnect_account(admin_id)
+            _operations_redirect(notice="Active Telegram account disconnected.")
+
+        if action == "account_begin":
+            result = await operations.begin_account_registration(
+                data.get("session_name"),
+                data.get("phone"),
+            )
+            _operations_redirect(notice=f"Verification code requested for session '{result['session']}'.")
+        if action == "account_code":
+            result = await operations.submit_account_code(
+                data.get("session_name"),
+                data.get("code"),
+            )
+            if result.get("stage") == "password":
+                _operations_redirect(notice="Telegram requires the account's 2FA password.")
+            _operations_redirect(notice=f"Telegram account '{result['session']}' added.")
+        if action == "account_password":
+            result = await operations.submit_account_password(
+                data.get("session_name"),
+                data.get("password"),
+            )
+            _operations_redirect(notice=f"Telegram account '{result['session']}' added.")
+        if action == "account_cancel":
+            await operations.cancel_account_registration(data.get("session_name"))
+            _operations_redirect(notice="Telegram account setup cancelled.")
+
+        raise ValueError("Unknown operation")
+    except web.HTTPException:
+        raise
+    except (ValueError, RuntimeError, PermissionError) as exc:
+        _operations_redirect(error=str(exc))
+    except Exception as exc:
+        _operations_redirect(error=f"{exc.__class__.__name__}: {exc}")
 
 
 def _normalization_target_options(selected=""):
@@ -1012,7 +1805,7 @@ async def normalization_page(request):
     @media(max-width:700px){{.alias-card form:not(.inline),.new-alias{{grid-template-columns:1fr}}}}
     </style></head><body><h1>Telclaw · Data Normalization</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a class="active" href="/normalization">Normalization</a>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a class="active" href="/normalization">Normalization</a>
     <a href="/health">System Health</a><a href="/settings">Settings</a></nav>
     <p class="muted">Aliases are exact field-specific mappings for structured category data. Raw Telegram text in
     <code>messages.raw_text</code> is never modified. Matching ignores case and accents, so one Dusseldorf rule also
@@ -1193,7 +1986,7 @@ async def settings_page(request):
     .setting-form input[type=password],.setting-form input[type=number],.setting-form select{{min-width:180px;flex:1}}}}
     </style></head><body><h1>Telclaw · Settings</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
+    <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
     <p class="muted">Values from <code>.env</code> are defaults. A saved Back Office value overrides that default and is
     persisted in SQLite. Secret values are never rendered in the page. Settings marked restart required are saved immediately
     but need a Telclaw restart for already-created clients, listeners or workers to rebuild safely.</p>
@@ -1247,10 +2040,16 @@ async def save_data_cell(request):
         expected = json.loads(data.get("expected", ""))
         if expected is not None and not isinstance(expected, (str, int, float)):
             raise ValueError("Invalid previous cell value")
+        sync_text = data.get("sync_text") == "1"
+        mirror_expected = json.loads(data.get("mirror_expected", "")) if sync_text else None
+        if sync_text and mirror_expected is not None and not isinstance(mirror_expected, str):
+            raise ValueError("Invalid legacy text expected value")
         value = backoffice_data.update_cell(
             data.get("table", ""), data.get("id", ""), data.get("column", ""),
             data.get("value", ""), expected, request["session"]["admin_id"],
-            make_null=data.get("make_null") == "1")
+            make_null=data.get("make_null") == "1",
+            confirm_raw_text=data.get("confirm_raw_text") == "1",
+            sync_text=sync_text, mirror_expected=mirror_expected)
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         if isinstance(exc, backoffice_data.ConflictError):
             raise web.HTTPConflict(text=str(exc)) from exc
@@ -1326,14 +2125,22 @@ async def _check_target_connection(target):
     routing_rules.update_target_connection(target_id, status, detail)
 
 
-def create_app():
+def create_app(console_ui=None):
     routing_rules.initialize()
     initialize_auth()
     backoffice_data.initialize()
     backoffice_settings.initialize()
     data_normalizer.initialize()
     app = web.Application(middlewares=[_security])
+    app["operations"] = BackofficeOperations(console_ui=console_ui)
+
+    async def cleanup_operations(application):
+        await application["operations"].close()
+
+    app.on_cleanup.append(cleanup_operations)
     app.add_routes([web.get("/login", login), web.get("/", index),
+                    web.get("/operations", operations_page),
+                    web.post("/operations/action", operations_action),
                     web.get("/data", data_page), web.get("/normalization", normalization_page),
                     web.get("/health", health_page), web.get("/settings", settings_page),
                     web.post("/normalization/save", save_normalization_alias),

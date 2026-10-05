@@ -26,22 +26,39 @@ def rule_db(tmp_path, monkeypatch):
     conn.executescript("""CREATE TABLE messages (
         id INTEGER PRIMARY KEY, ai_category TEXT, ai_status TEXT,
         processing_status TEXT, message_id INTEGER, sender_username TEXT,
-        channel_username TEXT, message_link TEXT);
+        channel_username TEXT, message_link TEXT, raw_text TEXT, text TEXT);
         CREATE TABLE transferlist (id INTEGER PRIMARY KEY,
         processed_message_id INTEGER UNIQUE, origin_city TEXT,
         destination_city TEXT, origin_country TEXT, destination_country TEXT,
         price REAL, departure_date TEXT);
         CREATE TABLE housinglist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
         CREATE TABLE joblist (id INTEGER PRIMARY KEY,processed_message_id INTEGER UNIQUE);
-        INSERT INTO messages VALUES(1,'transferlist','processed','processed',11,'alice','test','');
+        INSERT INTO messages VALUES(1,'transferlist','processed','processed',11,'alice','test','','original user text','legacy source text');
         INSERT INTO transferlist VALUES(1,1,'Istanbul','Tehran','TR','IR',150,'2020-01-01');""")
     conn.commit()
     conn.close()
     return connection
 
 
-def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
+def test_publisher_migrates_legacy_koolbar_target_in_place(rule_db):
     routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.record_delivery(1, 1, "sent", telegram_message_id=900)
+
+    routed_publisher.RoutedPublisher(token="fake-token")
+
+    targets = routing_rules.list_targets()
+    assert len(targets) == 1
+    assert targets[0]["id"] == 1
+    assert targets[0]["label"] == "Advertio Cargo"
+    assert targets[0]["chat_id"] == "@advertio_cargo"
+
+    delivery = routing_rules.recent_deliveries(target_id=1)[0]
+    assert delivery["status"] == "sent"
+    assert delivery["telegram_message_id"] == 900
+
+
+def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01', origin_city=NULL WHERE id=1")
     conn.commit()
@@ -51,7 +68,7 @@ def test_legacy_koolbar_skips_incomplete_transfer_routes(rule_db):
 
 
 def test_legacy_koolbar_rejected_delivery_is_not_automatically_retried(rule_db):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
     conn.commit()
@@ -61,12 +78,28 @@ def test_legacy_koolbar_rejected_delivery_is_not_automatically_retried(rule_db):
     assert routed_publisher.RoutedPublisher._koolbar_pairs(limit=10) == []
 
 
+def test_rule_and_koolbar_pairs_carry_raw_source_text(rule_db):
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    koolbar = routed_publisher.RoutedPublisher._koolbar_pairs(limit=10)
+    assert koolbar[0][0]["raw_text"] == "original user text"
+
+    routing_rules.save_target("Auto", "@autochannel")
+    routing_rules.save_rule("All transfers", "transferlist", "", "either", 2)
+    managed = routing_rules.pending(limit=10)
+    assert managed[0][0]["raw_text"] == "original user text"
+
+
 def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule_db):
-    routing_rules.save_target("Koolbar International", "@koolbar_international")
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
     conn = rule_db()
     conn.execute("UPDATE transferlist SET departure_date='2099-01-01', destination_city='' WHERE id=1")
     conn.execute(
-        "INSERT INTO messages VALUES(2,'transferlist','processed','processed',12,'bob','test','')"
+        "INSERT INTO messages VALUES(2,'transferlist','processed','processed',12,'bob','test','','second original user text','second legacy source text')"
     )
     conn.execute(
         "INSERT INTO transferlist VALUES(2,2,'Berlin','Toronto','DE','CA',200,'2099-01-02')"
@@ -77,6 +110,96 @@ def test_legacy_koolbar_invalid_old_record_does_not_starve_valid_new_record(rule
     pairs = routed_publisher.RoutedPublisher._koolbar_pairs(limit=1)
     assert len(pairs) == 1
     assert pairs[0][0]["message_row_id"] == 2
+
+
+def test_legacy_koolbar_diagnostics_explains_eligibility_and_delivery_blockers(rule_db):
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
+    conn = rule_db()
+    conn.execute("UPDATE transferlist SET departure_date='2099-01-01' WHERE id=1")
+    conn.commit()
+    conn.close()
+
+    diagnostics = routed_publisher.RoutedPublisher.koolbar_diagnostics(limit=10)
+    assert diagnostics["eligible_count"] == 1
+    assert diagnostics["rows"][0]["eligible"] is True
+    assert diagnostics["rows"][0]["blockers"] == []
+
+    routing_rules.record_delivery(1, 1, "rejected", error="missing route")
+    diagnostics = routed_publisher.RoutedPublisher.koolbar_diagnostics(limit=10)
+    assert diagnostics["eligible_count"] == 0
+    assert diagnostics["rows"][0]["eligible"] is False
+    assert diagnostics["rows"][0]["delivery_status"] == "rejected"
+    assert "delivery status is rejected" in diagnostics["rows"][0]["blockers"]
+
+
+def test_backoffice_diagnostics_reports_koolbar_fair_share(rule_db, monkeypatch):
+    routing_rules.save_target("Advertio Cargo", "@advertio_cargo")
+    target = routing_rules.list_targets()[0]
+
+    monkeypatch.setattr(
+        backoffice_web.routing_rules,
+        "pending",
+        lambda limit: [(None, {"target_id": 999}) for _ in range(limit)],
+    )
+    monkeypatch.setattr(backoffice_web.routing_rules, "is_rate_limited", lambda: False)
+    monkeypatch.setattr(
+        backoffice_web.RoutedPublisher,
+        "koolbar_diagnostics",
+        lambda limit=50: {
+            "configured": True,
+            "target_id": target["id"],
+            "target_enabled": True,
+            "today": "2099-01-01",
+            "eligible_count": 30,
+            "rows": [],
+        },
+    )
+
+    output = backoffice_web._publishing_diagnostics_html(target, [])
+    assert "Fair queue scheduling prevents managed rules" in output
+    assert "50/50" in output
+    assert "Legacy fair-share capacity" in output
+    assert ">25<" in output
+    assert "Advertio Cargo backlog exceeds one cycle" in output
+
+
+def test_publisher_fairly_merges_rule_and_koolbar_queues():
+    rule_pairs = [
+        ({"message_row_id": index}, {"target_id": 100 + index})
+        for index in range(1, 51)
+    ]
+    koolbar_pairs = [
+        ({"message_row_id": 1000 + index}, {"id": 1, "target_id": 1})
+        for index in range(1, 51)
+    ]
+
+    merged = routed_publisher.RoutedPublisher._merge_pending_pairs(
+        rule_pairs,
+        koolbar_pairs,
+        limit=50,
+    )
+
+    assert len(merged) == 50
+    assert sum(1 for _record, rule in merged if rule.get("target_id") == 1) == 25
+    assert merged[0][0]["message_row_id"] == 1
+    assert merged[1][0]["message_row_id"] == 1001
+
+
+def test_publisher_fair_merge_deduplicates_same_message_and_target():
+    duplicate_rule = ({"message_row_id": 1}, {"target_id": 1})
+    duplicate_koolbar = ({"message_row_id": 1}, {"id": 1, "target_id": 1})
+    extra_koolbar = ({"message_row_id": 2}, {"id": 1, "target_id": 1})
+
+    merged = routed_publisher.RoutedPublisher._merge_pending_pairs(
+        [duplicate_rule],
+        [duplicate_koolbar, extra_koolbar],
+        limit=2,
+    )
+
+    assert [(record["message_row_id"], rule.get("target_id")) for record, rule in merged] == [
+        (1, 1),
+        (2, 1),
+    ]
 
 
 def test_new_backoffice_rule_defaults_to_automatic_publishing(rule_db):
@@ -279,6 +402,12 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
                             filter_field="origin_country", filter_value="TR",
                             delivery_mode="manual")
     assert routing_rules.pending() == []
+    response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    assert "Matching messages (1)" in response.text
+    assert "Manual review" in response.text
+    assert "Send now" in response.text
+    assert "<summary>Matching messages" not in response.text
+
     rule, counts, records = routing_rules.rule_matches(1)
     assert rule["delivery_mode"] == "manual"
     assert counts == {"total": 1, "sent": 0}
@@ -290,7 +419,8 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
     with pytest.raises(ValueError):
         routing_rules.selected_pair(1, 1)
     response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
-    assert "1 matching ads" in response.text
+    assert "Matching messages (1)" in response.text
+    assert "Send again" in response.text
     assert "Delete rule" in response.text
     routing_rules.delete_rule(1, 1)
     assert routing_rules.list_rules() == []

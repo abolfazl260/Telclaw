@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from urllib.parse import urlparse
 
 from telethon import TelegramClient, errors
@@ -91,12 +92,32 @@ async def get_active_accounts():
             continue
 
         session_name = os.path.splitext(filename)[0]
+        # A Back Office registration deliberately owns an unauthorized session
+        # between the code and optional 2FA steps. Do not treat it as stale,
+        # but clean up abandoned registrations once their short TTL expires.
+        registration = _registration_cache.get(session_name)
+        if registration is not None:
+            if _registration_expired(registration):
+                await _discard_registration(session_name)
+            else:
+                continue
         client = None
+        preexisting_client = session_name in _client_cache
         try:
             client = create_client(session_name)
-            await client.connect()
+            if not client.is_connected():
+                await client.connect()
             authorized = await client.is_user_authorized()
             if not authorized:
+                # Telegram explicitly confirmed the cached/on-disk session is
+                # unauthorized. Disconnect and evict even when another caller
+                # had previously cached this client; otherwise a deleted session
+                # could remain usable through the stale in-process object.
+                try:
+                    if client.is_connected():
+                        await client.disconnect()
+                finally:
+                    _client_cache.pop(session_name, None)
                 _remove_session_files(session_name)
                 continue
 
@@ -104,10 +125,14 @@ async def get_active_accounts():
             meta["status"] = "active"
             accounts.append({"session": session_name, "meta": meta})
         except Exception as exc:
-            log_exception(exc, f"Inactive Telegram session: {session_name}")
-            _remove_session_files(session_name)
+            # A transient Telegram/network/proxy failure does not prove that a
+            # local session is invalid. Keep the session file and simply omit it
+            # from this live availability snapshot. We only delete a session
+            # after Telegram explicitly confirms it is unauthorized above.
+            log_exception(exc, f"Unable to verify Telegram session: {session_name}")
         finally:
-            if client is not None:
+            # Do not disconnect a client already owned by the running crawler/TUI.
+            if client is not None and not preexisting_client:
                 try:
                     if client.is_connected():
                         await client.disconnect()
@@ -124,6 +149,28 @@ async def get_available_accounts():
 
 
 _client_cache = {}
+_registration_cache = {}
+_REGISTRATION_TTL_SECONDS = 600
+
+
+def _registration_expired(state):
+    return (time.monotonic() - float(state.get("started_monotonic") or 0)) > _REGISTRATION_TTL_SECONDS
+
+
+async def _discard_registration(session_name, *, remove_session=True):
+    state = _registration_cache.pop(session_name, None)
+    client = (state or {}).get("client") or _client_cache.get(session_name)
+    if client is not None:
+        try:
+            if client.is_connected():
+                await client.disconnect()
+        except Exception:
+            pass
+    _client_cache.pop(session_name, None)
+    if remove_session:
+        _remove_session_files(session_name)
+
+
 
 
 def create_client(account_name):
@@ -237,3 +284,134 @@ async def register_new_account(session_name):
         if client.is_connected():
             await client.disconnect()
         _client_cache.pop(session_name, None)
+
+
+async def begin_account_registration(session_name, phone):
+    """Begin non-interactive Telegram login for a Back Office multi-step form."""
+    session_name = _normalize_session_name(session_name)
+    phone = str(phone or "").strip()
+    if not phone:
+        raise ValueError("Phone number cannot be empty")
+    previous = _registration_cache.get(session_name)
+    if previous is not None:
+        await _discard_registration(session_name)
+    if os.path.exists(f"{_session_path(session_name)}.session"):
+        raise ValueError(f"Session '{session_name}' already exists")
+
+    client = create_client(session_name)
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            raise ValueError(f"Session '{session_name}' is already authorized")
+        sent = await client.send_code_request(phone)
+        _registration_cache[session_name] = {
+            "client": client,
+            "phone": phone,
+            "phone_code_hash": getattr(sent, "phone_code_hash", None),
+            "stage": "code",
+            "started_monotonic": time.monotonic(),
+        }
+        return {"session": session_name, "stage": "code"}
+    except errors.PhoneNumberInvalidError as exc:
+        await _discard_registration(session_name)
+        raise ValueError("The phone number is invalid; include the country code") from exc
+    except errors.FloodWaitError as exc:
+        await _discard_registration(session_name)
+        raise RuntimeError(f"Telegram rate limit: wait {exc.seconds} seconds") from exc
+    except Exception:
+        await _discard_registration(session_name)
+        raise
+
+
+async def _registration_state_or_raise(session_name):
+    session_name = _normalize_session_name(session_name)
+    state = _registration_cache.get(session_name)
+    if state is None:
+        raise ValueError("No pending Telegram account registration")
+    if _registration_expired(state):
+        await _discard_registration(session_name)
+        raise ValueError("Telegram account registration expired; start again")
+    return session_name, state
+
+
+async def _finish_account_registration(session_name, state):
+    client = state["client"]
+    if not await client.is_user_authorized():
+        raise RuntimeError("Telegram login did not complete successfully")
+    me = await client.get_me()
+    _save_meta(session_name, {
+        "status": "active",
+        "telegram_user_id": getattr(me, "id", None),
+        "username": getattr(me, "username", None),
+        "phone": getattr(me, "phone", None),
+    })
+    _registration_cache.pop(session_name, None)
+    if client.is_connected():
+        await client.disconnect()
+    _client_cache.pop(session_name, None)
+    return {"session": session_name, "stage": "complete"}
+
+
+async def submit_account_registration_code(session_name, code):
+    session_name, state = await _registration_state_or_raise(session_name)
+    if state.get("stage") != "code":
+        raise ValueError("Telegram registration is not waiting for a code")
+    code = str(code or "").strip()
+    if not code:
+        raise ValueError("Verification code cannot be empty")
+    client = state["client"]
+    try:
+        await client.sign_in(
+            phone=state["phone"],
+            code=code,
+            phone_code_hash=state.get("phone_code_hash"),
+        )
+    except errors.SessionPasswordNeededError:
+        state["stage"] = "password"
+        return {"session": session_name, "stage": "password"}
+    except errors.PhoneCodeInvalidError as exc:
+        raise ValueError("The Telegram verification code is invalid") from exc
+    except errors.PhoneCodeExpiredError as exc:
+        await _discard_registration(session_name)
+        raise ValueError("The Telegram verification code expired; start again") from exc
+    except errors.FloodWaitError as exc:
+        raise RuntimeError(f"Telegram rate limit: wait {exc.seconds} seconds") from exc
+    return await _finish_account_registration(session_name, state)
+
+
+async def submit_account_registration_password(session_name, password):
+    session_name, state = await _registration_state_or_raise(session_name)
+    if state.get("stage") != "password":
+        raise ValueError("Telegram registration is not waiting for a 2FA password")
+    password = str(password or "")
+    if not password:
+        raise ValueError("Two-step verification password cannot be empty")
+    try:
+        await state["client"].sign_in(password=password)
+    except errors.PasswordHashInvalidError as exc:
+        raise ValueError("The Telegram two-step verification password is invalid") from exc
+    except errors.FloodWaitError as exc:
+        raise RuntimeError(f"Telegram rate limit: wait {exc.seconds} seconds") from exc
+    return await _finish_account_registration(session_name, state)
+
+
+async def cancel_account_registration(session_name):
+    session_name = _normalize_session_name(session_name)
+    existed = session_name in _registration_cache
+    if existed:
+        await _discard_registration(session_name)
+    return existed
+
+
+def get_account_registration_state(session_name=None):
+    """Return sanitized in-memory registration state; never expose phone/code/password."""
+    if session_name is not None:
+        name = _normalize_session_name(session_name)
+        state = _registration_cache.get(name)
+        if state is None or _registration_expired(state):
+            return None
+        return {"session": name, "stage": state.get("stage")}
+    for name, state in list(_registration_cache.items()):
+        if not _registration_expired(state):
+            return {"session": name, "stage": state.get("stage")}
+    return None

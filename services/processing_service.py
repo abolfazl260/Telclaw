@@ -36,11 +36,17 @@ class ProcessingService:
             )
             try:
                 result = self.process_record(record)
+                # A later stage may change the working 'text' field. Persist
+                # the authoritative cleaned output into BOTH compatibility
+                # columns together using one repository/database UPDATE.
+                cleaned = result.get("cleaned_text")
+                if cleaned is None:
+                    cleaned = result.get("text")
                 self.repository.mark_processing_result(
                     record["message_id"], record["channel_username"],
                     success=True,
-                    text=result.get("text"),
-                    cleaned_text=result.get("cleaned_text"),
+                    text=cleaned,
+                    cleaned_text=cleaned,
                     pipeline_version="processing-v1",
                     cleaned_at=datetime.now(timezone.utc).isoformat(),
                 )

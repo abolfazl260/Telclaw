@@ -29,8 +29,15 @@ def ensure_duplicate_schema(conn):
     columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
     if "content_hash" not in columns:
         conn.execute("ALTER TABLE messages ADD COLUMN content_hash TEXT")
+    # Older databases may not have raw_text; prefer the preserved crawler
+    # payload for newly backfilled hashes, not a cleaned/edited legacy copy.
+    # Never recalculate an existing hash or rewrite any message-text field.
+    original_column = (
+        "COALESCE(NULLIF(raw_text, ''), text)" if "raw_text" in columns else "text"
+    )
     rows = conn.execute(
-        "SELECT id, text FROM messages WHERE content_hash IS NULL AND text IS NOT NULL"
+        f"SELECT id, {original_column} FROM messages "
+        f"WHERE content_hash IS NULL AND {original_column} IS NOT NULL"
     ).fetchall()
     for row in rows:
         fingerprint = content_hash(row[1])

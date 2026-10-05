@@ -33,6 +33,8 @@ def _plain_ad(record):
         else:
             lines.append(f"{field.replace('_', ' ').title()}: {text}")
     if not lines:
+        # Preserve the established cleaned -> raw fallback for non-transfer ads.
+        # Do not substitute the legacy messages.text compatibility copy.
         fallback = str(record.get("cleaned_text") or record.get("raw_text") or "").strip()
         if fallback:
             lines.append(fallback)
@@ -40,33 +42,55 @@ def _plain_ad(record):
 
 
 class RoutedPublisher:
+    ADVERTIO_CARGO_CHAT_ID = "@advertio_cargo"
+    LEGACY_KOOLBAR_CHAT_ID = "@koolbar_international"
+    ADVERTIO_CARGO_LABEL = "Advertio Cargo"
+
     def __init__(self, token=None):
         self.token = token or config.TELEGRAM_BOT_TOKEN
         if not self.token:
             raise RuntimeError("TELCLAW_TELEGRAM_BOT_TOKEN is required")
         routing_rules.initialize()
-        # Keep the legacy Koolbar destination available without requiring a
-        # Backoffice rule. Its publication eligibility is hard-coded below to
-        # preserve the old channel behavior.
-        if not any(target["chat_id"] == "@koolbar_international" for target in routing_rules.list_targets()):
-            routing_rules.save_target(
-                "Koolbar International",
-                "@koolbar_international",
-                description="Legacy hard-coded transfer destination",
-            )
+        # Keep the historical hard-coded transfer destination, but migrate the
+        # old channel username in-place so its target ID, rules and delivery
+        # history remain intact after the Telegram username rename.
+        targets = routing_rules.list_targets()
+        advertio_target = next(
+            (target for target in targets if target["chat_id"] == self.ADVERTIO_CARGO_CHAT_ID),
+            None,
+        )
+        legacy_target = next(
+            (target for target in targets if target["chat_id"] == self.LEGACY_KOOLBAR_CHAT_ID),
+            None,
+        )
+        if advertio_target is None:
+            if legacy_target is not None:
+                routing_rules.save_target(
+                    self.ADVERTIO_CARGO_LABEL,
+                    self.ADVERTIO_CARGO_CHAT_ID,
+                    enabled=bool(legacy_target["enabled"]),
+                    target_id=legacy_target["id"],
+                    description=legacy_target.get("description") or "Hard-coded Advertio Cargo transfer destination",
+                )
+            else:
+                routing_rules.save_target(
+                    self.ADVERTIO_CARGO_LABEL,
+                    self.ADVERTIO_CARGO_CHAT_ID,
+                    description="Hard-coded Advertio Cargo transfer destination",
+                )
         # _claim() relies on the legacy publication table even when the
         # Backoffice test database has not initialized the legacy publisher.
         TelegramTransferPublisher._ensure_publication_table()
 
     @staticmethod
     def _koolbar_pairs(limit):
-        """Return legacy Koolbar transfer ads with their former eligibility rules."""
+        """Return Advertio Cargo transfer ads with their former eligibility rules."""
         today = date.today().isoformat()
         # Use the routing module to resolve the target so its schema initialization
         # is guaranteed for isolated/test databases as well as the production DB.
         targets = [
             target for target in routing_rules.list_targets()
-            if target["chat_id"] == "@koolbar_international" and target["enabled"]
+            if target["chat_id"] == RoutedPublisher.ADVERTIO_CARGO_CHAT_ID and target["enabled"]
         ]
         if not targets:
             return []
@@ -75,7 +99,7 @@ class RoutedPublisher:
         try:
             rows = conn.execute(
                 """SELECT t.*, m.channel_username, m.message_id, m.message_link,
-                          m.sender_username, m.ai_category, m.ai_status,
+                          m.sender_username, m.raw_text, m.text, m.ai_category, m.ai_status,
                           m.processing_status, m.id AS message_row_id
                      FROM transferlist t
                      INNER JOIN messages m ON m.id=t.processed_message_id
@@ -104,20 +128,163 @@ class RoutedPublisher:
         finally:
             conn.close()
 
+    @staticmethod
+    def koolbar_diagnostics(limit=50):
+        """Return read-only eligibility diagnostics for the Advertio Cargo destination."""
+        today = date.today().isoformat()
+        targets = [
+            target for target in routing_rules.list_targets()
+            if target["chat_id"] == RoutedPublisher.ADVERTIO_CARGO_CHAT_ID
+        ]
+        if not targets:
+            return {
+                "configured": False,
+                "target_id": None,
+                "target_enabled": False,
+                "today": today,
+                "eligible_count": 0,
+                "rows": [],
+            }
+
+        target = targets[0]
+        conn = get_connection()
+        try:
+            eligible_count = 0
+            if target["enabled"]:
+                eligible_count = int(conn.execute(
+                    """SELECT COUNT(*)
+                         FROM transferlist t
+                         INNER JOIN messages m ON m.id=t.processed_message_id
+                        WHERE m.processing_status='processed'
+                          AND m.ai_status='processed'
+                          AND m.ai_category='transferlist'
+                          AND t.departure_date IS NOT NULL
+                          AND TRIM(COALESCE(t.origin_city, '')) <> ''
+                          AND TRIM(COALESCE(t.destination_city, '')) <> ''
+                          AND date(substr(t.departure_date,1,10)) >= date(?)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM publishing_deliveries d
+                               WHERE d.message_id=m.id
+                                 AND d.target_id=?
+                                 AND d.status IN ('sent','rejected','sending','uncertain')
+                          )""",
+                    (today, target["id"]),
+                ).fetchone()[0])
+
+            rows = conn.execute(
+                """SELECT m.id AS message_row_id, m.message_id AS telegram_source_id,
+                          m.channel_username, m.processing_status, m.ai_status, m.ai_category,
+                          t.origin_city, t.destination_city, t.departure_date,
+                          d.status AS delivery_status, d.error AS delivery_error,
+                          d.updated_at AS delivery_updated_at,
+                          CASE WHEN m.processing_status='processed' THEN 1 ELSE 0 END AS processing_ok,
+                          CASE WHEN m.ai_status='processed' THEN 1 ELSE 0 END AS ai_ok,
+                          CASE WHEN m.ai_category='transferlist' THEN 1 ELSE 0 END AS category_ok,
+                          CASE WHEN TRIM(COALESCE(t.origin_city, '')) <> ''
+                                     AND TRIM(COALESCE(t.destination_city, '')) <> ''
+                               THEN 1 ELSE 0 END AS route_ok,
+                          CASE WHEN t.departure_date IS NOT NULL
+                                     AND date(substr(t.departure_date,1,10)) >= date(?)
+                               THEN 1 ELSE 0 END AS date_ok,
+                          CASE WHEN d.status IS NULL
+                                     OR d.status NOT IN ('sent','rejected','sending','uncertain')
+                               THEN 1 ELSE 0 END AS delivery_ok
+                     FROM transferlist t
+                     INNER JOIN messages m ON m.id=t.processed_message_id
+                     LEFT JOIN publishing_deliveries d
+                       ON d.message_id=m.id AND d.target_id=?
+                    ORDER BY t.id DESC
+                    LIMIT ?""",
+                (today, target["id"], min(max(int(limit), 1), 200)),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        details = []
+        for item in rows:
+            row = dict(item)
+            blockers = []
+            if not target["enabled"]:
+                blockers.append("target disabled")
+            if not row["processing_ok"]:
+                blockers.append("processing_status is not processed")
+            if not row["ai_ok"]:
+                blockers.append("ai_status is not processed")
+            if not row["category_ok"]:
+                blockers.append("ai_category is not transferlist")
+            if not row["route_ok"]:
+                blockers.append("origin or destination is empty")
+            if not row["date_ok"]:
+                blockers.append("departure date is missing, invalid, or in the past")
+            if not row["delivery_ok"]:
+                blockers.append(f"delivery status is {row['delivery_status']}")
+            row["eligible"] = not blockers
+            row["blockers"] = blockers
+            details.append(row)
+
+        return {
+            "configured": True,
+            "target_id": target["id"],
+            "target_enabled": bool(target["enabled"]),
+            "today": today,
+            "eligible_count": eligible_count,
+            "rows": details,
+        }
+
+    @staticmethod
+    def _merge_pending_pairs(rule_pairs, koolbar_pairs, limit):
+        """Fairly share one publishing cycle between managed rules and Advertio Cargo."""
+        limit = max(0, int(limit))
+        if limit == 0:
+            return []
+
+        rule_pairs = list(rule_pairs or [])
+        koolbar_pairs = list(koolbar_pairs or [])
+        merged = []
+        seen = set()
+        rule_index = koolbar_index = 0
+
+        def append_unique(pair):
+            record, rule = pair
+            target_id = rule.get("target_id", rule.get("id"))
+            key = (record["message_row_id"], target_id)
+            if key in seen:
+                return False
+            seen.add(key)
+            merged.append(pair)
+            return True
+
+        # Round-robin while both queues have work. This guarantees that a full
+        # managed-rule queue can no longer consume every slot before Advertio Cargo is
+        # considered, while preserving ordering inside each queue.
+        while len(merged) < limit and rule_index < len(rule_pairs) and koolbar_index < len(koolbar_pairs):
+            append_unique(rule_pairs[rule_index])
+            rule_index += 1
+            if len(merged) >= limit:
+                break
+            append_unique(koolbar_pairs[koolbar_index])
+            koolbar_index += 1
+
+        # Let whichever queue still has work use the remaining capacity.
+        while len(merged) < limit and rule_index < len(rule_pairs):
+            append_unique(rule_pairs[rule_index])
+            rule_index += 1
+        while len(merged) < limit and koolbar_index < len(koolbar_pairs):
+            append_unique(koolbar_pairs[koolbar_index])
+            koolbar_index += 1
+
+        return merged
+
     async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
         if routing_rules.is_rate_limited():
             return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
         if pairs is None:
-            pairs = routing_rules.pending(limit)
-            # The legacy Koolbar channel keeps its historical behavior outside
-            # the generic Backoffice rule builder: transferlist only, processed
-            # AI data, and departure date today or later (calendar date).
-            existing = {(record["message_row_id"], rule["target_id"]) for record, rule in pairs}
-            for pair in self._koolbar_pairs(limit):
-                key = (pair[0]["message_row_id"], pair[1]["id"])
-                if key not in existing and len(pairs) < int(limit):
-                    pairs.append(pair)
-                    existing.add(key)
+            rule_pairs = routing_rules.pending(limit)
+            # The Advertio Cargo channel keeps its historical eligibility rules,
+            # but now shares the cycle fairly with managed publishing rules so a
+            # full rule queue cannot starve it indefinitely.
+            koolbar_pairs = self._koolbar_pairs(limit)
+            pairs = self._merge_pending_pairs(rule_pairs, koolbar_pairs, limit)
         result = {"found": len(pairs), "sent": 0, "failed": 0, "rejected": 0}
         blocked_targets = {}
         for record, rule in pairs:

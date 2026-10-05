@@ -76,6 +76,103 @@ def test_category_classification_service_batches_and_marks_results(monkeypatch, 
     assert rows[102]["ai_status"] == "skipped"
 
 
+def test_category_classification_drains_multiple_batches(monkeypatch, tmp_path):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from ai.classification_service import CategoryClassificationService
+    from storage.message_repository import MessageRepository
+
+    database.initialize_db()
+    repo = MessageRepository()
+    for message_id in range(101, 126):
+        database.insert_message("chan", message_id, f"message {message_id}", "2026-08-27")
+        repo.mark_processing_result(
+            message_id,
+            "chan",
+            success=True,
+            text=f"message {message_id}",
+            cleaned_text=f"message {message_id}",
+        )
+
+    classifier = FakeBatchClassifier()
+    service = CategoryClassificationService(
+        repository=repo,
+        classifier=classifier,
+        batch_size=10,
+    )
+    stats = service.process_pending_with_stats()
+
+    assert stats["found"] == 25
+    assert stats["processed"] == 25
+    assert stats["failed"] == 0
+    assert stats["remaining"] == 0
+    assert [len(call) for call in classifier.calls] == [10, 10, 5]
+
+
+def test_runtime_batch_size_is_resolved_for_existing_service(monkeypatch, tmp_path):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from ai.classification_service import CategoryClassificationService
+    from storage.message_repository import MessageRepository
+
+    database.initialize_db()
+    repo = MessageRepository()
+    for message_id in range(201, 213):
+        database.insert_message("chan", message_id, f"message {message_id}", "2026-08-27")
+        repo.mark_processing_result(
+            message_id,
+            "chan",
+            success=True,
+            text=f"message {message_id}",
+            cleaned_text=f"message {message_id}",
+        )
+
+    classifier = FakeBatchClassifier()
+    service = CategoryClassificationService(repository=repo, classifier=classifier)
+    config.AI_CLASSIFICATION_BATCH_SIZE = 5
+
+    stats = service.process_pending_with_stats()
+
+    assert stats["remaining"] == 0
+    assert [len(call) for call in classifier.calls] == [5, 5, 2]
+
+
+def test_failed_classification_batch_is_deferred_to_next_cycle(monkeypatch, tmp_path):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from ai.classification_service import CategoryClassificationService
+    from storage.message_repository import MessageRepository
+
+    database.initialize_db()
+    repo = MessageRepository()
+    for message_id in (301, 302):
+        database.insert_message("chan", message_id, "message", "2026-08-27")
+        repo.mark_processing_result(
+            message_id,
+            "chan",
+            success=True,
+            text="message",
+            cleaned_text="message",
+        )
+
+    classifier = FailingBatchClassifier()
+    service = CategoryClassificationService(
+        repository=repo,
+        classifier=classifier,
+        batch_size=10,
+    )
+    stats = service.process_pending_with_stats()
+
+    assert stats["found"] == 2
+    assert stats["failed"] == 2
+    assert stats["remaining"] == 2
+    with database.get_connection() as conn:
+        attempts = [
+            row["classification_attempts"]
+            for row in conn.execute(
+                "SELECT classification_attempts FROM messages ORDER BY message_id"
+            ).fetchall()
+        ]
+    assert attempts == [1, 1]
+
+
 def test_category_classification_skips_messages_that_already_have_ai_category(monkeypatch, tmp_path):
     database, config = _load_database(monkeypatch, tmp_path)
     from ai.classification_service import CategoryClassificationService

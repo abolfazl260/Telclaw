@@ -79,7 +79,7 @@ class TelegramTransferPublisher:
 
     @staticmethod
     def _remove_emojis(text):
-        """Remove Unicode emoji/pictographic characters from published descriptions."""
+        """Remove emoji/pictographic code points without touching normal language text."""
         if not text:
             return text
         emoji_pattern = re.compile(
@@ -93,14 +93,17 @@ class TelegramTransferPublisher:
             "\\U0001F800-\\U0001F8FF"
             "\\U0001F900-\\U0001F9FF"
             "\\U0001FA00-\\U0001FAFF"
-            "\\U00002702-\\U000027B0"
-            "\\U000024C2-\\U0001F251"
+            "\\u2600-\\u26FF"
+            "\\u2700-\\u27BF"
             "]+",
             flags=re.UNICODE,
         )
         text = emoji_pattern.sub("", str(text))
-        text = re.sub(r"[\\uFE0E\\uFE0F\\u200D\\u20E3]", "", text)
-        return re.sub(r"[ \t]{2,}", " ", text).strip()
+        text = "".join(
+            char for char in text
+            if ord(char) not in {0xFE0E, 0xFE0F, 0x200D, 0x20E3}
+        )
+        return text.strip()
 
     @staticmethod
     def _country_flag(value):
@@ -129,6 +132,18 @@ class TelegramTransferPublisher:
     def _location_line(cls, label, city, country):
         flag = cls._country_flag(country)
         return f"{flag + ' ' if flag else ''}{label}: {city}"
+
+    @classmethod
+    def _clean_description(cls, value):
+        """Use extracted description text, dropping only hashtags and emojis."""
+        if value is None:
+            return None
+        text = cls._remove_emojis(str(value))
+        cleaned_lines = []
+        for line in text.splitlines():
+            words = [word for word in line.split() if not word.startswith("#")]
+            cleaned_lines.append(" ".join(words))
+        return "\n".join(cleaned_lines).strip() or None
 
     @staticmethod
     def _number(value):
@@ -192,21 +207,21 @@ class TelegramTransferPublisher:
             lines.append("")
         title = cls._remove_emojis(cls._value(data, "title"))
         if title:
-            lines.append(f"📌 عنوان: {title}")
+            lines.append(f"📌 Title: {title}")
             lines.append("")
         lines.extend([
-            cls._location_line("مبدا", origin, cls._value(data, "origin_country")),
-            cls._location_line("مقصد", destination, cls._value(data, "destination_country")),
+            cls._location_line("Origin", origin, cls._value(data, "origin_country")),
+            cls._location_line("Destination", destination, cls._value(data, "destination_country")),
         ])
         cargo = cls._value(data, "cargo_type")
         if cargo:
-            lines.append(f"📦 نوع بار: {cargo}")
+            lines.append(f"📦 Cargo Type: {cargo}")
         weight = cls._format_weight(data)
         if weight:
-            lines.append(f"⚖️ وزن: {weight}")
+            lines.append(f"⚖️ Weight: {weight}")
         volume = cls._format_volume(data) or cls._infer_volume_from_text(data)
         if volume:
-            lines.append(f"📏 حجم: {volume}")
+            lines.append(f"📏 Volume: {volume}")
         departure_date = cls._value(data, "departure_date")
         if departure_date:
             try:
@@ -215,19 +230,19 @@ class TelegramTransferPublisher:
                 jalali = cls._jalali(gregorian)
                 jy, jm, jd = jalali.split("/")
                 jalali_label = f"{jd}/{jm}/{jy}"
-                lines.append(f"📅 تاریخ: {gregorian_label} | {jalali_label}")
+                lines.append(f"📅 Date: {gregorian_label} | {jalali_label}")
             except ValueError:
-                lines.append(f"📅 تاریخ: {departure_date}")
+                lines.append(f"📅 Date: {departure_date}")
             lines.append("")
-        description = cls._remove_emojis(cls._value(data, "description"))
+        description = cls._clean_description(data.get("description"))
         if description:
-            lines.append(f"📝 توضیحات: {description}")
+            lines.append(f"📝 Description: {description}")
         price = cls._number(data.get("price"))
         if price is not None:
-            lines.append(f"💰 هزینه: {price:g} {cls._value(data, 'currency') or 'CAD'}")
+            lines.append(f"💰 Price: {price:g} {cls._value(data, 'currency') or 'CAD'}")
         contact = cls._value(data, "contact")
         if contact:
-            lines.append(f"📞 تماس: {contact}")
+            lines.append(f"📞 Contact: {contact}")
         return "\n".join(lines)
 
     async def _send_message(self, text, reply_markup=None):
@@ -246,6 +261,8 @@ class TelegramTransferPublisher:
 
     @staticmethod
     def _pending_records(limit=100):
+        # Preserve m.raw_text and legacy m.text in this query for compatibility.
+        # The Telegram ad body itself is rendered from transferlist fields.
         conn = database.get_connection()
         try:
             rows = conn.execute("""SELECT m.id AS message_row_id, m.channel_username, m.message_id, m.sender_username,

@@ -204,6 +204,9 @@ class AdvertioDeliveryService:
         if explicit in aliases:
             return aliases[explicit]
 
+        # Legacy duration inference deliberately inspects both original and
+        # compatibility text. Adding cleaned_text here would alter how older
+        # listings are classified, so keep this ordering unchanged.
         text_parts = [
             data.get("description"), data.get("title"), data.get("raw_text"),
             data.get("text"), record.get("raw_text"), record.get("text"),

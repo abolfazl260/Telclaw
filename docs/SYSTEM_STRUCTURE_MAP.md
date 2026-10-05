@@ -416,9 +416,11 @@ cleaned_text
 
 Interpretation:
 
-- `text`: original/current message text field.
-- `raw_text`: preserved source content for reprocessing.
-- `cleaned_text`: derived processing output.
+- `raw_text`: original Telegram content as extracted by the crawler; kept as the source for reprocessing and raw-based duplicate detection.
+- `cleaned_text`: derived output of `processing.cleaner.clean_text`, which currently normalizes whitespace only (no emoji removal).
+- `text`: legacy compatibility copy. It initially mirrors `raw_text` and, after successful processing, mirrors `cleaned_text`. Historical, pending and independently edited rows may differ; SQL `NULL` and `''` are distinct.
+
+**Do not drop or rename `messages.text` in this phase.** See [Message text lifecycle and read-only audit](TEXT_LIFECYCLE_AUDIT.md) for exact source/consumer references and a no-write integrity audit.
 
 Never use `cleaned_text` as a replacement for the raw source when implementing duplicate detection or future reprocessing rules.
 

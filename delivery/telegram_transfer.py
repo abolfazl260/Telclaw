@@ -93,7 +93,8 @@ def get_ready_transfer_ads(limit=100):
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username
+            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username,
+                        m.raw_text, m.text
                  FROM transferlist t
                  INNER JOIN messages m ON m.id = t.processed_message_id
                 WHERE m.processing_status = 'processed'
@@ -119,7 +120,8 @@ def get_unsent_transfer_ads(limit=20, offset=0):
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username
+            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username,
+                        m.raw_text, m.text
                  FROM transferlist t
                  INNER JOIN messages m ON m.id = t.processed_message_id
                 WHERE NOT EXISTS (
@@ -166,7 +168,8 @@ def get_latest_transfer_ads(limit=20):
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username
+            """SELECT t.*, m.channel_username, m.message_id, m.message_link, m.sender_username,
+                        m.raw_text, m.text
                  FROM transferlist t
                  INNER JOIN messages m ON m.id = t.processed_message_id
                 ORDER BY t.id DESC
@@ -217,6 +220,38 @@ def _format_number(value):
     except (TypeError, ValueError):
         pass
     return str(value)
+
+
+def _clean_description(value):
+    if value is None:
+        return ""
+    text = str(value)
+    emoji_pattern = re.compile(
+        "["
+        "\\U0001F1E6-\\U0001F1FF"
+        "\\U0001F300-\\U0001F5FF"
+        "\\U0001F600-\\U0001F64F"
+        "\\U0001F680-\\U0001F6FF"
+        "\\U0001F700-\\U0001F77F"
+        "\\U0001F780-\\U0001F7FF"
+        "\\U0001F800-\\U0001F8FF"
+        "\\U0001F900-\\U0001F9FF"
+        "\\U0001FA00-\\U0001FAFF"
+        "\\u2600-\\u26FF"
+        "\\u2700-\\u27BF"
+        "]+",
+        flags=re.UNICODE,
+    )
+    text = emoji_pattern.sub("", text)
+    text = "".join(
+        char for char in text
+        if ord(char) not in {0xFE0E, 0xFE0F, 0x200D, 0x20E3}
+    )
+    cleaned_lines = []
+    for line in text.splitlines():
+        words = [word for word in line.split() if not word.startswith("#")]
+        cleaned_lines.append(" ".join(words))
+    return "\n".join(cleaned_lines).strip()
 
 
 def _gregorian_to_jalali(gy, gm, gd):
@@ -290,9 +325,9 @@ def _format_transport(value):
 def _format_transfer_role(value):
     text = str(value or "").strip().lower()
     if text == "passenger":
-        return "مسافر"
+        return "Passenger"
     if text == "shipper":
-        return "ارسال‌کننده بار"
+        return "Shipper"
     return ""
 
 
@@ -314,67 +349,69 @@ def _format_location(city, country):
 
 
 def format_transfer_ad(record):
-    """Build the channel-facing Persian transfer-ad format without a title."""
+    """Build the channel-facing transfer-ad format with English fixed labels."""
     origin = str(record.get("origin_city") or "").strip()
     destination = str(record.get("destination_city") or "").strip()
 
-    route = " → ".join(
-        part for part in (
-            _format_location(origin, record.get("origin_country")),
-            _format_location(destination, record.get("destination_country")),
-        ) if part
-    )
-    lines = [route] if route else []
+    lines = []
+    if origin:
+        flag = _country_flag(record.get("origin_country"))
+        lines.append(f"{flag + ' ' if flag else ''}Origin: {origin}")
+    if destination:
+        flag = _country_flag(record.get("destination_country"))
+        lines.append(f"{flag + ' ' if flag else ''}Destination: {destination}")
 
     role = _format_transfer_role(record.get("transfer_role"))
     if role:
-        lines.append(f"👤 نقش: {role}")
+        lines.append(f"👤 Role: {role}")
     if record.get("cargo_type"):
-        lines.append(f"📦 نوع بار: {record['cargo_type']}")
+        lines.append(f"📦 Cargo Type: {record['cargo_type']}")
     if record.get("weight") is not None:
         weight = _format_number(record["weight"])
         unit = str(record.get("weight_unit") or "").strip()
-        lines.append(f"⚖️ وزن: {weight}{(' ' + unit) if unit else ''}")
+        lines.append(f"⚖️ Weight: {weight}{(' ' + unit) if unit else ''}")
     if record.get("quantity") is not None:
-        lines.append(f"📦 تعداد: {_format_number(record['quantity'])}")
+        lines.append(f"📦 Quantity: {_format_number(record['quantity'])}")
     if record.get("volume") is not None:
         volume = _format_number(record["volume"])
         unit = str(record.get("volume_unit") or "m³").strip()
-        lines.append(f"📏 حجم: {volume} {unit}")
+        lines.append(f"📏 Volume: {volume} {unit}")
     if record.get("transport_type"):
-        lines.append(f"✈️ نوع حمل: {_format_transport(record['transport_type'])}")
+        lines.append(f"✈️ Transport Type: {_format_transport(record['transport_type'])}")
     if record.get("airline"):
-        lines.append(f"✈️ شرکت هواپیمایی: {record['airline']}")
+        lines.append(f"✈️ Airline: {record['airline']}")
     if record.get("flight_number"):
-        lines.append(f"🔢 شماره پرواز: {record['flight_number']}")
+        lines.append(f"🔢 Flight Number: {record['flight_number']}")
     if record.get("departure_date"):
-        lines.append(f"📅 تاریخ ارسال: {_format_departure_date(record['departure_date'])}")
+        lines.append(f"📅 Departure Date: {_format_departure_date(record['departure_date'])}")
     if record.get("arrival_date"):
-        lines.append(f"📅 تاریخ رسیدن: {_format_departure_date(record['arrival_date'])}")
+        lines.append(f"📅 Arrival Date: {_format_departure_date(record['arrival_date'])}")
     if record.get("price") is not None:
         currency = str(record.get("currency") or "").strip()
         suffix = f" {currency}" if currency else ""
-        lines.append(f"💰 هزینه: {_format_number(record['price'])}{suffix}")
-    if record.get("description"):
-        lines.append(f"📝 توضیحات:\n{str(record['description']).strip()}")
+        lines.append(f"💰 Price: {_format_number(record['price'])}{suffix}")
+
+    description = _clean_description(record.get("description"))
+    if description:
+        lines.append(f"📝 Description:\n{description}")
+
     if record.get("features"):
         features = record["features"]
         if isinstance(features, (list, tuple)):
             features = [str(item).strip() for item in features if str(item).strip()]
             if features:
-                lines.append("✨ ویژگی‌ها:\n" + "\n".join(f"• {item}" for item in features))
+                lines.append("✨ Features:\n" + "\n".join(f"• {item}" for item in features))
         elif str(features).strip():
-            lines.append(f"✨ ویژگی‌ها:\n{str(features).strip()}")
+            lines.append(f"✨ Features:\n{str(features).strip()}")
     username = str(record.get("sender_username") or "").strip()
     if username:
         if not username.startswith("@"):
             username = "@" + username
-        lines.append(f"👤 تماس: {username}")
+        lines.append(f"👤 Contact: {username}")
     elif record.get("contact"):
-        lines.append(f"👤 تماس: {_mask_contact(record['contact'])}")
+        lines.append(f"👤 Contact: {_mask_contact(record['contact'])}")
 
     return "\n\n".join(lines)
-
 
 async def send_transfer_ads(client, target_channel, limit=20):
     """Send unsent transfer ads to one Telegram channel and persist each result."""

@@ -10,6 +10,7 @@ import time
 
 import config
 from ai.provider_manager import AIProviderManager
+from ai.text_source import select_source_text
 from ai.extractor import AIExtractionError
 from storage.message_repository import MessageRepository
 
@@ -23,11 +24,21 @@ class CategoryClassificationService:
         self.repository = repository or MessageRepository()
         # classifier remains an injection alias for backwards-compatible callers.
         self.provider_manager = provider_manager or AIProviderManager(provider=classifier)
-        self.batch_size = int(batch_size or config.AI_CLASSIFICATION_BATCH_SIZE)
+        # An explicitly injected batch size remains fixed for tests/special callers.
+        # Normal runtime instances resolve the current config value on every run so
+        # Back Office changes take effect without rebuilding the service.
+        self.batch_size = int(batch_size) if batch_size is not None else None
+
+    def _effective_batch_size(self, limit=None):
+        return max(1, int(
+            limit
+            if limit is not None
+            else (self.batch_size if self.batch_size is not None else config.AI_CLASSIFICATION_BATCH_SIZE)
+        ))
 
     @staticmethod
     def _source_text(record):
-        return (record.get("cleaned_text") or record.get("text") or record.get("raw_text") or "").strip()
+        return select_source_text(record)
 
     @staticmethod
     def _parse_wait_from_error(text):
@@ -167,24 +178,104 @@ class CategoryClassificationService:
                 failed += 1
         return {"processed": processed, "failed": failed, "skipped": skipped, "stopped": False}
 
+    def _process_all_pending(self, limit=None, channel_username=None, should_stop=None, *, progress=False):
+        batch_size = self._effective_batch_size(limit)
+        total_found = processed = failed = skipped = 0
+        stopped = False
+        batch_number = 0
+
+        while True:
+            if should_stop and should_stop():
+                stopped = True
+                break
+
+            records = self.repository.get_classification_pending(
+                limit=batch_size,
+                channel_username=channel_username,
+            )
+            if not records:
+                break
+
+            batch_number += 1
+            if progress:
+                print(
+                    f"[AI CLASSIFICATION QUEUE] batch={batch_number} "
+                    f"size={len(records)} batch_size={batch_size}"
+                )
+
+            stats = self._process_batch(
+                records,
+                progress=progress,
+                should_stop=should_stop,
+            )
+            total_found += len(records)
+            processed += int(stats.get("processed") or 0)
+            failed += int(stats.get("failed") or 0)
+            skipped += int(stats.get("skipped") or 0)
+
+            if stats.get("stopped"):
+                stopped = True
+                break
+
+            # A failed classification remains retryable until its retry limit is
+            # exhausted. Do not immediately pick the same failed rows again in
+            # this cycle; defer retries to the next scheduler cycle to avoid
+            # hammering an unhealthy provider and burning all retries at once.
+            if stats.get("failed"):
+                break
+
+        remaining = len(self.repository.get_classification_pending(
+            limit=batch_size,
+            channel_username=channel_username,
+        ))
+        if progress:
+            print(
+                f"[AI CLASSIFICATION QUEUE] finished | found={total_found} "
+                f"processed={processed} skipped={skipped} failed={failed} "
+                f"remaining={remaining} stopped={stopped}"
+            )
+        return {
+            "found": total_found,
+            "processed": processed,
+            "failed": failed,
+            "skipped": skipped,
+            "stopped": stopped,
+            "disabled": False,
+            "remaining": remaining,
+        }
+
     def process_pending(self, limit=None, channel_username=None, should_stop=None):
         if not config.AI_CLASSIFICATION_ENABLED:
             return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True}
-        limit = int(limit or self.batch_size)
-        records = self.repository.get_classification_pending(limit=limit, channel_username=channel_username)
-        stats = self._process_batch(records, should_stop=should_stop)
-        return {"found": len(records), **stats, "disabled": False}
+        stats = self._process_all_pending(
+            limit=limit,
+            channel_username=channel_username,
+            should_stop=should_stop,
+            progress=False,
+        )
+        # Preserve the historical process_pending() response shape for callers
+        # that compare the result exactly.
+        stats.pop("remaining", None)
+        return stats
 
     def process_pending_with_stats(self, limit=None, channel_username=None, should_stop=None):
         if not config.AI_CLASSIFICATION_ENABLED:
             print("[AI CLASSIFICATION] disabled; skipping classification queue.")
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True}
-        limit = int(limit or self.batch_size)
-        records = self.repository.get_classification_pending(limit=limit, channel_username=channel_username)
-        if not records:
-            return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": False}
-        stats = self._process_batch(records, progress=True, should_stop=should_stop)
-        return {"found": len(records), **stats, "disabled": False}
+            return {
+                "found": 0,
+                "processed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "stopped": False,
+                "disabled": True,
+                "remaining": 0,
+            }
+        return self._process_all_pending(
+            limit=limit,
+            channel_username=channel_username,
+            should_stop=should_stop,
+            progress=True,
+        )
 
 
 __all__ = ["CategoryClassificationService"]

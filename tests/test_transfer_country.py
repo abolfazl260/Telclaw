@@ -34,9 +34,9 @@ def test_country_rich_message_contains_country_counts(monkeypatch):
     assert "Published in the last 30 days: <b>0</b>" in message
     assert "Origin" in message
     assert "Destination" in message
-    assert "Iran" in message
-    assert "Germany" in message
-    assert "Turkey" in message
-    assert "Canada" in message
+    assert "Iran 🇮🇷" in message
+    assert "Germany 🇩🇪" in message
+    assert "Turkey 🇹🇷" in message
+    assert "Canada 🇨🇦" in message
     assert ">2<" in message
     assert ">1<" in message

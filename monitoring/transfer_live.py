@@ -215,7 +215,7 @@ def _fetch_published_transfer_stats() -> dict:
         if "telegram_transfer_publications" in tables:
             latest_number = int(conn.execute(
                 "SELECT COALESCE(MAX(ad_number), 0) AS latest_number "
-                "FROM telegram_transfer_publications WHERE status='sent'"
+                "FROM telegram_transfer_publications"
             ).fetchone()["latest_number"] or 0)
         return {
             "latest_number": latest_number,
@@ -317,10 +317,11 @@ def _build_country_messages():
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
     if not summary:
         return [{"html": (
-            "<h1>Advertio Cargo &amp; Passenger Requests</h1>"
-            "<p>📤 Latest published flight number: <b>{:,}</b></p>".format(published["latest_number"])
-            + "<p>📅 Published in the last 7 days: <b>{:,}</b></p>".format(published["last_7_days"])
-            + "<p>📅 Published in the last 30 days: <b>{:,}</b></p>".format(published["last_30_days"])
+            "<h1>Advertio Cargo &amp; Passenger</h1>"
+            + "<p>📊 Active ads: <b>0</b></p>"
+            + "<p>📅 Last 7 days: <b>{:,}</b></p>".format(published["last_7_days"])
+            + "<p>📅 Last 30 days: <b>{:,}</b></p>".format(published["last_30_days"])
+            + "<p>📤 Total ads: <b>{:,}</b></p>".format(published["latest_number"])
             + "<p><b>@advertio_cargo</b></p>"
             "<p>⚠️ No open transfer requests at the moment.</p>"
         )}]
@@ -345,11 +346,11 @@ def _build_country_messages():
         )
 
     return [{"html": (
-        "<h1>Advertio Cargo &amp; Passenger Requests</h1>"
-        f"<p>📊 Total active requests: <b>{total:,}</b></p>"
-        f"<p>📤 Latest published flight number: <b>{published['latest_number']:,}</b></p>"
-        f"<p>📅 Published in the last 7 days: <b>{published['last_7_days']:,}</b></p>"
-        f"<p>📅 Published in the last 30 days: <b>{published['last_30_days']:,}</b></p>"
+        "<h1>Advertio Cargo &amp; Passenger</h1>"
+        f"<p>📊 Active ads: <b>{total:,}</b></p>"
+        f"<p>📅 Last 7 days: <b>{published['last_7_days']:,}</b></p>"
+        f"<p>📅 Last 30 days: <b>{published['last_30_days']:,}</b></p>"
+        f"<p>📤 Total ads: <b>{published['latest_number']:,}</b></p>"
         "<table bordered striped compact>"
         + "".join(rows)
         + "</table>"

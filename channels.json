@@ -475,12 +475,6 @@
       "description": "Passenger cargo and luggage shipping coordination."
     },
     {
-      "name": "Deliver 2 You",
-      "username": "deliver2you",
-      "country": "International",
-      "description": "Passenger cargo and delivery coordination."
-    },
-    {
       "name": "Pets to Canada",
       "username": "petstocanada",
       "country": "Canada",
@@ -503,6 +497,72 @@
       "username": "IranCanadaFlights",
       "country": "Canada",
       "description": "Flight and passenger travel coordination between Iran and Canada."
+    },
+    {
+      "name": "air_cargo070",
+      "username": "air_cargo070",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "Deliver 2 You",
+      "username": "deliver2you",
+      "country": "International",
+      "description": "Passenger cargo and delivery coordination."
+    },
+    {
+      "name": "RelocationMontenegro",
+      "username": "RelocationMontenegro",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "pkg_cn",
+      "username": "pkg_cn",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "PostSerbia",
+      "username": "PostSerbia",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "dubaisend",
+      "username": "dubaisend",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "posylka_poputchik_turkey",
+      "username": "posylka_poputchik_turkey",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "karavanme",
+      "username": "karavanme",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "germanyrussland",
+      "username": "germanyrussland",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "DeliveryCyprus",
+      "username": "DeliveryCyprus",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "Poputki_transferEuropa",
+      "username": "Poputki_transferEuropa",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
     }
   ],
   "Canada_Language": [
@@ -819,6 +879,44 @@
       "username": "canada_shop_2018",
       "country": "Canada",
       "description": "Online shopping channel serving Iranian shoppers in Canada."
+    }
+  ],
+  "soon": [
+    {
+      "name": "KuryerTurkey",
+      "username": "KuryerTurkey",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "happy_courier_tm_1",
+      "username": "happy_courier_tm_1",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "luggage_surfing_ge",
+      "username": "luggage_surfing_ge",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "taxivolg",
+      "username": "taxivolg",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "PoputchikRFDNR",
+      "username": "PoputchikRFDNR",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "Deutschland_Fahrt",
+      "username": "Deutschland_Fahrt",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
     }
   ]
 }

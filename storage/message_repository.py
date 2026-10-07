@@ -1,3 +1,5 @@
+"""Persistence abstraction for the independent Telclaw pipeline queues."""
+
 from storage import database
 import config
 from storage.location_normalizer import normalize_location

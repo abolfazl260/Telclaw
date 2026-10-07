@@ -181,21 +181,44 @@ def _fetch_published_transfer_stats() -> dict:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        if "telegram_transfer_publications" not in tables:
+        sources = []
+        if "telegram_transfer_publications" in tables:
+            sources.append(
+                "SELECT message_row_id AS message_id, processed_at AS published_at "
+                "FROM telegram_transfer_publications WHERE status='sent'"
+            )
+        if "publishing_deliveries" in tables and "messages" in tables:
+            sources.append(
+                "SELECT d.message_id, d.updated_at AS published_at "
+                "FROM publishing_deliveries d "
+                "JOIN messages m ON m.id=d.message_id "
+                "WHERE d.status='sent' AND m.ai_category='transferlist'"
+            )
+        if not sources:
             return {"latest_number": 0, "last_7_days": 0, "last_30_days": 0}
         now = datetime.now(timezone.utc)
         since_7 = (now - timedelta(days=7)).isoformat()
         since_30 = (now - timedelta(days=30)).isoformat()
+        published_query = (
+            "SELECT message_id, MAX(published_at) AS published_at FROM ("
+            + " UNION ALL ".join(sources)
+            + ") GROUP BY message_id"
+        )
+        params = (since_7, since_30)
         row = conn.execute(
-            """SELECT COALESCE(MAX(ad_number), 0) AS latest_number,
-                      SUM(CASE WHEN processed_at >= ? THEN 1 ELSE 0 END) AS last_7_days,
-                      SUM(CASE WHEN processed_at >= ? THEN 1 ELSE 0 END) AS last_30_days
-                 FROM telegram_transfer_publications
-                WHERE status='sent'""",
-            (since_7, since_30),
+            """SELECT SUM(CASE WHEN datetime(published_at) >= datetime(?) THEN 1 ELSE 0 END) AS last_7_days,
+                      SUM(CASE WHEN datetime(published_at) >= datetime(?) THEN 1 ELSE 0 END) AS last_30_days
+                 FROM (""" + published_query + ") published",
+            params,
         ).fetchone()
+        latest_number = 0
+        if "telegram_transfer_publications" in tables:
+            latest_number = int(conn.execute(
+                "SELECT COALESCE(MAX(ad_number), 0) AS latest_number "
+                "FROM telegram_transfer_publications WHERE status='sent'"
+            ).fetchone()["latest_number"] or 0)
         return {
-            "latest_number": int(row["latest_number"] or 0),
+            "latest_number": latest_number,
             "last_7_days": int(row["last_7_days"] or 0),
             "last_30_days": int(row["last_30_days"] or 0),
         }
@@ -315,8 +338,8 @@ def _build_country_messages():
         destination_name = COUNTRY_NAMES.get(destination, destination if destination != "??" else "نامشخص")
         rows.append(
             "<tr>"
-            + _cell(f"{_country_flag(origin)} {origin_name}")
-            + _cell(f"{_country_flag(destination)} {destination_name}")
+            + _cell(f"{origin_name} {_country_flag(origin)}")
+            + _cell(f"{destination_name} {_country_flag(destination)}")
             + _cell(f"{count:,}", align="center")
             + "</tr>"
         )

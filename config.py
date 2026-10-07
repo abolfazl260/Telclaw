@@ -85,6 +85,8 @@ AI_RETRY_COUNT = _int_env("AI_RETRY_COUNT", 3, minimum=0)
 AI_TIMEOUT_SECONDS = _float_env("AI_TIMEOUT_SECONDS", 60, minimum=1)
 AI_COOLDOWN_SECONDS = _float_env("AI_COOLDOWN_SECONDS", 200, minimum=0)
 AI_RECOVERY_INTERVAL_SECONDS = _float_env("AI_RECOVERY_INTERVAL_SECONDS", 60, minimum=1)
+# A stage claim older than this is considered abandoned during startup recovery.
+QUEUE_PROCESSING_TIMEOUT_SECONDS = _float_env("TELCLAW_QUEUE_PROCESSING_TIMEOUT_SECONDS", 3600, minimum=1)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("TELCLAW_GROQ_MODEL", "").strip()

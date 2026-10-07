@@ -22,6 +22,9 @@ def _migrate_messages_table(cursor):
     cursor.execute("UPDATE messages SET processing_status=CASE processing_status WHEN 'collected' THEN 'pending' WHEN 'processed' THEN 'processed' WHEN 'processing_failed' THEN 'failed' WHEN 'ai_processed' THEN 'processed' WHEN 'ai_failed' THEN 'processed' ELSE processing_status END")
     cursor.execute("UPDATE messages SET classification_status=CASE WHEN classification_category IS NOT NULL THEN 'processed' WHEN processing_status='processed' AND COALESCE(classification_status,'waiting')='waiting' THEN 'pending' ELSE COALESCE(classification_status,'waiting') END")
     cursor.execute("UPDATE messages SET ai_status=CASE WHEN processing_status='processed' AND classification_status='processed' AND classification_category IN ('housinglist','transferlist','joblist') AND ai_processed_at IS NULL THEN 'pending' WHEN ai_processed_at IS NOT NULL AND ai_error IS NOT NULL THEN 'failed' WHEN ai_processed_at IS NOT NULL AND ai_status NOT IN ('pending','processing') THEN 'processed' ELSE COALESCE(ai_status,'waiting') END")
+    cursor.execute("UPDATE messages SET processing_started_at=NULL WHERE processing_status <> 'processing' OR processing_status IS NULL")
+    cursor.execute("UPDATE messages SET classification_started_at=NULL WHERE classification_status <> 'processing' OR classification_status IS NULL")
+    cursor.execute("UPDATE messages SET ai_started_at=NULL WHERE ai_status <> 'processing' OR ai_status IS NULL")
 
 def _create_category_table(cursor,table,fields):
     columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]

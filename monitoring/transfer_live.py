@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import sqlite3
 from collections import OrderedDict
 from datetime import date, datetime
 from types import MethodType
@@ -170,6 +171,40 @@ def _fetch_active_country_summary():
     return _country_summary_rows(_fetch_active_rows())
 
 
+def _fetch_published_transfer_count() -> int:
+    """Count distinct transfer ads successfully published by either publisher."""
+    conn = database.get_connection()
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        sources = []
+        if "telegram_transfer_publications" in tables:
+            sources.append(
+                "SELECT message_row_id FROM telegram_transfer_publications "
+                "WHERE status='sent'"
+            )
+        if "publishing_deliveries" in tables:
+            sources.append(
+                "SELECT d.message_id FROM publishing_deliveries d "
+                "JOIN messages m ON m.id=d.message_id "
+                "WHERE d.status='sent' AND m.ai_category='transferlist'"
+            )
+        if not sources:
+            return 0
+        query = "SELECT COUNT(*) AS total FROM (" + " UNION ".join(sources) + ")"
+        try:
+            return int(conn.execute(query).fetchone()["total"] or 0)
+        except sqlite3.OperationalError:
+            # A partially initialized database has no publishable history yet.
+            return 0
+    finally:
+        conn.close()
+
+
 def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
     tag = "th" if header else "td"
     return f"<{tag} align=\"{align}\">{html.escape(str(text))}</{tag}>"
@@ -255,20 +290,22 @@ def _build_messages():
 def _build_country_messages():
     """Build Rich Messages for the active request country summary."""
     summary = _fetch_active_country_summary()
+    published_total = _fetch_published_transfer_count()
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
     if not summary:
         return [{"html": (
             "<h1>درخواست حمل بار و مسافر Advertio</h1>"
             "<p><b>@Advertio_cargo</b></p>"
-            "<p>⚠️ در حال حاضر درخواست باز حمل‌ونقل وجود ندارد.</p>"
+            "<p>⚠️ No open transfer requests at the moment.</p>"
+            f"<p>📤 Total published ads: <b>{published_total:,}</b></p>"
         )}]
 
     total = sum(count for _, count in summary)
     rows = [
         "<tr>"
-        + _cell("مبدا", header=True)
-        + _cell("مقصد", header=True)
-        + _cell("تعداد درخواست باز", header=True, align="center")
+        + _cell("Origin", header=True)
+        + _cell("Destination", header=True)
+        + _cell("Open Requests", header=True, align="center")
         + "</tr>"
     ]
     for (origin, destination), count in summary:
@@ -283,13 +320,14 @@ def _build_country_messages():
         )
 
     return [{"html": (
-        "<h1>درخواست حمل بار و مسافر Advertio</h1>"
+        "<h1>Advertio Cargo &amp; Passenger Requests</h1>"
         "<p><b>@Advertio_cargo</b></p>"
-        f"<p>📊 مجموع درخواست‌های باز: <b>{total:,}</b></p>"
+        f"<p>📊 Total open requests: <b>{total:,}</b></p>"
+        f"<p>📤 Total published ads: <b>{published_total:,}</b></p>"
         "<table bordered striped compact>"
         + "".join(rows)
         + "</table>"
-        f"<p>🕐 آخرین بروزرسانی: {generated} تهران</p>"
+        f"<p>🕐 Last updated: {generated} Tehran</p>"
     )}]
 
 

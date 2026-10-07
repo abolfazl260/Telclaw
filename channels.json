@@ -227,12 +227,6 @@
       "description": "Housing and real-estate listings."
     },
     {
-      "name": "Toronto Iranians",
-      "username": "Toronto_Iranians",
-      "country": "Canada",
-      "description": "Iranian community in Toronto with housing-related posts."
-    },
-    {
       "name": "Canada Home",
       "username": "CanadaHome",
       "country": "Canada",
@@ -481,10 +475,94 @@
       "description": "Passenger cargo and luggage shipping coordination."
     },
     {
+      "name": "Pets to Canada",
+      "username": "petstocanada",
+      "country": "Canada",
+      "description": "Pet transportation."
+    },
+    {
+      "name": "Baro Mosafer 2",
+      "username": "baromosafer2",
+      "country": "Canada",
+      "description": "Passenger travel and cargo coordination for Canada."
+    },
+    {
+      "name": "Canada Flights 1",
+      "username": "Canada_Flights1",
+      "country": "Canada",
+      "description": "Canada flight and passenger travel coordination."
+    },
+    {
+      "name": "Iran Canada Flights",
+      "username": "IranCanadaFlights",
+      "country": "Canada",
+      "description": "Flight and passenger travel coordination between Iran and Canada."
+    },
+    {
+      "name": "air_cargo070",
+      "username": "air_cargo070",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
       "name": "Deliver 2 You",
       "username": "deliver2you",
       "country": "International",
       "description": "Passenger cargo and delivery coordination."
+    },
+    {
+      "name": "RelocationMontenegro",
+      "username": "RelocationMontenegro",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "pkg_cn",
+      "username": "pkg_cn",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "PostSerbia",
+      "username": "PostSerbia",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "dubaisend",
+      "username": "dubaisend",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "posylka_poputchik_turkey",
+      "username": "posylka_poputchik_turkey",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "karavanme",
+      "username": "karavanme",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "germanyrussland",
+      "username": "germanyrussland",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "DeliveryCyprus",
+      "username": "DeliveryCyprus",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "Poputki_transferEuropa",
+      "username": "Poputki_transferEuropa",
+      "country": "International",
+      "description": "Passenger cargo, luggage, flight, and international delivery coordination."
     }
   ],
   "Canada_Language": [
@@ -579,12 +657,6 @@
   ],
   "Canada_Community": [
     {
-      "name": "Iranian Canada Affairs Group",
-      "username": "AFCANADA",
-      "country": "Canada",
-      "description": "Iranian community in Canada."
-    },
-    {
       "name": "Fanofa Canada Community",
       "username": "fanofa_canada",
       "country": "Canada",
@@ -607,6 +679,24 @@
       "username": "Move2Vancouver",
       "country": "Canada",
       "description": "Community for moving to and living in Vancouver."
+    },
+    {
+      "name": "Guelph Community Group",
+      "username": "Guelphian",
+      "country": "Canada",
+      "description": "Community group for residents of Guelph."
+    },
+    {
+      "name": "Ukrainian Ottawa CUAET Group",
+      "username": "ua_ottawa_cuaet",
+      "country": "Canada",
+      "description": "Ukrainian community in Ottawa."
+    },
+    {
+      "name": "Badbadak Canada Jobs Network",
+      "username": "badbadak_canada",
+      "country": "Canada",
+      "description": "Job posting and recruitment network in Canada."
     }
   ],
   "Canada_Other": [
@@ -629,12 +719,6 @@
       "description": "Classified ads."
     },
     {
-      "name": "Canada Shipping",
-      "username": "CanadaShipping",
-      "country": "Canada",
-      "description": "Shipping and cargo."
-    },
-    {
       "name": "V Women Canada",
       "username": "V_Women",
       "country": "Canada",
@@ -647,34 +731,16 @@
       "description": "Persian businesses."
     },
     {
-      "name": "Pets to Canada",
-      "username": "petstocanada",
-      "country": "Canada",
-      "description": "Pet transportation."
-    },
-    {
-      "name": "Guelph Community Group",
-      "username": "Guelphian",
-      "country": "Canada",
-      "description": "Community group for residents of Guelph."
-    },
-    {
       "name": "Russian Canada Forum",
       "username": "forum_canada",
       "country": "Canada",
       "description": "Russian-speaking community in Canada."
     },
     {
-      "name": "Ukrainian Ottawa CUAET Group",
-      "username": "ua_ottawa_cuaet",
+      "name": "Walcad",
+      "username": "walcad",
       "country": "Canada",
-      "description": "Ukrainian community in Ottawa."
-    },
-    {
-      "name": "Badbadak Canada Jobs Network",
-      "username": "badbadak_canada",
-      "country": "Canada",
-      "description": "Job posting and recruitment network in Canada."
+      "description": "Canada-related channel and community content."
     }
   ],
   "USA_Job": [
@@ -801,6 +867,56 @@
       "username": "onlineshop_italy",
       "country": "Italy",
       "description": "Online shopping channel serving Iranian shoppers in Italy."
+    },
+    {
+      "name": "Iroda Can Store",
+      "username": "iroda_can_store",
+      "country": "Canada",
+      "description": "Iranian online shopping channel serving Canada."
+    },
+    {
+      "name": "Canada Shop 2018",
+      "username": "canada_shop_2018",
+      "country": "Canada",
+      "description": "Online shopping channel serving Iranian shoppers in Canada."
+    }
+  ],
+  "soon": [
+    {
+      "name": "KuryerTurkey",
+      "username": "KuryerTurkey",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "happy_courier_tm_1",
+      "username": "happy_courier_tm_1",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "luggage_surfing_ge",
+      "username": "luggage_surfing_ge",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "taxivolg",
+      "username": "taxivolg",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "PoputchikRFDNR",
+      "username": "PoputchikRFDNR",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
+    },
+    {
+      "name": "Deutschland_Fahrt",
+      "username": "Deutschland_Fahrt",
+      "country": "International",
+      "description": "International passenger, luggage, and courier coordination."
     }
   ]
 }

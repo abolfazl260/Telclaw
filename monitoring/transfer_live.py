@@ -146,6 +146,26 @@ def _fetch_active_rows():
         conn.close()
 
 
+def _country_summary_rows(rows):
+    """Aggregate active transfer requests by origin and destination country."""
+    counts = {}
+    for row in rows:
+        origin = str(row["origin_country"] or "").strip().upper() or "??"
+        destination = str(row["destination_country"] or "").strip().upper() or "??"
+        key = (origin, destination)
+        counts[key] = counts.get(key, 0) + 1
+
+    return sorted(
+        counts.items(),
+        key=lambda item: item[0],
+    )
+
+
+def _fetch_active_country_summary():
+    """Return active requests grouped by origin/destination country."""
+    return _country_summary_rows(_fetch_active_rows())
+
+
 def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
     tag = "th" if header else "td"
     return f"<{tag} align=\"{align}\">{html.escape(str(text))}</{tag}>"
@@ -228,6 +248,45 @@ def _build_messages():
     return chunks
 
 
+def _build_country_messages():
+    """Build Rich Messages for the active request country summary."""
+    summary = _fetch_active_country_summary()
+    generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
+    if not summary:
+        return [{"html": (
+            "<h1>🌍 خلاصه درخواست‌های فعال</h1>"
+            "<p>⚠️ در حال حاضر درخواست باز حمل‌ونقل وجود ندارد.</p>"
+        )}]
+
+    total = sum(count for _, count in summary)
+    rows = [
+        "<tr>"
+        + _cell("مبدا", header=True)
+        + _cell("مقصد", header=True)
+        + _cell("تعداد درخواست باز", header=True, align="center")
+        + "</tr>"
+    ]
+    for (origin, destination), count in summary:
+        origin_name = COUNTRY_NAMES.get(origin, origin if origin != "??" else "نامشخص")
+        destination_name = COUNTRY_NAMES.get(destination, destination if destination != "??" else "نامشخص")
+        rows.append(
+            "<tr>"
+            + _cell(f"{_country_flag(origin)} {origin_name}")
+            + _cell(f"{_country_flag(destination)} {destination_name}")
+            + _cell(f"{count:,}", align="center")
+            + "</tr>"
+        )
+
+    return [{"html": (
+        "<h1>🌍 خلاصه درخواست‌های فعال</h1>"
+        f"<p>📊 مجموع درخواست‌های باز: <b>{total:,}</b></p>"
+        "<table bordered striped compact>"
+        + "".join(rows)
+        + "</table>"
+        f"<p>🕐 آخرین بروزرسانی: {generated} تهران</p>"
+    )}]
+
+
 async def _send_rich(monitor, chat_id: int, rich_message: dict) -> None:
     """Send a native Telegram Rich Message through Bot API 10.3."""
     await monitor._api(
@@ -248,6 +307,11 @@ async def _send_transfer_live(monitor, chat_id: int) -> None:
         await _send_rich(monitor, chat_id, message)
 
 
+async def _send_transfer_country(monitor, chat_id: int) -> None:
+    for message in _build_country_messages():
+        await _send_rich(monitor, chat_id, message)
+
+
 def install_transfer_live_command(monitor):
     """Install /transferlive without creating a second Telegram polling loop."""
     original_handle_update = monitor._handle_update
@@ -259,7 +323,7 @@ def install_transfer_live_command(monitor):
         chat_id = chat.get("id")
         text = (message.get("text") or "").strip().lower()
         command = text.split(maxsplit=1)[0].split("@", 1)[0] if text else ""
-        if command != "/transferlive":
+        if command not in {"/transferlive", "/transfercountry"}:
             return await original_handle_update(update)
 
         if not self._is_admin_private_chat(chat, message.get("from")):
@@ -268,7 +332,10 @@ def install_transfer_live_command(monitor):
             await self._send(chat_id, "⛔ ابتدا با /start دریافت گزارش‌های Telclaw را فعال کنید.")
             return
 
-        await _send_transfer_live(self, chat_id)
+        if command == "/transfercountry":
+            await _send_transfer_country(self, chat_id)
+        else:
+            await _send_transfer_live(self, chat_id)
 
     async def register_commands(self):
         await original_register_commands()
@@ -283,6 +350,7 @@ def install_transfer_live_command(monitor):
             {"command": "database", "description": "Download full SQLite database"},
             {"command": "backoffice", "description": "Open private publishing back office"},
             {"command": "transferlive", "description": "نمایش آگهی‌های فعال حمل‌ونقل"},
+            {"command": "transfercountry", "description": "خلاصه درخواست‌ها بر اساس کشورهای مبدا و مقصد"},
         ]
         try:
             await self._api("setMyCommands", {"commands": commands})

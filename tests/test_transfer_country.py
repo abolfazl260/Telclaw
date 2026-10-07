@@ -26,9 +26,12 @@ def test_country_rich_message_contains_country_counts(monkeypatch):
 
     message = _build_country_messages()[0]["html"]
 
-    assert "درخواست حمل بار و مسافر Advertio" in message
+    assert "Advertio Cargo &amp; Passenger Requests" in message
     assert "@Advertio_cargo" in message
-    assert "مجموع درخواست‌های باز: <b>3</b>" in message
+    assert "Total open requests: <b>3</b>" in message
+    assert "Total published ads: <b>0</b>" in message
+    assert "Origin" in message
+    assert "Destination" in message
     assert "ایران" in message
     assert "آلمان" in message
     assert "ترکیه" in message

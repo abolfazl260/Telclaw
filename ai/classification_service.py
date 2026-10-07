@@ -131,8 +131,11 @@ class CategoryClassificationService:
                 self._mark_no_text(record)
                 skipped += 1
                 continue
-            self.repository.mark_classification_processing(record["message_id"], record["channel_username"])
-            candidates.append({"message_id": record["message_id"], "text": source_text, "record": record})
+            claimed = self.repository.mark_classification_processing(
+                record["message_id"], record["channel_username"]
+            )
+            if claimed is not False:
+                candidates.append({"message_id": record["message_id"], "text": source_text, "record": record})
 
         if not candidates:
             return {"processed": 0, "failed": 0, "skipped": skipped, "stopped": False}

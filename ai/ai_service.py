@@ -195,7 +195,11 @@ class AIProcessingService:
                 if progress: self._print_message_status(index, offset + total, record, category, "skipped", reason="no_text")
                 continue
             logger.info("AI Classification: %s | AI Extraction: processing %s", category, category)
-            self.repository.mark_ai_processing(record["message_id"], record["channel_username"])
+            claimed = self.repository.mark_ai_processing(
+                record["message_id"], record["channel_username"]
+            )
+            if claimed is False:
+                continue
             try:
                 result = self._extract_with_retry(source_text, record, category, progress=False)
                 if result.get("category") != category:

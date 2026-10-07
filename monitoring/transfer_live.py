@@ -152,6 +152,10 @@ def _country_summary_rows(rows):
     for row in rows:
         origin = str(row["origin_country"] or "").strip().upper() or "??"
         destination = str(row["destination_country"] or "").strip().upper() or "??"
+        # Requests without a known origin or destination are not actionable
+        # country-summary rows and must not affect the displayed total.
+        if origin == "??" or destination == "??":
+            continue
         key = (origin, destination)
         counts[key] = counts.get(key, 0) + 1
 
@@ -254,7 +258,8 @@ def _build_country_messages():
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
     if not summary:
         return [{"html": (
-            "<h1>🌍 خلاصه درخواست‌های فعال</h1>"
+            "<h1>درخواست حمل بار و مسافر Advertio</h1>"
+            "<p><b>@Advertio_cargo</b></p>"
             "<p>⚠️ در حال حاضر درخواست باز حمل‌ونقل وجود ندارد.</p>"
         )}]
 
@@ -278,7 +283,8 @@ def _build_country_messages():
         )
 
     return [{"html": (
-        "<h1>🌍 خلاصه درخواست‌های فعال</h1>"
+        "<h1>درخواست حمل بار و مسافر Advertio</h1>"
+        "<p><b>@Advertio_cargo</b></p>"
         f"<p>📊 مجموع درخواست‌های باز: <b>{total:,}</b></p>"
         "<table bordered striped compact>"
         + "".join(rows)

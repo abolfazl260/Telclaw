@@ -485,6 +485,30 @@
       "username": "deliver2you",
       "country": "International",
       "description": "Passenger cargo and delivery coordination."
+    },
+    {
+      "name": "Pets to Canada",
+      "username": "petstocanada",
+      "country": "Canada",
+      "description": "Pet transportation."
+    },
+    {
+      "name": "Baro Mosafer 2",
+      "username": "baromosafer2",
+      "country": "Canada",
+      "description": "Passenger travel and cargo coordination for Canada."
+    },
+    {
+      "name": "Canada Flights 1",
+      "username": "Canada_Flights1",
+      "country": "Canada",
+      "description": "Canada flight and passenger travel coordination."
+    },
+    {
+      "name": "Iran Canada Flights",
+      "username": "IranCanadaFlights",
+      "country": "Canada",
+      "description": "Flight and passenger travel coordination between Iran and Canada."
     }
   ],
   "Canada_Language": [
@@ -607,6 +631,24 @@
       "username": "Move2Vancouver",
       "country": "Canada",
       "description": "Community for moving to and living in Vancouver."
+    },
+    {
+      "name": "Guelph Community Group",
+      "username": "Guelphian",
+      "country": "Canada",
+      "description": "Community group for residents of Guelph."
+    },
+    {
+      "name": "Ukrainian Ottawa CUAET Group",
+      "username": "ua_ottawa_cuaet",
+      "country": "Canada",
+      "description": "Ukrainian community in Ottawa."
+    },
+    {
+      "name": "Badbadak Canada Jobs Network",
+      "username": "badbadak_canada",
+      "country": "Canada",
+      "description": "Job posting and recruitment network in Canada."
     }
   ],
   "Canada_Other": [
@@ -675,6 +717,12 @@
       "username": "badbadak_canada",
       "country": "Canada",
       "description": "Job posting and recruitment network in Canada."
+    },
+    {
+      "name": "Walcad",
+      "username": "walcad",
+      "country": "Canada",
+      "description": "Canada-related channel and community content."
     }
   ],
   "USA_Job": [
@@ -801,6 +849,18 @@
       "username": "onlineshop_italy",
       "country": "Italy",
       "description": "Online shopping channel serving Iranian shoppers in Italy."
+    },
+    {
+      "name": "Iroda Can Store",
+      "username": "iroda_can_store",
+      "country": "Canada",
+      "description": "Iranian online shopping channel serving Canada."
+    },
+    {
+      "name": "Canada Shop 2018",
+      "username": "canada_shop_2018",
+      "country": "Canada",
+      "description": "Online shopping channel serving Iranian shoppers in Canada."
     }
   ]
 }

@@ -4,7 +4,7 @@ from __future__ import annotations
 import html
 import sqlite3
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from types import MethodType
 from zoneinfo import ZoneInfo
 
@@ -13,14 +13,14 @@ from storage import database
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_RICH_MESSAGE_LENGTH = 30000
 COUNTRY_NAMES = {
-    "IR": "ایران", "DE": "آلمان", "TR": "ترکیه", "CA": "کانادا", "US": "آمریکا",
-    "GB": "انگلستان", "FR": "فرانسه", "IT": "ایتالیا", "ES": "اسپانیا", "NL": "هلند",
-    "BE": "بلژیک", "AT": "اتریش", "CH": "سوئیس", "SE": "سوئد", "NO": "نروژ",
-    "DK": "دانمارک", "FI": "فنلاند", "PL": "لهستان", "GR": "یونان", "RU": "روسیه",
-    "UA": "اوکراین", "AE": "امارات", "QA": "قطر", "SA": "عربستان", "KW": "کویت",
-    "OM": "عمان", "IQ": "عراق", "AZ": "آذربایجان", "GE": "گرجستان", "AM": "ارمنستان",
-    "CN": "چین", "JP": "ژاپن", "KR": "کره جنوبی", "IN": "هند", "PK": "پاکستان",
-    "AF": "افغانستان",
+    "IR": "Iran", "DE": "Germany", "TR": "Turkey", "CA": "Canada", "US": "United States",
+    "GB": "United Kingdom", "FR": "France", "IT": "Italy", "ES": "Spain", "NL": "Netherlands",
+    "BE": "Belgium", "AT": "Austria", "CH": "Switzerland", "SE": "Sweden", "NO": "Norway",
+    "DK": "Denmark", "FI": "Finland", "PL": "Poland", "GR": "Greece", "RU": "Russia",
+    "UA": "Ukraine", "AE": "United Arab Emirates", "QA": "Qatar", "SA": "Saudi Arabia", "KW": "Kuwait",
+    "OM": "Oman", "IQ": "Iraq", "AZ": "Azerbaijan", "GE": "Georgia", "AM": "Armenia",
+    "CN": "China", "JP": "Japan", "KR": "South Korea", "IN": "India", "PK": "Pakistan",
+    "AF": "Afghanistan",
 }
 
 
@@ -171,8 +171,8 @@ def _fetch_active_country_summary():
     return _country_summary_rows(_fetch_active_rows())
 
 
-def _fetch_published_transfer_count() -> int:
-    """Count distinct transfer ads successfully published by either publisher."""
+def _fetch_published_transfer_stats() -> dict:
+    """Return the latest flight number and recent publication counts."""
     conn = database.get_connection()
     try:
         tables = {
@@ -181,26 +181,26 @@ def _fetch_published_transfer_count() -> int:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-        sources = []
-        if "telegram_transfer_publications" in tables:
-            sources.append(
-                "SELECT message_row_id FROM telegram_transfer_publications "
-                "WHERE status='sent'"
-            )
-        if "publishing_deliveries" in tables:
-            sources.append(
-                "SELECT d.message_id FROM publishing_deliveries d "
-                "JOIN messages m ON m.id=d.message_id "
-                "WHERE d.status='sent' AND m.ai_category='transferlist'"
-            )
-        if not sources:
-            return 0
-        query = "SELECT COUNT(*) AS total FROM (" + " UNION ".join(sources) + ")"
-        try:
-            return int(conn.execute(query).fetchone()["total"] or 0)
-        except sqlite3.OperationalError:
-            # A partially initialized database has no publishable history yet.
-            return 0
+        if "telegram_transfer_publications" not in tables:
+            return {"latest_number": 0, "last_7_days": 0, "last_30_days": 0}
+        now = datetime.now(timezone.utc)
+        since_7 = (now - timedelta(days=7)).isoformat()
+        since_30 = (now - timedelta(days=30)).isoformat()
+        row = conn.execute(
+            """SELECT COALESCE(MAX(ad_number), 0) AS latest_number,
+                      SUM(CASE WHEN processed_at >= ? THEN 1 ELSE 0 END) AS last_7_days,
+                      SUM(CASE WHEN processed_at >= ? THEN 1 ELSE 0 END) AS last_30_days
+                 FROM telegram_transfer_publications
+                WHERE status='sent'""",
+            (since_7, since_30),
+        ).fetchone()
+        return {
+            "latest_number": int(row["latest_number"] or 0),
+            "last_7_days": int(row["last_7_days"] or 0),
+            "last_30_days": int(row["last_30_days"] or 0),
+        }
+    except sqlite3.OperationalError:
+        return {"latest_number": 0, "last_7_days": 0, "last_30_days": 0}
     finally:
         conn.close()
 
@@ -290,14 +290,16 @@ def _build_messages():
 def _build_country_messages():
     """Build Rich Messages for the active request country summary."""
     summary = _fetch_active_country_summary()
-    published_total = _fetch_published_transfer_count()
+    published = _fetch_published_transfer_stats()
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
     if not summary:
         return [{"html": (
-            "<h1>درخواست حمل بار و مسافر Advertio</h1>"
-            "<p><b>@Advertio_cargo</b></p>"
+            "<h1>Advertio Cargo &amp; Passenger Requests</h1>"
+            "<p>📤 Latest published flight number: <b>{:,}</b></p>".format(published["latest_number"])
+            + "<p>📅 Published in the last 7 days: <b>{:,}</b></p>".format(published["last_7_days"])
+            + "<p>📅 Published in the last 30 days: <b>{:,}</b></p>".format(published["last_30_days"])
+            + "<p><b>@advertio_cargo</b></p>"
             "<p>⚠️ No open transfer requests at the moment.</p>"
-            f"<p>📤 Total published ads: <b>{published_total:,}</b></p>"
         )}]
 
     total = sum(count for _, count in summary)
@@ -321,13 +323,15 @@ def _build_country_messages():
 
     return [{"html": (
         "<h1>Advertio Cargo &amp; Passenger Requests</h1>"
-        "<p><b>@Advertio_cargo</b></p>"
-        f"<p>📊 Total open requests: <b>{total:,}</b></p>"
-        f"<p>📤 Total published ads: <b>{published_total:,}</b></p>"
+        f"<p>📊 Total active requests: <b>{total:,}</b></p>"
+        f"<p>📤 Latest published flight number: <b>{published['latest_number']:,}</b></p>"
+        f"<p>📅 Published in the last 7 days: <b>{published['last_7_days']:,}</b></p>"
+        f"<p>📅 Published in the last 30 days: <b>{published['last_30_days']:,}</b></p>"
         "<table bordered striped compact>"
         + "".join(rows)
         + "</table>"
         f"<p>🕐 Last updated: {generated} Tehran</p>"
+        "<p><b>@advertio_cargo</b></p>"
     )}]
 
 

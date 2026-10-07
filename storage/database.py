@@ -3,10 +3,10 @@
 import json
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import config
 
-MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","collection_status":"TEXT NOT NULL DEFAULT 'collected'","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","media_group_id":"TEXT","media_path":"TEXT","media_paths":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT","classification_status":"TEXT NOT NULL DEFAULT 'waiting'","classification_category":"TEXT","classification_error":"TEXT","classification_processed_at":"TEXT","classification_attempts":"INTEGER NOT NULL DEFAULT 0"}
+MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","processing_started_at":"TEXT","collection_status":"TEXT NOT NULL DEFAULT 'collected'","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","ai_started_at":"TEXT","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","media_group_id":"TEXT","media_path":"TEXT","media_paths":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT","classification_status":"TEXT NOT NULL DEFAULT 'waiting'","classification_started_at":"TEXT","classification_category":"TEXT","classification_error":"TEXT","classification_processed_at":"TEXT","classification_attempts":"INTEGER NOT NULL DEFAULT 0"}
 CATEGORY_TABLES = {"housinglist":{"property_type":"TEXT","listing_type":"TEXT","title":"TEXT","description":"TEXT","location":"TEXT","country_code":"TEXT","province":"TEXT","city":"TEXT","neighborhood":"TEXT","price":"REAL","currency":"TEXT","rent_period":"TEXT","bedrooms":"TEXT","bathrooms":"INTEGER","area":"REAL","area_unit":"TEXT","furnished":"TEXT","availability":"TEXT","property_condition":"TEXT","contact":"TEXT","features":"TEXT"},"transferlist":{"title":"TEXT","description":"TEXT","origin_city":"TEXT","origin_province":"TEXT","origin_country":"TEXT","destination_city":"TEXT","destination_province":"TEXT","destination_country":"TEXT","airline":"TEXT","flight_number":"TEXT","departure_date":"TEXT","departure_time":"TEXT","arrival_date":"TEXT","arrival_time":"TEXT","transport_type":"TEXT","cargo_type":"TEXT","weight":"REAL","weight_unit":"TEXT","quantity":"REAL","volume":"REAL","volume_unit":"TEXT","price":"REAL","currency":"TEXT","contact":"TEXT","features":"TEXT"},"joblist":{"job_title":"TEXT","company":"TEXT","location":"TEXT","employment_type":"TEXT","salary":"REAL","salary_currency":"TEXT","salary_period":"TEXT","experience":"TEXT","education":"TEXT","skills":"TEXT","remote":"INTEGER","job_type":"TEXT","description":"TEXT","application_method":"TEXT","contact":"TEXT"}}
 
 def get_connection():
@@ -111,6 +111,58 @@ def initialize_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_kind ON system_activity(kind, created_at DESC)")
         _create_category_tables(cursor); conn.commit()
     finally: conn.close()
+    recover_stale_processing_states()
+
+def recover_stale_processing_states(timeout_seconds=None):
+    """Return abandoned stage claims to their queues during application startup."""
+    timeout = float(
+        config.QUEUE_PROCESSING_TIMEOUT_SECONDS
+        if timeout_seconds is None else timeout_seconds
+    )
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(0.0, timeout))).isoformat()
+    recovered = {}
+    conn = get_connection()
+    try:
+        recovered["processing"] = conn.execute(
+            """UPDATE messages
+               SET processing_status='pending', processing_started_at=NULL
+               WHERE processing_status='processing'
+                 AND (processing_started_at IS NULL OR datetime(processing_started_at) < datetime(?))""",
+            (cutoff,),
+        ).rowcount
+        recovered["classification"] = conn.execute(
+            """UPDATE messages
+               SET classification_status='pending',
+                   classification_started_at=NULL,
+                   classification_error=NULL
+               WHERE classification_status='processing'
+                 AND processing_status='processed'
+                 AND (classification_started_at IS NULL OR datetime(classification_started_at) < datetime(?))""",
+            (cutoff,),
+        ).rowcount
+        recovered["ai"] = conn.execute(
+            """UPDATE messages
+               SET ai_status='pending', ai_started_at=NULL, ai_error=NULL
+               WHERE ai_status='processing'
+                 AND processing_status='processed'
+                 AND classification_status='processed'
+                 AND classification_category IN ('housinglist','transferlist','joblist')
+                 AND (ai_started_at IS NULL OR datetime(ai_started_at) < datetime(?))""",
+            (cutoff,),
+        ).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    total = sum(recovered.values())
+    if total:
+        record_system_activity(
+            "queue_recovery",
+            "WARNING",
+            "storage.database",
+            "Recovered stale processing claims during startup",
+            {"timeout_seconds": timeout, "recovered": recovered},
+        )
+    return recovered
 
 def subscribe_monitor_chat(chat_id,username=None,first_name=None):
     conn=get_connection()
@@ -285,8 +337,61 @@ def get_previous_messages_by_sender(sender_id,before_id):
     conn=get_connection()
     try:return [dict(r) for r in conn.execute("SELECT id,message_id,channel_username,sender_id,sender_username,raw_text,text FROM messages WHERE sender_id=? AND id<? AND COALESCE(raw_text,text,'')<>'' ORDER BY id",(sender_id,before_id)).fetchall()]
     finally: conn.close()
+def claim_processing_message(message_id, channel_username):
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """UPDATE messages
+               SET processing_status='processing', processing_started_at=?
+               WHERE channel_username=? AND message_id=?
+                 AND collection_status='collected' AND processing_status='pending'""",
+            (datetime.now(timezone.utc).isoformat(), channel_username, message_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+def claim_classification_message(message_id, channel_username, max_retries):
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """UPDATE messages
+               SET classification_status='processing',
+                   classification_started_at=?,
+                   classification_error=NULL
+               WHERE channel_username=? AND message_id=?
+                 AND processing_status='processed'
+                 AND NULLIF(TRIM(ai_category), '') IS NULL
+                 AND (classification_status='pending'
+                      OR (classification_status='failed' AND classification_attempts<?))""",
+            (datetime.now(timezone.utc).isoformat(), channel_username, message_id, int(max_retries)),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+def claim_ai_message(message_id, channel_username):
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """UPDATE messages
+               SET ai_status='processing', ai_started_at=?, ai_error=NULL
+               WHERE channel_username=? AND message_id=?
+                 AND processing_status='processed'
+                 AND classification_status='processed'
+                 AND classification_category IN ('housinglist','transferlist','joblist')
+                 AND ai_status='pending'""",
+            (datetime.now(timezone.utc).isoformat(), channel_username, message_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
 def update_message(message_id,channel_username,**fields):
-    allowed={"cleaned_text","text","collection_status","processing_status","classification_status","classification_category","classification_error","classification_processed_at","classification_attempts","ai_status","pipeline_version","cleaned_at","ai_category","ai_processed_at","ai_error","advertio_status","advertio_lead_id","advertio_error","advertio_processed_at","media_path","media_paths","media_group_id"}; updates={k:v for k,v in fields.items() if k in allowed}
+    allowed={"cleaned_text","text","collection_status","processing_status","processing_started_at","classification_status","classification_started_at","classification_category","classification_error","classification_processed_at","classification_attempts","ai_status","ai_started_at","pipeline_version","cleaned_at","ai_category","ai_processed_at","ai_error","advertio_status","advertio_lead_id","advertio_error","advertio_processed_at","media_path","media_paths","media_group_id"}; updates={k:v for k,v in fields.items() if k in allowed}
     if not updates:return False
     assignments=", ".join(f"{k}=?" for k in updates); values=list(updates.values())+[channel_username,message_id]; conn=get_connection()
     try: cursor=conn.execute(f"UPDATE messages SET {assignments} WHERE channel_username=? AND message_id=?",values); conn.commit(); return cursor.rowcount>0

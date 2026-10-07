@@ -1,7 +1,5 @@
 from storage import database
 import config
-
-from storage import database
 from storage.location_normalizer import normalize_location
 from storage.data_normalizer import initialize as initialize_normalization, normalize_category_data
 

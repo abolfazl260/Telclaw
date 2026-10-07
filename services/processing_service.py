@@ -31,9 +31,11 @@ class ProcessingService:
                 stopped = True
                 print(f"[PROCESSING] Stage skip requested; remaining {total - index + 1} records stay pending.")
                 break
-            self.repository.mark_processing(
+            claimed = self.repository.mark_processing(
                 record["message_id"], record["channel_username"]
             )
+            if claimed is False:
+                continue
             try:
                 result = self.process_record(record)
                 # A later stage may change the working 'text' field. Persist

@@ -227,12 +227,6 @@
       "description": "Housing and real-estate listings."
     },
     {
-      "name": "Toronto Iranians",
-      "username": "Toronto_Iranians",
-      "country": "Canada",
-      "description": "Iranian community in Toronto with housing-related posts."
-    },
-    {
       "name": "Canada Home",
       "username": "CanadaHome",
       "country": "Canada",
@@ -603,12 +597,6 @@
   ],
   "Canada_Community": [
     {
-      "name": "Iranian Canada Affairs Group",
-      "username": "AFCANADA",
-      "country": "Canada",
-      "description": "Iranian community in Canada."
-    },
-    {
       "name": "Fanofa Canada Community",
       "username": "fanofa_canada",
       "country": "Canada",
@@ -671,12 +659,6 @@
       "description": "Classified ads."
     },
     {
-      "name": "Canada Shipping",
-      "username": "CanadaShipping",
-      "country": "Canada",
-      "description": "Shipping and cargo."
-    },
-    {
       "name": "V Women Canada",
       "username": "V_Women",
       "country": "Canada",
@@ -689,34 +671,10 @@
       "description": "Persian businesses."
     },
     {
-      "name": "Pets to Canada",
-      "username": "petstocanada",
-      "country": "Canada",
-      "description": "Pet transportation."
-    },
-    {
-      "name": "Guelph Community Group",
-      "username": "Guelphian",
-      "country": "Canada",
-      "description": "Community group for residents of Guelph."
-    },
-    {
       "name": "Russian Canada Forum",
       "username": "forum_canada",
       "country": "Canada",
       "description": "Russian-speaking community in Canada."
-    },
-    {
-      "name": "Ukrainian Ottawa CUAET Group",
-      "username": "ua_ottawa_cuaet",
-      "country": "Canada",
-      "description": "Ukrainian community in Ottawa."
-    },
-    {
-      "name": "Badbadak Canada Jobs Network",
-      "username": "badbadak_canada",
-      "country": "Canada",
-      "description": "Job posting and recruitment network in Canada."
     },
     {
       "name": "Walcad",

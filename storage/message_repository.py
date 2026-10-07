@@ -1,4 +1,5 @@
-"""Persistence abstraction for the independent Telclaw pipeline queues."""
+from storage import database
+import config
 
 from storage import database
 from storage.location_normalizer import normalize_location
@@ -102,20 +103,21 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_processing(self, message_id, channel_username):
-        return self.update_message(message_id, channel_username, processing_status="processing")
+        return database.claim_processing_message(message_id, channel_username)
 
     def mark_processing_result(self, message_id, channel_username, *, success, **fields):
         if success:
             fields.update(processing_status="processed", classification_status="pending", ai_status="waiting")
         else:
             fields.update(processing_status="failed")
+        fields.setdefault("processing_started_at", None)
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_classification_processing(self, message_id, channel_username):
-        return self.update_message(message_id, channel_username, classification_status="processing", classification_error=None)
+        return database.claim_classification_message(message_id, channel_username, config.AI_CLASSIFICATION_MAX_RETRIES)
 
     def mark_classification_result(self, message_id, channel_username, *, category=None, success=True, error=None, processed_at=None, attempts=None):
-        fields = {"classification_processed_at": processed_at}
+        fields = {"classification_processed_at": processed_at, "classification_started_at": None}
         if attempts is not None:
             fields["classification_attempts"] = attempts
         if success:
@@ -125,18 +127,18 @@ class MessageRepository:
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_processing(self, message_id, channel_username):
-        return self.update_message(message_id, channel_username, ai_status="processing", ai_error=None)
+        return database.claim_ai_message(message_id, channel_username)
 
     def mark_ai_result(self, message_id, channel_username, *, success, **fields):
         if success:
-            fields.update(ai_status="processed")
+            fields.update(ai_status="processed", ai_started_at=None)
         else:
             fields.pop("ai_error", None)
-            fields.update(ai_status="failed", ai_error=None)
+            fields.update(ai_status="failed", ai_error=None, ai_started_at=None)
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_skipped(self, message_id, channel_username, *, reason, **fields):
-        fields.update(ai_status="skipped", ai_error=f"skipped:{reason}")
+        fields.update(ai_status="skipped", ai_error=f"skipped:{reason}", ai_started_at=None)
         return self.update_message(message_id, channel_username, **fields)
 
     def save_category_record(self, processed_message_id, category, data):

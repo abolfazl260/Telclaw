@@ -21,6 +21,8 @@ def test_startup_recovers_stale_stage_claims_but_keeps_fresh_claims(tmp_path, mo
     database.insert_message("queue_fixture", 2, "classification", "2026-10-01", processing_status="processed")
     database.insert_message("queue_fixture", 3, "ai", "2026-10-01", processing_status="processed")
     database.insert_message("queue_fixture", 4, "fresh", "2026-10-01", processing_status="processing")
+    database.insert_message("queue_fixture", 5, "fresh classification", "2026-10-01", processing_status="processed")
+    database.insert_message("queue_fixture", 6, "fresh ai", "2026-10-01", processing_status="processed")
 
     stale = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     fresh = datetime.now(timezone.utc).isoformat()
@@ -49,6 +51,22 @@ def test_startup_recovers_stale_stage_claims_but_keeps_fresh_claims(tmp_path, mo
             "UPDATE messages SET processing_started_at=? WHERE message_id=4",
             (fresh,),
         )
+        conn.execute(
+            """UPDATE messages
+               SET classification_status='processing',
+                   classification_started_at=?
+               WHERE message_id=5""",
+            (fresh,),
+        )
+        conn.execute(
+            """UPDATE messages
+               SET classification_status='processed',
+                   classification_category='joblist',
+                   ai_status='processing',
+                   ai_started_at=?
+               WHERE message_id=6""",
+            (fresh,),
+        )
 
     database.initialize_db()
 
@@ -59,6 +77,8 @@ def test_startup_recovers_stale_stage_claims_but_keeps_fresh_claims(tmp_path, mo
     assert _row(3)["ai_status"] == "pending"
     assert _row(3)["ai_started_at"] is None
     assert _row(4)["processing_status"] == "processing"
+    assert _row(5)["classification_status"] == "processing"
+    assert _row(6)["ai_status"] == "processing"
 
 
 def test_stage_claim_is_atomic_and_records_start_time(tmp_path, monkeypatch):

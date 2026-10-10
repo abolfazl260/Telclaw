@@ -1041,7 +1041,7 @@ def _fmt_bytes(value):
 def _health_badge(state):
     value = str(state or "unknown").lower()
     css = "ok" if value in {"healthy", "running", "connected", "ok", "enabled", "polling"} else (
-        "bad" if value in {"failed", "error", "disconnected", "corrupt", "stopped"} else "warn")
+        "bad" if value in {"failed", "error", "disconnected", "corrupt", "stopped", "critical"} else "warn")
     return f'<span class="health-badge {css}">{_escape(state)}</span>'
 
 
@@ -1061,11 +1061,12 @@ async def health_page(request):
     bot = report["bot"]
     publishing = report["publishing"]
 
-    failures = (pipeline["processing_failed"] + pipeline["classification_failed"]
-                + pipeline["ai_failed"] + pipeline["advertio_failed"])
-    backlog = (pipeline["processing_pending"] + pipeline["classification_pending"]
-               + pipeline["ai_pending"] + pipeline["advertio_pending"])
-    overall = "HEALTHY" if db["healthy"] and failures == 0 else "WARNING"
+    # Both totals use the exact same unique-message queries as Telegram /health.
+    failures = pipeline["failed"]
+    backlog = pipeline["backlog"]
+    active_states = [value for value in pipeline["states"].values() if value != "DISABLED"]
+    overall = ("CRITICAL" if "CRITICAL" in active_states else
+               "WARNING" if "WARNING" in active_states else "HEALTHY")
 
     pipeline_cards = "".join(
         f'''<div class="metric"><span>{_escape(label)}</span><strong>{int(value):,}</strong></div>'''
@@ -1081,12 +1082,12 @@ async def health_page(request):
         )
     )
     stage_rows = "".join(
-        f"<tr><th>{_escape(label)}</th><td>{int(pending):,}</td><td>{int(failed):,}</td><td>{_escape(last or '—')}</td></tr>"
-        for label, pending, failed, last in (
-            ("Processing", pipeline["processing_pending"], pipeline["processing_failed"], pipeline["last_processing"]),
-            ("Classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_classification"]),
-            ("AI extraction", pipeline["ai_pending"], pipeline["ai_failed"], pipeline["last_ai"]),
-            ("Advertio", pipeline["advertio_pending"], pipeline["advertio_failed"], pipeline["last_advertio"]),
+        f"<tr><th>{_escape(label)}</th><td>{_health_badge(pipeline['states'][key])}</td><td>{int(pending):,}</td><td>{int(failed):,}</td><td>{_escape(last or '—')}</td></tr>"
+        for label, key, pending, failed, last in (
+            ("Processing", "processing", pipeline["processing_pending"], pipeline["processing_failed"], pipeline["last_processing"]),
+            ("Classification", "classification", pipeline["classification_pending"], pipeline["classification_failed"], pipeline["last_classification"]),
+            ("AI extraction", "ai", pipeline["ai_pending"], pipeline["ai_failed"], pipeline["last_ai"]),
+            ("Advertio", "advertio", pipeline["advertio_pending"], pipeline["advertio_failed"], pipeline["last_advertio"]),
         )
     )
     database_rows = "".join(
@@ -1142,6 +1143,11 @@ async def health_page(request):
         f"<tr><th>{_escape(label)}</th><td>{_health_badge(value)}</td></tr>"
         for label, value in (
             ("Overall", overall),
+            ("Crawler", pipeline["states"]["crawler"]),
+            ("Processing health", pipeline["states"]["processing"]),
+            ("Classification health", pipeline["states"]["classification"]),
+            ("AI health", pipeline["states"]["ai"]),
+            ("Advertio health", pipeline["states"]["advertio"]),
             ("Database integrity", "OK" if db["healthy"] else db["quick_check"]),
             ("Telegram monitor", "POLLING" if monitor["polling"] else ("ENABLED" if monitor["enabled"] else "STOPPED")),
             ("Telegram token", "configured" if bot["token_configured"] else "missing"),
@@ -1166,7 +1172,7 @@ async def health_page(request):
     </style></head><body><h1>Telclaw · System Health</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
     <a href="/operations">Operations</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
-    <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational reports from SQLite and the running Telegram monitor.</p>
+    <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational metrics shared with Telegram /health; last activity is an actual stage timestamp (UTC), never the source message date.</p>
     <div class="health-grid">{pipeline_cards}</div>
 
     <div class="health-sections">
@@ -1180,7 +1186,7 @@ async def health_page(request):
     </div>
 
     <section><h2>Pipeline queues & failures</h2><p>Last crawl: <strong>{_escape(pipeline['last_crawl'] or '—')}</strong></p>
-    <div class="scroll"><table><thead><tr><th>Stage</th><th>Pending</th><th>Failed</th><th>Last activity</th></tr></thead>
+    <div class="scroll"><table><thead><tr><th>Stage</th><th>Health</th><th>Pending</th><th>Failed</th><th>Last activity (UTC)</th></tr></thead>
     <tbody>{stage_rows}</tbody></table></div></section>
 
     <section><h2>Pipeline activity · by stage time</h2>

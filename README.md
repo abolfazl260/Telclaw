@@ -210,6 +210,30 @@ AI output must never be sent directly to an external service without validation.
 - Add operational dashboards/reports.
 - Add backup and recovery procedures.
 
+### Administrator error notifications
+
+The existing Telegram monitoring bot sends application `ERROR` and `CRITICAL`
+log events to subscribed, allowlisted administrators. This includes worker-thread
+processing failures, crawler and storage errors, AI classification/extraction
+errors, Advertio delivery failures, Back Office operation failures, and terminal
+queue exceptions. Alerts contain the component/source, error message and
+Tehran-local timestamp.
+
+To receive notifications, set `TELCLAW_TELEGRAM_MONITOR_ENABLED=true`, provide
+`TELCLAW_TELEGRAM_BOT_TOKEN`, restart Telclaw, then open a private chat with
+the monitoring bot and send `/start` **from an admin account on the
+`ADMIN_USER_IDS` allowlist**. Telegram bots cannot initiate a conversation
+with accounts that have not opened the bot. `/stop` disables reports for that
+administrator. Unrecognized users and group chats cannot subscribe.
+
+The notifier uses a bounded asynchronous queue, safely accepts Python logging
+events from worker threads, redacts configured API credentials, and limits
+identical (or per-message-ID equivalent) notifications to one per five minutes.
+The next alert after the quiet period includes a suppressed-count summary.
+Original records continue through existing Python log handlers. When the
+monitoring bot is disabled or Telegram is unreachable, remote delivery is
+not guaranteed; local logging remains available.
+
 ### Phase 7 — Scale & Optimization
 
 - Introduce job queues where required.

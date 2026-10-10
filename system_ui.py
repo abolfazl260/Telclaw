@@ -1,6 +1,7 @@
 """System menu extensions for independently running database-backed queues."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,8 @@ import config
 from storage import database
 from ui import ConsoleUI
 from terminal_input import ConsoleBack, read_line
+
+logger = logging.getLogger('telclaw.terminal')
 
 
 class SystemConsoleUI(ConsoleUI):
@@ -109,6 +112,7 @@ class SystemConsoleUI(ConsoleUI):
                 Fore.GREEN if result["failed"] == 0 and not result.get("stopped") else Fore.YELLOW,
             )
         except Exception as exc:
+            logger.exception("[TERMINAL ERROR] Processing queue failed: %s", exc)
             self.show_message(f"Processing queue failed: {exc}", Fore.RED)
         await self.pause()
 
@@ -152,6 +156,7 @@ class SystemConsoleUI(ConsoleUI):
         except ConsoleBack:
             raise
         except Exception as exc:
+            logger.exception("[TERMINAL ERROR] AI queue failed: %s", exc)
             self.show_message(f"AI queue failed: {exc}", Fore.RED)
         await self.pause()
 
@@ -284,6 +289,7 @@ class SystemConsoleUI(ConsoleUI):
                 color,
             )
         except Exception as exc:
+            logger.exception("[TERMINAL ERROR] Classification queue failed: %s", exc)
             self.show_message(f"Classification queue failed: {exc}", Fore.RED)
 
         self.show_classification_queue_summary()
@@ -496,6 +502,7 @@ class SystemConsoleUI(ConsoleUI):
         except ConsoleBack:
             raise
         except Exception as exc:
+            logger.exception("[TERMINAL ERROR] Transfer delivery failed: %s", exc)
             self.show_message(f"Transfer delivery failed: {exc}", Fore.RED)
         await self.pause()
 
@@ -628,6 +635,7 @@ class SystemConsoleUI(ConsoleUI):
         except ConsoleBack:
             raise
         except Exception as exc:
+            logger.exception("[TERMINAL ERROR] Advertio delivery failed: %s", exc)
             self.show_message(f"Advertio delivery failed: {exc}", Fore.RED)
         await self.pause()
 
@@ -654,6 +662,7 @@ class SystemConsoleUI(ConsoleUI):
                     Fore.GREEN if success else Fore.RED,
                 )
         except Exception as exc:
+            logger.exception("[TERMINAL ERROR] Groq connection test failed: %s", exc)
             self.show_message(f"Groq connection test failed: {exc}", Fore.RED)
         await self.pause()
 

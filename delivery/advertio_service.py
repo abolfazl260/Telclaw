@@ -508,6 +508,7 @@ class AdvertioDeliveryService:
                     processed_at=datetime.now(timezone.utc).isoformat(),
                 )
                 failed += 1
+                logger.error("[ADVERTIO DELIVERY ERROR] status=%s message_id=%s channel=%s reason=%s", status, record["message_id"], record["channel_username"], exc)
                 if progress:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']} reason={str(exc)[:300]}")
         result = {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}

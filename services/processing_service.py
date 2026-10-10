@@ -1,12 +1,16 @@
 """Application service that runs the independent processing queue."""
 
 from datetime import datetime, timezone
+import logging
 
 from processing.classifier import ClassifierStage
 from processing.contracts import ProcessingRecord
 from processing.property_extractor import PropertyExtractorStage
 from processing.stages import CleanTextStage, NormalizeStage, Pipeline
 from storage.message_repository import MessageRepository
+
+
+logger = logging.getLogger('telclaw.processing')
 
 
 class ProcessingService:
@@ -59,6 +63,7 @@ class ProcessingService:
                     success=False,
                 )
                 failed += 1
+                logger.error("[PROCESSING FAILED] message_id=%s channel=%s reason=%s", record["message_id"], record["channel_username"], exc)
                 print(f"[PROCESSING][FAILED] message_id={record['message_id']} channel={record['channel_username']} reason=processing_exception detail={exc}")
 
             if progress:

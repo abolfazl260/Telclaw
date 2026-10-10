@@ -1,6 +1,8 @@
 """System menu extensions for independently running database-backed queues."""
 
 import asyncio
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from colorama import Fore
 
@@ -18,6 +20,7 @@ from delivery.telegram_transfer import (
 )
 from services.processing_service import ProcessingService
 import config
+from storage import database
 from ui import ConsoleUI
 from terminal_input import ConsoleBack, read_line
 
@@ -654,6 +657,56 @@ class SystemConsoleUI(ConsoleUI):
             self.show_message(f"Groq connection test failed: {exc}", Fore.RED)
         await self.pause()
 
+    async def show_system_health(self):
+        """Display the same canonical health snapshot as Telegram /health."""
+        self.clear_screen()
+        self.show_banner()
+        self.show_section_header("System Health")
+        try:
+            health = database.get_pipeline_health()
+            labels = (
+                ("Crawler activity", "crawler"),
+                ("Processing", "processing"),
+                ("Classification", "classification"),
+                ("AI extraction", "ai"),
+                ("Advertio", "advertio"),
+                ("Database", "database"),
+            )
+            for title, key in labels:
+                state = health[key]
+                color = (Fore.GREEN if state == "HEALTHY" else
+                         Fore.RED if state == "CRITICAL" else Fore.YELLOW)
+                self.show_message(f"{title}: {state}", color)
+
+            def local_time(value):
+                if not value:
+                    return "Not recorded"
+                dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(ZoneInfo("Asia/Tehran")).strftime("%Y-%m-%d %H:%M:%S Tehran")
+
+            for title, key in (
+                ("Last crawl", "last_crawl"),
+                ("Last processing", "last_processing"),
+                ("Last classification", "last_classification"),
+                ("Last AI", "last_ai"),
+                ("Last Advertio", "last_advertio"),
+            ):
+                self.show_message(f"{title}: {local_time(health[key])}", Fore.CYAN)
+            self.show_message(f"Pipeline backlog (unique messages): {health['backlog']}", Fore.CYAN)
+            self.show_message(f"Failed items (unique messages): {health['failed']}", Fore.YELLOW)
+            for name, key in (("Processing", "processing"), ("Classification", "classification"), ("AI", "ai"), ("Advertio", "advertio")):
+                self.show_message(
+                    f"{name} eligible / failed: {health[key + '_pending']} / {health[key + '_failed']}",
+                    Fore.CYAN,
+                )
+            if health["warning"]:
+                self.show_message(f"Warning: {health['warning']}", Fore.YELLOW)
+        except Exception as exc:
+            self.show_message(f"Health report unavailable: {exc}", Fore.RED)
+        await self.pause()
+
     async def run(self):
         while True:
             self.clear_screen()
@@ -670,13 +723,14 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  9. 📋 Manage channels")
             print(f"{Fore.GREEN}│  10. 👤 Switch / add account")
             print(f"{Fore.GREEN}│  11. 🚪 Exit")
+            print(f"{Fore.GREEN}│  12. 🏥 System Health")
             print(f"{Fore.YELLOW}│  Q. 🚪 Exit and stop scheduled crawler jobs")
             self.show_section_footer()
 
             try:
                 choice = await self.prompt_choice(
-                    "\nChoose an option [1-11/Q]: ",
-                    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"},
+                    "\nChoose an option [1-12/Q]: ",
+                    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"},
                 )
             except (ConsoleBack, EOFError):
                 choice = "11"
@@ -709,6 +763,8 @@ class SystemConsoleUI(ConsoleUI):
                     await self.manage_channels()
                 elif choice == "10":
                     await self.account_menu()
+                elif choice == "12":
+                    await self.show_system_health()
             except ConsoleBack:
                 self.show_message("Returned to the main menu.", Fore.YELLOW)
             except EOFError:

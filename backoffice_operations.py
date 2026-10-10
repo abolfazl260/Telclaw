@@ -6,6 +6,7 @@ by SystemConsoleUI and runs long queue operations as background asyncio tasks.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 from datetime import date, datetime, timezone
@@ -28,6 +29,8 @@ from services.crawler_service import CrawlerService
 from services.processing_service import ProcessingService
 from storage import database
 
+
+logger = logging.getLogger('telclaw.backoffice.operations')
 
 RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "groq")
 SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio"}
@@ -206,6 +209,7 @@ class BackofficeOperations:
             except Exception as exc:
                 state["status"] = "failed"
                 state["error"] = f"{exc.__class__.__name__}: {exc}"[:4000]
+                logger.exception("[BACKOFFICE OPERATION FAILED] operation=%s reason=%s", name, exc)
                 self._activity(
                     f"manual_{name}",
                     "ERROR",

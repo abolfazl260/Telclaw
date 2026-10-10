@@ -510,7 +510,10 @@ class AdvertioDeliveryService:
                 failed += 1
                 if progress:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']} reason={str(exc)[:300]}")
-        return {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed, "stopped": stopped}
+        result = {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}
+        if stopped:
+            result["stopped"] = True
+        return result
 
     def delete_original_post_listing(self, external_id):
         return self.client.delete_lead(self.source_name, str(external_id))

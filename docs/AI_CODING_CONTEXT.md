@@ -384,6 +384,20 @@ SQLite is the primary persistence layer.
 
 The raw message must remain available after processing so that cleaning, deduplication, prompts, or AI rules can be changed and records reprocessed.
 
+**Startup AI status migration:** `storage/database.py::_migrate_messages_table` runs on
+every `initialize_db()`, not just after a schema upgrade. It must preserve any
+explicit AI status (`pending`, `processing`, `processed`, `failed`,
+`skipped`) without inferring an outcome from `ai_processed_at` or
+`ai_error`. Extraction failures intentionally persist as `ai_status='failed'`
+and often `ai_error=NULL`. Only legacy/uninitialized states may be inferred,
+and only for a record whose classification makes it eligible for extraction.
+Startup queue recovery separately transitions stale `processing` claims to
+`pending`; it must not turn `failed` or `skipped` into successful records.
+Migration must be idempotent across repeated startups. This fix prevents new
+status corruption; it cannot conclusively identify already misclassified
+historical records without additional evidence, so no automatic repair is
+performed.
+
 When a message record is deleted, dependent AI/category records may be removed through foreign-key cascade. Any new deletion rule must explicitly consider downstream data loss.
 
 ## 12. What to Change When the User Gives a New Requirement

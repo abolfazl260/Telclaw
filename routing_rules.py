@@ -699,6 +699,49 @@ def record_resend(resend_id, status, telegram_message_id=None, error=None):
         conn.close()
 
 
+
+def delivery_status_counts():
+    """All-time *current* delivery statuses by destination, not a history-page count.
+
+    publishing_deliveries keeps one mutable original record per message/target;
+    publishing_resends keeps separate manual resend records. These totals count
+    current stored records, not every intermediate retry attempt. Read once
+    across all destinations to avoid an extra status query for each channel.
+    """
+    mark_incomplete_deliveries()
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT target_id, delivery_kind, status, COUNT(*) AS total
+              FROM (
+                  SELECT target_id, 'original' AS delivery_kind, status
+                    FROM publishing_deliveries
+                  UNION ALL
+                  SELECT target_id, 'resend' AS delivery_kind, status
+                    FROM publishing_resends
+              )
+             GROUP BY target_id, delivery_kind, status
+        """).fetchall()
+    finally:
+        conn.close()
+
+    counts = {}
+    for row in rows:
+        target_id = int(row["target_id"])
+        kind = row["delivery_kind"]
+        status = row["status"]
+        amount = int(row["total"])
+        target = counts.setdefault(target_id, {
+            "original": {}, "resend": {}, "combined": {},
+            "original_count": 0, "resend_count": 0, "total_records": 0,
+        })
+        target[kind][status] = amount
+        target["combined"][status] = target["combined"].get(status, 0) + amount
+        target[f"{kind}_count"] += amount
+        target["total_records"] += amount
+    return counts
+
+
 def recent_deliveries(limit=30, target_id=None):
     mark_incomplete_deliveries()
     initialize()

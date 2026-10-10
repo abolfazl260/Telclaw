@@ -374,12 +374,29 @@ async def index(request):
     ) or '<span class="hint">No AI providers configured.</span>'
     system = backoffice_health.snapshot()["system"]
     targets, rules = routing_rules.list_targets(), routing_rules.list_rules()
+    # These are whole-database counts, independent of the latest-30 history.
+    delivery_counts_by_target = routing_rules.delivery_status_counts()
     diagnostics_target = str(getattr(request, 'query', {}).get('diagnostics', ''))
     rows = []
     for target in targets:
         assigned = [rule for rule in rules if rule["target_id"] == target["id"]]
         rule_rows = "".join(_rule_panel(rule, target, csrf, request) for rule in assigned)
         history = routing_rules.recent_deliveries(30, target['id'])
+        totals = delivery_counts_by_target.get(int(target["id"]), {})
+        statuses = totals.get("combined", {})
+        status_summary = "".join(
+            f'<span class="delivery-stat delivery-stat-{status}">'
+            f'<span>{label}</span> <strong>{statuses.get(status, 0):,}</strong></span>'
+            for status, label in (
+                ("sent", "Sent"), ("failed", "Failed"), ("retry", "Retry"),
+                ("uncertain", "Uncertain"), ("rejected", "Rejected"),
+            )
+        )
+        if statuses.get("sending", 0):
+            status_summary += (
+                '<span class="delivery-stat"><span>Sending</span> '
+                f'<strong>{statuses["sending"]:,}</strong></span>'
+            )
         history_rows = ''.join(f'''<tr><td>#{item['message_id']}</td>
             <td>{_escape(item.get('delivery_kind') or 'original')}</td><td>{_escape(item['status'])}</td>
             <td>{_escape(item['telegram_message_id'] or '—')}</td><td>{_escape(item['updated_at'])}</td>
@@ -399,8 +416,13 @@ async def index(request):
             <span class="channel-name">{_escape(target['label'])}</span>
             <code>{_escape(target['chat_id'])}</code>
             <span class="badge {state}">{_escape(state)}</span>
-            <span class="hint">{len(assigned)} rules · {len(history)} deliveries</span></summary>
-            <div class="channel-body"><p class="hint">{_escape(target.get('description'))}</p>
+            <span class="hint">{len(assigned)} rules</span>
+            <span class="delivery-stats" aria-label="All recorded delivery states, including resends">{status_summary}</span></summary>
+            <div class="channel-body">
+            <p class="hint">All-time recorded delivery states: {totals.get('original_count', 0):,} original
+            · {totals.get('resend_count', 0):,} manual resends. These are current record statuses,
+            not the total number of retries ever attempted.</p>
+            <p class="hint">{_escape(target.get('description'))}</p>
             <p class="hint">{_escape(target.get('connection_detail') or 'Connection not checked')}
             · checked: {_escape(target.get('checked_at') or 'never')}</p>
             <form method="post" action="/target/check" class="inline"><input type="hidden" name="csrf" value="{csrf}">
@@ -418,7 +440,7 @@ async def index(request):
             <button>Save channel / group</button></form></details>
             <div class="subsection"><h3>Publishing rules</h3>{rule_rows or '<p>No rules for this channel yet.</p>'}
             <details><summary>Add a rule for this channel</summary>{_rule_form(None, target, csrf)}</details></div>
-            <details class="subsection"><summary>Delivery history ({len(history)})</summary><div class="scroll"><table>
+            <details class="subsection"><summary>Delivery history · last 30 records (showing {len(history)} of {totals.get('total_records', 0):,})</summary><div class="scroll"><table>
             <thead><tr><th>Message</th><th>Attempt</th><th>Status</th><th>Telegram ID</th><th>Updated (UTC)</th><th>Error</th><th></th></tr></thead>
             <tbody>{history_rows or '<tr><td colspan="7">No deliveries yet.</td></tr>'}</tbody></table></div></details>
             </div></details>''')
@@ -431,6 +453,12 @@ async def index(request):
     .channel>summary{{display:flex;gap:1rem;align-items:center;flex-wrap:wrap;padding:1rem;cursor:pointer;list-style:none}}
     .channel>summary::-webkit-details-marker{{display:none}}.channel>summary:before{{content:'▸';color:#1957b8}}
     .channel[open]>summary:before{{content:'▾'}}.channel-name{{font-weight:700;min-width:140px}}
+    .delivery-stats{{display:inline-flex;gap:.4rem;flex-wrap:wrap;align-items:center}}
+    .delivery-stat{{display:inline-flex;align-items:center;gap:.28rem;border:1px solid #dce4ef;
+      padding:.16rem .45rem;border-radius:7px;background:white;white-space:nowrap;font-size:.85rem}}
+    .delivery-stat-sent{{border-color:#b5e3ca;color:#16653e}}
+    .delivery-stat-failed,.delivery-stat-rejected{{border-color:#f2c4bc;color:#a32e1a}}
+    .delivery-stat-retry,.delivery-stat-uncertain{{border-color:#f5ddb0;color:#835400}}
     .channel-body{{padding:0 1rem 1rem;border-top:1px solid #e3e8ef}}.subsection{{border-top:1px solid #e3e8ef;padding:.8rem 0}}
     .subsection>summary{{cursor:pointer;color:#1957b8;font-weight:600}}.subsection h3{{margin:.4rem 0}}
     form{{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;border-bottom:1px solid #ddd;padding:.8rem 0}}

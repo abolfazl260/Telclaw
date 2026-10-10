@@ -249,13 +249,32 @@ def get_recent_system_activity(limit=60):
         conn.close()
 
 def get_pipeline_status():
-    conn=get_connection()
+    """Legacy /status API, using the same queue-eligibility metrics as /health."""
+    from services.health_metrics import collect
+    conn = get_connection()
     try:
-        row=conn.execute("""SELECT COUNT(*) total_messages,SUM(CASE WHEN collection_status='collected' THEN 1 ELSE 0 END) collected,SUM(CASE WHEN collection_status='collected' AND processing_status='pending' THEN 1 ELSE 0 END) processing_pending,SUM(CASE WHEN processing_status='failed' THEN 1 ELSE 0 END) processing_failed,SUM(CASE WHEN processing_status='processed' AND classification_status='pending' THEN 1 ELSE 0 END) classification_pending,SUM(CASE WHEN classification_status='failed' THEN 1 ELSE 0 END) classification_failed,SUM(CASE WHEN processing_status='processed' AND ai_status='pending' THEN 1 ELSE 0 END) ai_pending,SUM(CASE WHEN ai_status='failed' THEN 1 ELSE 0 END) ai_failed,SUM(CASE WHEN COALESCE(advertio_status,'waiting') IN ('waiting','retry') AND ai_status='processed' THEN 1 ELSE 0 END) advertio_pending,SUM(CASE WHEN advertio_status='failed' THEN 1 ELSE 0 END) advertio_failed FROM messages""").fetchone()
-        channels=conn.execute("SELECT COUNT(DISTINCT channel_username) n FROM messages").fetchone()["n"] or 0; subscribers=conn.execute("SELECT COUNT(*) n FROM telegram_monitor_subscribers WHERE enabled=1").fetchone()["n"] or 0
-        def value(name): return int(row[name] or 0)
-        return {"system":"RUNNING","total_messages":value("total_messages"),"collected":value("collected"),"processing_pending":value("processing_pending"),"processing_failed":value("processing_failed"),"classification_pending":value("classification_pending"),"classification_failed":value("classification_failed"),"ai_pending":value("ai_pending"),"ai_failed":value("ai_failed"),"advertio_pending":value("advertio_pending"),"advertio_failed":value("advertio_failed"),"channels":int(channels),"subscribers":int(subscribers)}
-    finally: conn.close()
+        metrics = collect(conn)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE collection_status='collected'"
+        ).fetchone()
+        subscribers = conn.execute(
+            "SELECT COUNT(*) FROM telegram_monitor_subscribers WHERE enabled=1"
+        ).fetchone()[0]
+        return {
+            "system": "RUNNING",
+            "total_messages": metrics["total"],
+            "collected": int(row[0] or 0),
+            **{key: metrics[key] for key in (
+                "processing_pending", "processing_failed",
+                "classification_pending", "classification_failed",
+                "ai_pending", "ai_failed", "advertio_pending", "advertio_failed",
+            )},
+            "channels": metrics["channels"],
+            "subscribers": int(subscribers or 0),
+            "last_crawl": metrics["last_crawl"],
+        }
+    finally:
+        conn.close()
 
 def get_classification_queue_status():
     """Return current AI classification counts directly from SQLite."""
@@ -286,33 +305,13 @@ def _last_time(conn,where,params=()):
     row=conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}",params).fetchone(); return row["value"] if row and row["value"] else None
 
 def get_pipeline_health():
-    """Return a DB-backed health snapshot. It never claims a worker is alive unless its DB activity is recent."""
-    conn=get_connection()
+    """Unified health metrics for the Telegram monitor and other front ends."""
+    from services.health_metrics import collect, as_telegram_health
+    conn = get_connection()
     try:
-        now=datetime.now(timezone.utc)
-        last_crawl=_last_time(conn,"collection_status='collected'")
-        last_processing=_last_time(conn,"processing_status='processed'")
-        last_ai=_last_time(conn,"ai_status='processed'")
-        last_advertio=_last_time(conn,"advertio_status='sent'")
-        pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE (collection_status='collected' AND processing_status='pending') OR (processing_status='processed' AND classification_status='pending') OR (processing_status='processed' AND ai_status='pending') OR (ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry'))").fetchone()["n"] or 0
-        failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed' OR classification_status='failed' OR ai_status='failed' OR advertio_status='failed'").fetchone()["n"] or 0
-        total=conn.execute("SELECT COUNT(*) n FROM messages").fetchone()["n"] or 0
-        if total==0: db_state="WARNING"; warning="Database has no collected messages yet."
-        else: db_state="HEALTHY"; warning=""
-        def activity(last,stage_pending,stage_failed):
-            if stage_failed>0 and stage_pending==0: return "WARNING"
-            if stage_pending>0: return "WARNING"
-            return "HEALTHY" if last else "WARNING"
-        processing_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE collection_status='collected' AND processing_status='pending'").fetchone()["n"] or 0
-        classification_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='processed' AND classification_status='pending'").fetchone()["n"] or 0
-        ai_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='processed' AND ai_status='pending'").fetchone()["n"] or 0
-        advertio_pending=conn.execute("SELECT COUNT(*) n FROM messages WHERE ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry')").fetchone()["n"] or 0
-        processing_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE processing_status='failed'").fetchone()["n"] or 0
-        classification_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE classification_status='failed'").fetchone()["n"] or 0
-        ai_failed=conn.execute("SELECT COUNT(*) n FROM messages WHERE ai_status='failed'").fetchone()["n"] or 0
-        advertio_failed_count=conn.execute("SELECT COUNT(*) n FROM messages WHERE advertio_status='failed'").fetchone()["n"] or 0
-        return {"crawler":"HEALTHY" if last_crawl else "WARNING","processing":activity(last_processing,processing_pending,processing_failed),"classification":activity(last_processing,classification_pending,classification_failed),"ai":activity(last_ai,ai_pending,ai_failed),"advertio":activity(last_advertio,advertio_pending,advertio_failed_count),"database":db_state,"last_crawl":last_crawl or "No crawl recorded","last_processing":last_processing or "No processing recorded","last_ai":last_ai or "No AI processing recorded","last_advertio":last_advertio or "No Advertio delivery recorded","backlog":int(pending),"failed":int(failed),"warning":warning}
-    finally: conn.close()
+        return as_telegram_health(collect(conn))
+    finally:
+        conn.close()
 
 def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,has_media=False,media_type=None,file_unique_id=None,media_group_id=None,media_path=None,media_paths=None,message_link=None,media_reference=None):
     conn=get_connection()

@@ -107,6 +107,28 @@ monitor runtime state, active report subscribers, publishing delivery/resend tot
 and recent audited database edits. Configured channels that have never produced a
 stored message are shown as **not crawled** instead of silently disappearing.
 
+The dashboard, Telegram `/health`/`/status` commands and the terminal's
+**System Health** menu option 12 use `services/health_metrics.py` for shared
+queue eligibility and stage health. **Pipeline backlog** and **Failed items**
+count distinct messages, not the sum of stage counters: a retryable failed
+classification can appear in both figures, but a message is counted once within
+each figure. Advertio queue eligibility requires a processed housing listing
+and a real `housinglist` record; jobs/transfers are not Advertio backlog.
+Rejected housing deliveries count as failures. Category classification pending
+includes retryable failures up to the configured retry budget.
+
+**Last crawl** comes from the newest persisted `system_activity` crawl event
+(including zero-message crawls); other last-activity values come from stage
+completion timestamps and persisted stage events, never the source message date.
+Old installations without crawl events display **Not recorded** rather than a
+fabricated midnight/03:30 time. Times are UTC in Back Office and Tehran-local
+in Telegram/terminal. A 24-hour freshness window is used for reporting only.
+Stage statuses can be HEALTHY, WARNING, CRITICAL (stale with outstanding
+work), or DISABLED. HEALTHY measures observed activity and queue state; it is
+not an external AI/Advertio API probe. Database health uses SQLite
+`PRAGMA quick_check`. Without a `messages` table, health displays an empty
+warning state instead of failing.
+
 The dashboard itself remains read-only. Use the **Operations** tab to start, stop or
 retry pipeline work, and use the page's **Refresh** link to request a fresh snapshot.
 

@@ -100,6 +100,27 @@ async def test_duplicate_errors_are_throttled_then_report_suppressed_count():
         await dispatcher.stop()
 
 
+@pytest.mark.asyncio
+async def test_errors_from_different_message_ids_are_grouped():
+    reports = []
+    class FakeMonitor:
+        async def error(self, level, source, message):
+            reports.append(message)
+    dispatcher = ErrorAlertDispatcher(FakeMonitor())
+    dispatcher.start()
+    try:
+        dispatcher.submit("ERROR", "telclaw.processing",
+                          "Failed message_id=100 channel=abc reason=timeout")
+        dispatcher.submit("ERROR", "telclaw.processing",
+                          "Failed message_id=101 channel=abc reason=timeout")
+        await asyncio.sleep(0.03)
+        await asyncio.wait_for(dispatcher.queue.join(), timeout=2)
+        assert len(reports) == 1
+        assert "message_id=100" in reports[0]
+    finally:
+        await dispatcher.stop()
+
+
 def test_configured_credentials_are_removed_from_error_alert(monkeypatch):
     monkeypatch.setattr(config, "TELEGRAM_BOT_TOKEN", "123:VerySensitiveToken")
     monkeypatch.setattr(config, "GROQ_PROVIDERS", [

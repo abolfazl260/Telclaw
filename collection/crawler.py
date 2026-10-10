@@ -5,6 +5,7 @@ Cleaning, classification and property extraction belong to processing.
 """
 
 import asyncio
+import logging
 import random
 
 from colorama import Fore, init
@@ -17,6 +18,7 @@ from storage.content_duplicate import ensure_duplicate_schema, find_duplicate, s
 from storage.database import get_connection
 
 init(autoreset=True)
+logger = logging.getLogger('telclaw.crawler')
 
 COLLECTION_VERSION = "collection-v4"
 CRAWL_MODE_ALL = "all"
@@ -324,6 +326,7 @@ async def crawl_channel(
                     print("   ⏭ [DUPLICATE] already stored")
             except Exception as exc:
                 skipped_count += 1
+                logger.error("[CRAWL STORAGE ERROR] channel=%s message_id=%s error=%s", channel_username, message.id, exc)
                 print(f"   ⚠️ [RAW-ERROR] Storage error: {exc}")
 
             await asyncio.sleep(random.uniform(0.3, 1.0))
@@ -344,12 +347,15 @@ async def crawl_channel(
         print(f"⏭ Skipped: {skipped_count}")
         return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "forwarded_bot_skipped": forwarded_bot_skipped_count, "forwarded_unknown_skipped": forwarded_unknown_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
     except errors.ChannelInvalidError:
+        logger.error("[CRAWL ERROR] Invalid channel: %s", channel_username)
         print(f"\n❌ Invalid channel: {channel_username}")
         return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}
     except errors.ChannelPrivateError:
+        logger.error("[CRAWL ERROR] Private channel access denied: %s", channel_username)
         print(f"\n❌ Private channel access denied: {channel_username}")
         return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}
     except Exception as exc:
+        logger.exception("[CRAWL ERROR] channel=%s reason=%s", channel_username, exc)
         print(f"\n❌ Crawl error ({channel_username}): {exc}")
         return {"status": "failed", "saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "stopped": stopped}
     finally:

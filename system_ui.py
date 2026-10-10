@@ -633,13 +633,23 @@ class SystemConsoleUI(ConsoleUI):
         self.show_banner()
         self.show_section_header("Groq Connection Test")
         try:
-            success = await asyncio.to_thread(test_groq_connection)
-            self.show_message(
-                "Groq minimal connection test succeeded."
-                if success
-                else "Groq minimal connection test failed. See diagnostic output above.",
-                Fore.GREEN if success else Fore.RED,
-            )
+            async def run_check(should_stop):
+                success = await asyncio.to_thread(test_groq_connection)
+                return success, should_stop()
+
+            success, stopped = await self._run_with_q_stop(run_check)
+            if stopped:
+                self.show_message(
+                    "Stop requested. The in-flight connection test finished; returning to the menu.",
+                    Fore.YELLOW,
+                )
+            else:
+                self.show_message(
+                    "Groq minimal connection test succeeded."
+                    if success
+                    else "Groq minimal connection test failed. See diagnostic output above.",
+                    Fore.GREEN if success else Fore.RED,
+                )
         except Exception as exc:
             self.show_message(f"Groq connection test failed: {exc}", Fore.RED)
         await self.pause()

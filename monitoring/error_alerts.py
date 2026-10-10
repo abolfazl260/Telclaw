@@ -85,8 +85,8 @@ class ErrorAlertDispatcher:
                 # Group those notifications by error type/source, while keeping
                 # the original ID in the first delivered alert.
                 signature = re.sub(
-                    r"\\b(message_id|record_id|telegram_message_id)\\s*=\\s*[^\\s,|]+",
-                    r"\\1=*", message, flags=re.IGNORECASE,
+                    r"\b(message_id|record_id|telegram_message_id)\s*=\s*[^\s,|]+",
+                    r"\1=*", message, flags=re.IGNORECASE,
                 )
                 key = (level, source, signature)
                 now = time.monotonic()

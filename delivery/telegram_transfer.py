@@ -416,7 +416,7 @@ def format_transfer_ad(record):
 async def send_transfer_ads(client, target_channel, limit=20, should_stop=None):
     """Send unsent transfer ads to one Telegram channel and persist each result."""
     records = get_ready_transfer_ads(limit=limit)
-    result = {"found": len(records), "sent": 0, "failed": 0, "stopped": False}
+    result = {"found": len(records), "sent": 0, "failed": 0}
     if not records:
         return result
 

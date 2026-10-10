@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 
 import config
@@ -80,7 +81,14 @@ class ErrorAlertDispatcher:
             try:
                 # Deduplication affects Telegram notifications, not normal file
                 # logs. The first occurrence is always forwarded.
-                key = (level, source, message)
+                # Per-record failures often include a unique message_id.
+                # Group those notifications by error type/source, while keeping
+                # the original ID in the first delivered alert.
+                signature = re.sub(
+                    r"\\b(message_id|record_id|telegram_message_id)\\s*=\\s*[^\\s,|]+",
+                    r"\\1=*", message, flags=re.IGNORECASE,
+                )
+                key = (level, source, signature)
                 now = time.monotonic()
                 last = self.last_sent.get(key)
                 if last is not None and now - last < self.repeat_seconds:

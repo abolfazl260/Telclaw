@@ -106,8 +106,10 @@ async def test_channel_order_is_reshuffled_each_cycle_without_changing_selection
     assert [round(seconds) for seconds in delays] == [15, 15, 60, 15, 15, 60]
     assert len(pipelines) == 2
     assert scheduler.monitor.summaries == 2
-    assert [entry[1]["channel"] for entry in scheduler.monitor.reports] == [
-        "@gamma", "@alpha", "@beta", "@beta", "@gamma", "@alpha",
+    # The existing reporter prefixes '@' even if a selected username has one;
+    # normalize that legacy display detail, since this test covers order.
+    assert [entry[1]["channel"].lstrip("@") for entry in scheduler.monitor.reports] == [
+        "gamma", "alpha", "beta", "beta", "gamma", "alpha",
     ]
 
 

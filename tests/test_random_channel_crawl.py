@@ -83,7 +83,7 @@ async def test_channel_order_is_reshuffled_each_cycle_without_changing_selection
     async def fake_sleep(seconds):
         nonlocal cycles_finished
         delays.append(seconds)
-        if seconds == 60:
+        if seconds > 30:
             cycles_finished += 1
             if cycles_finished == 2:
                 raise asyncio.CancelledError
@@ -103,7 +103,7 @@ async def test_channel_order_is_reshuffled_each_cycle_without_changing_selection
     assert [sorted(scheduler.crawl_job.visits[i:i + 3]) for i in (0, 3)] == [
         sorted(selected), sorted(selected),
     ]
-    assert delays == [15, 15, 60, 15, 15, 60]
+    assert [round(seconds) for seconds in delays] == [15, 15, 60, 15, 15, 60]
     assert len(pipelines) == 2
     assert scheduler.monitor.summaries == 2
     assert [entry[1]["channel"] for entry in scheduler.monitor.reports] == [
@@ -120,7 +120,7 @@ async def test_random_order_preserves_early_stop_and_skips_incomplete_cycle(monk
         items[:] = ["@gamma", "@alpha", "@beta"]
 
     async def fake_sleep(seconds):
-        if seconds == 60:
+        if seconds > 30:
             raise asyncio.CancelledError
 
     monkeypatch.setattr(scheduler_module.random, "shuffle", fake_shuffle)

@@ -11,6 +11,7 @@ from collection.crawler import CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY
 from services.account_service import AccountService
 from services.channel_service import ChannelService
 from services.crawler_service import CrawlerService
+from terminal_input import ConsoleBack, is_q, read_line
 
 init(autoreset=True)
 
@@ -42,11 +43,14 @@ class ConsoleUI:
         print(f"{color}▸ {message}{Style.RESET_ALL}")
 
     async def pause(self, message="Press Enter to continue..."):
-        await asyncio.to_thread(input, f"\n{message}")
+        value = await read_line(f"\n{message} (Q = Back/Stop) ")
+        return is_q(value)
 
     async def prompt_choice(self, prompt, valid_options):
         while True:
-            value = (await asyncio.to_thread(input, prompt)).strip().lower()
+            value = (await read_line(prompt)).strip().lower()
+            if is_q(value):
+                raise ConsoleBack()
             if value in valid_options:
                 return value
             self.show_message("Invalid choice. Please try again.", Fore.RED)
@@ -54,7 +58,9 @@ class ConsoleUI:
     async def prompt_text(self, prompt, default=None, allow_empty=True):
         while True:
             suffix = f" [{default}]" if default is not None else ""
-            value = (await asyncio.to_thread(input, f"{prompt}{suffix}: ")).strip()
+            value = (await read_line(f"{prompt}{suffix} (Q = Back): ")).strip()
+            if is_q(value):
+                raise ConsoleBack()
             value = value or (default if default is not None else "")
             if allow_empty or value:
                 return value
@@ -237,7 +243,9 @@ class ConsoleUI:
             f"The transfer-live summary is sent once after the full cycle.",
             Fore.GREEN,
         )
-        await self.pause("Press Enter to return to the menu. Jobs continue in background...")
+        if await self.pause("Enter = Menu (jobs keep running); Q = Stop scheduled crawler"):
+            self.crawler.stop_all()
+            self.show_message("Scheduled crawler jobs stopped.", Fore.YELLOW)
 
     async def change_settings(self):
         self.clear_screen()
@@ -279,17 +287,33 @@ class ConsoleUI:
             print(f"{Fore.GREEN}│  3. 📋 Manage channels")
             print(f"{Fore.GREEN}│  4. 👤 Switch / add account")
             print(f"{Fore.GREEN}│  5. 🚪 Exit")
+            print(f"{Fore.YELLOW}│  Q. 🚪 Exit and stop running crawler jobs")
             self.show_section_footer()
-            choice = await self.prompt_choice("\nChoose an option [1-5]: ", {"1", "2", "3", "4", "5"})
-            if choice == "1":
-                await self.start_crawler_flow()
-            elif choice == "2":
-                await self.change_settings()
-            elif choice == "3":
-                await self.manage_channels()
-            elif choice == "4":
-                await self.account_menu()
-            else:
+
+            try:
+                choice = await self.prompt_choice("\\nChoose an option [1-5/Q]: ", {"1", "2", "3", "4", "5"})
+            except (ConsoleBack, EOFError):
+                choice = "5"
+
+            if choice == "5":
+                self.crawler.stop_all()
+                await self.accounts.disconnect(self.client)
+                self.client = None
+                self.client_account = None
+                break
+
+            try:
+                if choice == "1":
+                    await self.start_crawler_flow()
+                elif choice == "2":
+                    await self.change_settings()
+                elif choice == "3":
+                    await self.manage_channels()
+                elif choice == "4":
+                    await self.account_menu()
+            except ConsoleBack:
+                self.show_message("Returned to the main menu.", Fore.YELLOW)
+            except EOFError:
                 self.crawler.stop_all()
                 await self.accounts.disconnect(self.client)
                 self.client = None

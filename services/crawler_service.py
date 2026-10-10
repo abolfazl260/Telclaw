@@ -54,7 +54,8 @@ class CrawlerService:
         """Schedule crawling for one or more categories.
 
         Channels shared by multiple selected categories are scheduled only once.
-        The order of categories and channels is preserved.
+        Selection order remains stable for scheduling identity; the scheduler
+        randomizes actual crawl order independently at the start of every cycle.
         """
         if from_date > to_date:
             raise ValueError("Start date cannot be later than end date")

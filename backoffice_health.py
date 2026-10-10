@@ -9,6 +9,7 @@ from pathlib import Path
 
 import config
 from storage.database import get_connection
+from services.health_metrics import collect as collect_health_metrics
 
 _PROCESS_STARTED_MONOTONIC = time.monotonic()
 _CPU_BASE = resource.getrusage(resource.RUSAGE_SELF).ru_utime + resource.getrusage(resource.RUSAGE_SELF).ru_stime
@@ -93,64 +94,9 @@ def _database_report(conn):
     }
 
 
-def _pipeline_report(conn):
-    if not _table_exists(conn, "messages"):
-        return {
-            "total": 0, "channels": 0, "processing_pending": 0, "processing_failed": 0,
-            "classification_pending": 0, "classification_failed": 0, "ai_pending": 0,
-            "ai_failed": 0, "advertio_pending": 0, "advertio_failed": 0,
-            "last_crawl": None, "last_processing": None, "last_classification": None,
-            "last_ai": None, "last_advertio": None,
-        }
-    columns = _columns(conn, "messages")
-    def status_count(column, value, extra=None):
-        if column not in columns:
-            return 0
-        where = f"{column}=?"
-        params = [value]
-        if extra:
-            where += " AND " + extra
-        return _count(conn, "messages", where, params)
-
-    total = _count(conn, "messages")
-    channels = 0
-    if "channel_username" in columns:
-        row = conn.execute("SELECT COUNT(DISTINCT channel_username) n FROM messages").fetchone()
-        channels = int(row["n"] or 0)
-
-    def max_column(column, where="1", params=()):
-        if column not in columns:
-            return None
-        row = conn.execute(
-            f"SELECT MAX({column}) value FROM messages WHERE {where}",
-            params,
-        ).fetchone()
-        return row["value"] if row and row["value"] else None
-
-    advertio_pending = 0
-    if {"advertio_status", "ai_status"} <= columns:
-        advertio_pending = _count(
-            conn, "messages",
-            "ai_status='processed' AND COALESCE(advertio_status,'waiting') IN ('waiting','retry')",
-        )
-
-    return {
-        "total": total,
-        "channels": channels,
-        "processing_pending": status_count("processing_status", "pending", "collection_status='collected'") if "collection_status" in columns else status_count("processing_status", "pending"),
-        "processing_failed": status_count("processing_status", "failed"),
-        "classification_pending": status_count("classification_status", "pending"),
-        "classification_failed": status_count("classification_status", "failed"),
-        "ai_pending": status_count("ai_status", "pending"),
-        "ai_failed": status_count("ai_status", "failed"),
-        "advertio_pending": advertio_pending,
-        "advertio_failed": status_count("advertio_status", "failed"),
-        "last_crawl": max_column("date", "collection_status='collected'") if "collection_status" in columns else max_column("date"),
-        "last_processing": max_column("cleaned_at"),
-        "last_classification": max_column("classification_processed_at"),
-        "last_ai": max_column("ai_processed_at"),
-        "last_advertio": max_column("advertio_processed_at"),
-    }
+def _pipeline_report(conn, quick_check=None):
+    """Back Office uses the same queue counts and timestamps as /health."""
+    return collect_health_metrics(conn, quick_check=quick_check)
 
 
 def _daily_crawl_report(conn, limit=14):
@@ -476,9 +422,10 @@ def snapshot():
     conn = get_connection()
     try:
         subscribers = _count(conn, "telegram_monitor_subscribers", "enabled=1")
+        database_report = _database_report(conn)
         return {
-            "database": _database_report(conn),
-            "pipeline": _pipeline_report(conn),
+            "database": database_report,
+            "pipeline": _pipeline_report(conn, quick_check=database_report["quick_check"]),
             "daily": _daily_crawl_report(conn),
             "stage_daily": _daily_stage_activity_report(conn),
             "channels": _channel_report(conn),

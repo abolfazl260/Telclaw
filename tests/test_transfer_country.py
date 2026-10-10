@@ -7,6 +7,8 @@ def test_country_summary_groups_active_rows_by_origin_and_destination():
         {"origin_country": "ir", "destination_country": "de"},
         {"origin_country": "TR", "destination_country": "DE"},
         {"origin_country": "IR", "destination_country": "CA"},
+        {"origin_country": "", "destination_country": "CA"},
+        {"origin_country": "IR", "destination_country": ""},
     ]
 
     assert _country_summary_rows(rows) == [
@@ -24,11 +26,17 @@ def test_country_rich_message_contains_country_counts(monkeypatch):
 
     message = _build_country_messages()[0]["html"]
 
-    assert "خلاصه درخواست‌های فعال" in message
-    assert "مجموع درخواست‌های باز: <b>3</b>" in message
-    assert "ایران" in message
-    assert "آلمان" in message
-    assert "ترکیه" in message
-    assert "کانادا" in message
+    assert "Advertio Cargo &amp; Passenger" in message
+    assert "@advertio_cargo" in message
+    assert "Active ads: <b>3</b>" in message
+    assert "Last 7 days: <b>0</b>" in message
+    assert "Last 30 days: <b>0</b>" in message
+    assert "Total ads: <b>0</b>" in message
+    assert "Origin" in message
+    assert "Destination" in message
+    assert "Iran 🇮🇷" in message
+    assert "Germany 🇩🇪" in message
+    assert "Turkey 🇹🇷" in message
+    assert "Canada 🇨🇦" in message
     assert ">2<" in message
     assert ">1<" in message

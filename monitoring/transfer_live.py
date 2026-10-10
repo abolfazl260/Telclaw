@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import html
+import sqlite3
 from collections import OrderedDict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from types import MethodType
 from zoneinfo import ZoneInfo
 
@@ -12,14 +13,14 @@ from storage import database
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_RICH_MESSAGE_LENGTH = 30000
 COUNTRY_NAMES = {
-    "IR": "ایران", "DE": "آلمان", "TR": "ترکیه", "CA": "کانادا", "US": "آمریکا",
-    "GB": "انگلستان", "FR": "فرانسه", "IT": "ایتالیا", "ES": "اسپانیا", "NL": "هلند",
-    "BE": "بلژیک", "AT": "اتریش", "CH": "سوئیس", "SE": "سوئد", "NO": "نروژ",
-    "DK": "دانمارک", "FI": "فنلاند", "PL": "لهستان", "GR": "یونان", "RU": "روسیه",
-    "UA": "اوکراین", "AE": "امارات", "QA": "قطر", "SA": "عربستان", "KW": "کویت",
-    "OM": "عمان", "IQ": "عراق", "AZ": "آذربایجان", "GE": "گرجستان", "AM": "ارمنستان",
-    "CN": "چین", "JP": "ژاپن", "KR": "کره جنوبی", "IN": "هند", "PK": "پاکستان",
-    "AF": "افغانستان",
+    "IR": "Iran", "DE": "Germany", "TR": "Turkey", "CA": "Canada", "US": "United States",
+    "GB": "United Kingdom", "FR": "France", "IT": "Italy", "ES": "Spain", "NL": "Netherlands",
+    "BE": "Belgium", "AT": "Austria", "CH": "Switzerland", "SE": "Sweden", "NO": "Norway",
+    "DK": "Denmark", "FI": "Finland", "PL": "Poland", "GR": "Greece", "RU": "Russia",
+    "UA": "Ukraine", "AE": "United Arab Emirates", "QA": "Qatar", "SA": "Saudi Arabia", "KW": "Kuwait",
+    "OM": "Oman", "IQ": "Iraq", "AZ": "Azerbaijan", "GE": "Georgia", "AM": "Armenia",
+    "CN": "China", "JP": "Japan", "KR": "South Korea", "IN": "India", "PK": "Pakistan",
+    "AF": "Afghanistan",
 }
 
 
@@ -152,6 +153,10 @@ def _country_summary_rows(rows):
     for row in rows:
         origin = str(row["origin_country"] or "").strip().upper() or "??"
         destination = str(row["destination_country"] or "").strip().upper() or "??"
+        # Requests without a known origin or destination are not actionable
+        # country-summary rows and must not affect the displayed total.
+        if origin == "??" or destination == "??":
+            continue
         key = (origin, destination)
         counts[key] = counts.get(key, 0) + 1
 
@@ -164,6 +169,63 @@ def _country_summary_rows(rows):
 def _fetch_active_country_summary():
     """Return active requests grouped by origin/destination country."""
     return _country_summary_rows(_fetch_active_rows())
+
+
+def _fetch_published_transfer_stats() -> dict:
+    """Return the latest flight number and recent publication counts."""
+    conn = database.get_connection()
+    try:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        sources = []
+        if "telegram_transfer_publications" in tables:
+            sources.append(
+                "SELECT message_row_id AS message_id, processed_at AS published_at "
+                "FROM telegram_transfer_publications WHERE status='sent'"
+            )
+        if "publishing_deliveries" in tables and "messages" in tables:
+            sources.append(
+                "SELECT d.message_id, d.updated_at AS published_at "
+                "FROM publishing_deliveries d "
+                "JOIN messages m ON m.id=d.message_id "
+                "WHERE d.status='sent' AND m.ai_category='transferlist'"
+            )
+        if not sources:
+            return {"latest_number": 0, "last_7_days": 0, "last_30_days": 0}
+        now = datetime.now(timezone.utc)
+        since_7 = (now - timedelta(days=7)).isoformat()
+        since_30 = (now - timedelta(days=30)).isoformat()
+        published_query = (
+            "SELECT message_id, MAX(published_at) AS published_at FROM ("
+            + " UNION ALL ".join(sources)
+            + ") GROUP BY message_id"
+        )
+        params = (since_7, since_30)
+        row = conn.execute(
+            """SELECT SUM(CASE WHEN datetime(published_at) >= datetime(?) THEN 1 ELSE 0 END) AS last_7_days,
+                      SUM(CASE WHEN datetime(published_at) >= datetime(?) THEN 1 ELSE 0 END) AS last_30_days
+                 FROM (""" + published_query + ") published",
+            params,
+        ).fetchone()
+        latest_number = 0
+        if "telegram_transfer_publications" in tables:
+            latest_number = int(conn.execute(
+                "SELECT COALESCE(MAX(ad_number), 0) AS latest_number "
+                "FROM telegram_transfer_publications"
+            ).fetchone()["latest_number"] or 0)
+        return {
+            "latest_number": latest_number,
+            "last_7_days": int(row["last_7_days"] or 0),
+            "last_30_days": int(row["last_30_days"] or 0),
+        }
+    except sqlite3.OperationalError:
+        return {"latest_number": 0, "last_7_days": 0, "last_30_days": 0}
+    finally:
+        conn.close()
 
 
 def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
@@ -251,19 +313,25 @@ def _build_messages():
 def _build_country_messages():
     """Build Rich Messages for the active request country summary."""
     summary = _fetch_active_country_summary()
+    published = _fetch_published_transfer_stats()
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
     if not summary:
         return [{"html": (
-            "<h1>🌍 خلاصه درخواست‌های فعال</h1>"
-            "<p>⚠️ در حال حاضر درخواست باز حمل‌ونقل وجود ندارد.</p>"
+            "<h1>Advertio Cargo &amp; Passenger</h1>"
+            + "<p>📊 Active ads: <b>0</b></p>"
+            + "<p>📅 Last 7 days: <b>{:,}</b></p>".format(published["last_7_days"])
+            + "<p>📅 Last 30 days: <b>{:,}</b></p>".format(published["last_30_days"])
+            + "<p>📤 Total ads: <b>{:,}</b></p>".format(published["latest_number"])
+            + "<p><b>@advertio_cargo</b></p>"
+            "<p>⚠️ No open transfer requests at the moment.</p>"
         )}]
 
     total = sum(count for _, count in summary)
     rows = [
         "<tr>"
-        + _cell("مبدا", header=True)
-        + _cell("مقصد", header=True)
-        + _cell("تعداد درخواست باز", header=True, align="center")
+        + _cell("Origin", header=True)
+        + _cell("Destination", header=True)
+        + _cell("Open Requests", header=True, align="center")
         + "</tr>"
     ]
     for (origin, destination), count in summary:
@@ -271,19 +339,23 @@ def _build_country_messages():
         destination_name = COUNTRY_NAMES.get(destination, destination if destination != "??" else "نامشخص")
         rows.append(
             "<tr>"
-            + _cell(f"{_country_flag(origin)} {origin_name}")
-            + _cell(f"{_country_flag(destination)} {destination_name}")
+            + _cell(f"{origin_name} {_country_flag(origin)}")
+            + _cell(f"{destination_name} {_country_flag(destination)}")
             + _cell(f"{count:,}", align="center")
             + "</tr>"
         )
 
     return [{"html": (
-        "<h1>🌍 خلاصه درخواست‌های فعال</h1>"
-        f"<p>📊 مجموع درخواست‌های باز: <b>{total:,}</b></p>"
+        "<h1>Advertio Cargo &amp; Passenger</h1>"
+        f"<p>📊 Active ads: <b>{total:,}</b></p>"
+        f"<p>📅 Last 7 days: <b>{published['last_7_days']:,}</b></p>"
+        f"<p>📅 Last 30 days: <b>{published['last_30_days']:,}</b></p>"
+        f"<p>📤 Total ads: <b>{published['latest_number']:,}</b></p>"
         "<table bordered striped compact>"
         + "".join(rows)
         + "</table>"
-        f"<p>🕐 آخرین بروزرسانی: {generated} تهران</p>"
+        f"<p>🕐 Last updated: {generated} Tehran</p>"
+        "<p><b>@advertio_cargo</b></p>"
     )}]
 
 

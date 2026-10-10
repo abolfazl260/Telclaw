@@ -9,6 +9,7 @@ import config
 from storage import database
 from services.stage_control import get_stage_control
 from monitoring.error_alerts import ErrorAlertDispatcher
+from monitoring.source_formatter import format_source_messages
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
@@ -201,25 +202,24 @@ class TelegramMonitor:
             def n(key): return int(row[key] or 0)
             return ("📊 <b>TODAY</b>\n\n" f"📥 <b>Crawled:</b> {n('crawled'):,}\n" f"🆕 <b>New messages:</b> {n('new_messages'):,}\n" f"⚙️ <b>Processed:</b> {n('processed'):,}\n" f"🤖 <b>AI processed:</b> {n('ai_processed'):,}\n" f"❌ <b>AI failed:</b> {n('ai_failed'):,}\n" f"📤 <b>Advertio sent:</b> {n('advertio_sent'):,}\n" f"🚨 <b>Advertio failed:</b> {n('advertio_failed'):,}\n\n" f"🕐 <b>Tehran date:</b> {today}")
         finally: conn.close()
-    async def _send_source_chunks(self,chat_id):
+    async def _send_source_chunks(self, chat_id):
+        """Send an attractive, safe HTML source directory in complete pages."""
         try:
-            with open(config.CHANNELS_JSON,"r",encoding="utf-8") as f:data=json.load(f)
-        except Exception as exc: await self._send(chat_id,f"❌ <b>Source file error</b>\n<pre>{html.escape(str(exc))}</pre>"); return
-        lines=[f"📡 <b>Configured Sources</b>",f"<b>File:</b> {html.escape(config.CHANNELS_JSON)}",""]; total=0
-        for category,items in data.items():
-            lines.append(f"<b>{html.escape(str(category))}</b>")
-            for item in items:
-                username=str(item.get("username","")).lstrip("@"); name=html.escape(str(item.get("name") or username or "Unknown"))
-                if username: lines.append(f'• <a href="https://t.me/{html.escape(username,quote=True)}">{name}</a> (@{html.escape(username)})')
-                else: lines.append(f"• {name}")
-                total+=1
-            lines.append("")
-        lines.insert(1,f"<b>Total:</b> {total}"); chunks=[]; current=""
-        for line in "\n".join(lines).splitlines(True):
-            if current and len(current)+len(line)>3900: chunks.append(current); current=""
-            current+=line
-        if current:chunks.append(current)
-        for chunk in chunks: await self._send(chat_id,chunk)
+            with open(config.CHANNELS_JSON, "r", encoding="utf-8") as handle:
+                source_data = json.load(handle)
+            pages = format_source_messages(source_data)
+        except (OSError, ValueError, TypeError) as exc:
+            logger.error("Unable to render configured Telegram sources: %s", exc)
+            await self._send(
+                chat_id,
+                "❌ <b>Source file error</b>\n"
+                f"<pre>{html.escape(str(exc))}</pre>",
+            )
+            return
+
+        for page in pages:
+            await self._send(chat_id, page)
+
     async def _send(self,chat_id,text,reply_markup=None):
         if not self._is_admin_chat(chat_id): return
         payload={"chat_id":chat_id,"text":text,"parse_mode":"HTML","disable_web_page_preview":True}

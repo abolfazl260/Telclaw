@@ -1,6 +1,7 @@
 """Scheduling service for continuous crawl -> processing -> AI cycles."""
 
 import asyncio
+import random
 import time
 from datetime import date, datetime, timezone
 
@@ -188,9 +189,10 @@ class SchedulerService:
     ):
         """Run one complete multi-channel cycle before waiting for the next cycle.
 
-        All selected channels are crawled first. Only after the final channel
-        finishes do the processing/AI stages run and the transfer-live summary
-        get sent once. The scheduler then waits for the next cycle.
+        All selected channels are crawled once per cycle in a newly randomized
+        order. Only after the final channel finishes do the processing/AI stages
+        run and the transfer-live summary get sent once. The scheduler then
+        waits for the next cycle.
         """
         first_cycle = True
         while True:
@@ -210,9 +212,14 @@ class SchedulerService:
                     )
 
                 completed = 0
-                total = len(channels)
+                # Shuffle a copy for every full cycle. Keep the selected channel
+                # list unchanged so scheduling identity and future cycles remain
+                # stable, and visit every selected channel exactly once.
+                cycle_channels = list(channels)
+                random.shuffle(cycle_channels)
+                total = len(cycle_channels)
 
-                for index, channel_username in enumerate(channels, start=1):
+                for index, channel_username in enumerate(cycle_channels, start=1):
                     if index > 1 and channel_interval_minutes > 0:
                         print(
                             f"[SCHEDULER] Waiting {channel_interval_minutes:g} minute(s) "

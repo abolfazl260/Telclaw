@@ -51,6 +51,11 @@ def _maximum(conn, column, predicate="1"):
 
 
 def _last_event(conn, kind):
+    # Activity tracking was added after early Back Office test schemas.
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='system_activity'"
+    ).fetchone() is None:
+        return None, None
     row = conn.execute(
         "SELECT created_at, details FROM system_activity "
         "WHERE kind=? ORDER BY created_at DESC, id DESC LIMIT 1", (kind,)
@@ -110,6 +115,34 @@ def collect(conn, *, now=None, quick_check=None):
     message is only counted once in each total.
     """
     now = now or datetime.now(timezone.utc)
+    existing = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    if "messages" not in existing:
+        # Legacy/isolated Back Office installations can initialize publishing
+        # rules before the messages schema exists. Health must still render.
+        if quick_check is None:
+            try:
+                quick_check = conn.execute("PRAGMA quick_check").fetchone()[0]
+            except Exception as exc:
+                quick_check = f"error: {exc}"
+        zero = {f"{stage}_{suffix}": 0 for stage in
+                ("processing", "classification", "ai", "advertio")
+                for suffix in ("pending", "failed")}
+        return {
+            "total": 0, "channels": 0, **zero, "backlog": 0, "failed": 0,
+            **{f"last_{stage}": None for stage in
+               ("crawl", "processing", "classification", "ai", "advertio")},
+            "states": {
+                "crawler": "WARNING", "processing": "WARNING",
+                "classification": "WARNING" if config.AI_CLASSIFICATION_ENABLED else "DISABLED",
+                "ai": "WARNING" if config.AI_EXTRACTION_ENABLED else "DISABLED",
+                "advertio": "WARNING" if config.ADVERTIO_INGEST_ENABLED else "DISABLED",
+                "database": "HEALTHY" if str(quick_check).lower() == "ok" else "CRITICAL",
+            },
+            "warning": "No messages table has been initialized.",
+            "quick_check": str(quick_check),
+        }
     retries = int(config.AI_CLASSIFICATION_MAX_RETRIES)
     processing_pending = _count(conn, PROCESSING_READY)
     classification_pending = _count(conn, CLASSIFICATION_READY, (retries,))

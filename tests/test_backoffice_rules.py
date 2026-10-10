@@ -649,3 +649,102 @@ def test_new_structured_topic_table_is_discovered_without_rule_code_change(rule_
         ],
     )
     assert routing_rules.rule_matches(1)[1]["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_status_counters_use_all_records_not_last_30(rule_db):
+    """Original deliveries and resends have separate source counts, combined by status."""
+    from datetime import datetime, timezone
+
+    routing_rules.save_target("First", "@firstchannel")
+    routing_rules.save_target("Second", "@secondchannel")
+    routing_rules.save_target("Unused", "@unusedchannel")
+    now = datetime.now(timezone.utc).isoformat()
+
+    # 46 original delivery records for target #1: the 30-record recent history
+    # must not truncate the counters.
+    statuses = (
+        ["sent"] * 40 + ["failed"] + ["retry"] * 2
+        + ["uncertain", "rejected", "sending"]
+    )
+    assert len(statuses) == 46
+    conn = rule_db()
+    conn.executemany(
+        """INSERT INTO messages
+           (id,ai_category,ai_status,processing_status,message_id,
+            sender_username,channel_username,message_link,raw_text,text)
+           VALUES(?,'transferlist','processed','processed',?,'alice','test','','raw','text')""",
+        [(i, 1000 + i) for i in range(2, 47)],
+    )
+    conn.executemany(
+        """INSERT INTO publishing_deliveries
+           (message_id,target_id,status,telegram_message_id,error,updated_at)
+           VALUES(?,1,?,NULL,NULL,?)""",
+        [(i, status, now) for i, status in enumerate(statuses, 1)],
+    )
+    conn.executemany(
+        """INSERT INTO publishing_resends
+           (message_id,target_id,requested_by,status,telegram_message_id,
+            error,created_at,updated_at) VALUES(1,1,NULL,?,NULL,NULL,?,?)""",
+        [(status, now, now) for status in ("sent", "sent", "failed", "uncertain")],
+    )
+    # Same message delivered to a different destination must stay independent.
+    conn.execute(
+        """INSERT INTO publishing_deliveries
+           (message_id,target_id,status,telegram_message_id,error,updated_at)
+           VALUES(1,2,'sent',NULL,NULL,?)""",
+        (now,),
+    )
+    conn.commit()
+    conn.close()
+
+    stats = routing_rules.delivery_status_counts()
+    assert stats[1]["original_count"] == 46
+    assert stats[1]["resend_count"] == 4
+    assert stats[1]["total_records"] == 50
+    assert stats[1]["original"] == {
+        "sent": 40, "failed": 1, "retry": 2,
+        "uncertain": 1, "rejected": 1, "sending": 1,
+    }
+    assert stats[1]["resend"] == {
+        "sent": 2, "failed": 1, "uncertain": 1,
+    }
+    assert stats[1]["combined"] == {
+        "sent": 42, "failed": 2, "retry": 2,
+        "uncertain": 2, "rejected": 1, "sending": 1,
+    }
+    assert stats[2]["combined"] == {"sent": 1}
+    assert 3 not in stats
+    assert len(routing_rules.recent_deliveries(30, 1)) == 30
+
+    page = await backoffice_web.index(
+        {"session": {"csrf": "test"}, "csp_nonce": "nonce"}
+    )
+    first = page.text.split('id="channel-1"', 1)[1].split('id="channel-2"', 1)[0]
+    second = page.text.split('id="channel-2"', 1)[1].split('id="channel-3"', 1)[0]
+    for label, status, value in (
+        ("Sent", "sent", 42), ("Failed", "failed", 2),
+        ("Retry", "retry", 2), ("Uncertain", "uncertain", 2),
+        ("Rejected", "rejected", 1),
+    ):
+        assert (
+            f'class="delivery-stat delivery-stat-{status}">'
+            f'<span>{label}</span> <strong>{value}</strong>'
+        ) in first
+    assert "46 original" in first
+    assert "4 manual resends" in first
+    assert "Delivery history · last 30 records (showing 30 of 50)" in first
+    assert "30 deliveries" not in first
+    assert '<span>Sent</span> <strong>1</strong>' in second
+    assert '<span>Failed</span> <strong>0</strong>' in second
+
+
+def test_channel_status_counts_follow_current_original_state(rule_db):
+    """Retry resolution must update one original record, not count two attempts."""
+    routing_rules.save_target("First", "@firstchannel")
+    routing_rules.record_delivery(1, 1, "retry", error="Temporary failure")
+    assert routing_rules.delivery_status_counts()[1]["combined"] == {"retry": 1}
+    routing_rules.record_delivery(1, 1, "sent", telegram_message_id=501)
+    stats = routing_rules.delivery_status_counts()[1]
+    assert stats["combined"] == {"sent": 1}
+    assert stats["total_records"] == 1

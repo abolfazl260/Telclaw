@@ -1,6 +1,5 @@
 """Console presentation layer for Telclaw."""
 
-import asyncio
 import os
 from datetime import date
 
@@ -48,7 +47,7 @@ class ConsoleUI:
 
     async def prompt_choice(self, prompt, valid_options):
         while True:
-            value = (await read_line(prompt)).strip().lower()
+            value = (await read_line(f"{prompt.rstrip()} (Q = Back/Exit) ")).strip().lower()
             if is_q(value):
                 raise ConsoleBack()
             if value in valid_options:
@@ -291,7 +290,7 @@ class ConsoleUI:
             self.show_section_footer()
 
             try:
-                choice = await self.prompt_choice("\\nChoose an option [1-5/Q]: ", {"1", "2", "3", "4", "5"})
+                choice = await self.prompt_choice("\nChoose an option [1-5/Q]: ", {"1", "2", "3", "4", "5"})
             except (ConsoleBack, EOFError):
                 choice = "5"
 

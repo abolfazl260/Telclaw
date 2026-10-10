@@ -8,6 +8,7 @@ import aiohttp
 import config
 from storage import database
 from services.stage_control import get_stage_control
+from monitoring.error_alerts import ErrorAlertDispatcher
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
@@ -35,15 +36,20 @@ class _TelegramErrorHandler(logging.Handler):
     def emit(self,record):
         if record.name.startswith("monitoring.telegram_monitor"): return
         if _is_expected_aiohttp_client_noise(record): return
-        try: asyncio.get_running_loop().create_task(self.monitor.error(record.levelname,record.name,self.format(record)))
-        except RuntimeError: pass
+        dispatcher = self.monitor._error_dispatcher
+        if dispatcher is None:
+            return
+        message = self.format(record)
+        if record.exc_info and record.exc_info[1] is not None:
+            message += f" | {type(record.exc_info[1]).__name__}: {record.exc_info[1]}"
+        dispatcher.submit(record.levelname, record.name, message)
 
 class TelegramMonitor:
     def __init__(self):
-        self.token=config.TELEGRAM_BOT_TOKEN; self.enabled=config.TELEGRAM_MONITOR_ENABLED and bool(self.token); self._task=None; self._offset=0; self._stopping=asyncio.Event(); self._error_handler=None
+        self.token=config.TELEGRAM_BOT_TOKEN; self.enabled=config.TELEGRAM_MONITOR_ENABLED and bool(self.token); self._task=None; self._offset=0; self._stopping=asyncio.Event(); self._error_handler=None; self._error_dispatcher=None
     async def start(self):
         if not self.enabled: logger.info("Telegram monitor disabled"); return
-        database.initialize_db(); self._stopping.clear(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
+        database.initialize_db(); self._stopping.clear(); self._error_dispatcher=ErrorAlertDispatcher(self); self._error_dispatcher.start(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
     def runtime_status(self):
         task=self._task
         return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
@@ -60,6 +66,9 @@ class TelegramMonitor:
             try: await self._task
             except asyncio.CancelledError: pass
             self._task=None
+        if self._error_dispatcher:
+            await self._error_dispatcher.stop()
+            self._error_dispatcher=None
     async def _api(self,method,payload=None):
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
             async with session.post(f"https://api.telegram.org/bot{self.token}/{method}",json=payload or {}) as response:

@@ -8,6 +8,7 @@ from telethon import TelegramClient, errors
 
 import config
 from error_handler import log_exception
+from terminal_input import ConsoleBack, is_q, read_line
 
 os.makedirs(config.SESSION_DIR, exist_ok=True)
 
@@ -194,7 +195,10 @@ def create_client(account_name):
 
 
 async def _prompt(prompt):
-    return (await asyncio.to_thread(input, prompt)).strip()
+    value = (await read_line(f"{prompt} (Q = Cancel) ")).strip()
+    if is_q(value):
+        raise ConsoleBack()
+    return value
 
 
 async def register_new_account(session_name):
@@ -273,6 +277,9 @@ async def register_new_account(session_name):
         )
         print(f"❌ Could not connect to Telegram after multiple attempts. {proxy_hint}")
         return False
+    except ConsoleBack:
+        print("\n⚠️ Telegram login cancelled with Q.")
+        raise
     except (EOFError, KeyboardInterrupt):
         print("\n⚠️ Interactive input was interrupted. Telegram login was cancelled.")
         return False

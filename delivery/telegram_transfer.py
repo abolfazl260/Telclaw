@@ -413,7 +413,7 @@ def format_transfer_ad(record):
 
     return "\n\n".join(lines)
 
-async def send_transfer_ads(client, target_channel, limit=20):
+async def send_transfer_ads(client, target_channel, limit=20, should_stop=None):
     """Send unsent transfer ads to one Telegram channel and persist each result."""
     records = get_ready_transfer_ads(limit=limit)
     result = {"found": len(records), "sent": 0, "failed": 0}
@@ -421,6 +421,9 @@ async def send_transfer_ads(client, target_channel, limit=20):
         return result
 
     for record in records:
+        if should_stop and should_stop():
+            result["stopped"] = True
+            break
         message_id = record["processed_message_id"]
         try:
             sent = await client.send_message(target_channel, format_transfer_ad(record))

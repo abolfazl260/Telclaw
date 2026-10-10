@@ -469,7 +469,7 @@ class AdvertioDeliveryService:
     def get_pending_count(self, channel_username=None):
         return len(self.repository.get_advertio_pending(limit=1000000, channel_username=channel_username))
 
-    def deliver_pending(self, limit=100, channel_username=None, progress=True, media_downloader=None, before_datetime=None):
+    def deliver_pending(self, limit=100, channel_username=None, progress=True, media_downloader=None, before_datetime=None, should_stop=None):
         """Send processed housing records, optionally limited to work predating a cycle cutoff."""
         if before_datetime is None:
             records = self.repository.get_advertio_pending(
@@ -484,7 +484,11 @@ class AdvertioDeliveryService:
             )
         total = len(records)
         sent = already_existed = failed = 0
+        stopped = False
         for index, record in enumerate(records, start=1):
+            if should_stop and should_stop():
+                stopped = True
+                break
             try:
                 self.prepare_media_for_delivery(record, media_downloader=media_downloader)
                 result = self.deliver(record, record["housing_data"])
@@ -506,7 +510,10 @@ class AdvertioDeliveryService:
                 failed += 1
                 if progress:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']} reason={str(exc)[:300]}")
-        return {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}
+        result = {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}
+        if stopped:
+            result["stopped"] = True
+        return result
 
     def delete_original_post_listing(self, external_id):
         return self.client.delete_lead(self.source_name, str(external_id))

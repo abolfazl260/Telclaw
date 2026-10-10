@@ -56,6 +56,19 @@ Application entry point. It starts the application/UI and should remain thin.
 ### `system_ui.py` / UI modules
 Console/TUI interaction, menus, operational commands, and visible progress. UI should call services rather than duplicate business logic.
 
+Terminal input is owned by `terminal_input.py` (one daemon stdin reader and cancellable async waiters).
+All ConsoleUI prompts reserve `Q + Enter` for navigation. In submenus and forms,
+Q raises `ConsoleBack` and returns to the main menu; in the main menu it stops
+scheduled crawlers and exits via normal runtime cleanup. During a running queue,
+`SystemConsoleUI._run_with_q_stop` watches for Q and passes a cooperative
+`should_stop` callback. Processing, classification, AI extraction, Telegram
+manual delivery, and Advertio manual delivery check that callback between
+items/batches so work already in flight can finish and preserve its persisted
+status. The Groq connection test is a single atomic call and cannot be aborted
+mid-request. Existing background scheduler and automatic delivery call sites
+continue with default `should_stop=None`. Telegram account registration uses
+the same terminal input reader, preventing competing stdin consumers.
+
 ### `config.py`
 Environment/runtime configuration. API keys and secrets must never be hard-coded or committed.
 
@@ -370,6 +383,20 @@ Provider output must never be trusted simply because it is valid JSON.
 SQLite is the primary persistence layer.
 
 The raw message must remain available after processing so that cleaning, deduplication, prompts, or AI rules can be changed and records reprocessed.
+
+**Startup AI status migration:** `storage/database.py::_migrate_messages_table` runs on
+every `initialize_db()`, not just after a schema upgrade. It must preserve any
+explicit AI status (`pending`, `processing`, `processed`, `failed`,
+`skipped`) without inferring an outcome from `ai_processed_at` or
+`ai_error`. Extraction failures intentionally persist as `ai_status='failed'`
+and often `ai_error=NULL`. Only legacy/uninitialized states may be inferred,
+and only for a record whose classification makes it eligible for extraction.
+Startup queue recovery separately transitions stale `processing` claims to
+`pending`; it must not turn `failed` or `skipped` into successful records.
+Migration must be idempotent across repeated startups. This fix prevents new
+status corruption; it cannot conclusively identify already misclassified
+historical records without additional evidence, so no automatic repair is
+performed.
 
 When a message record is deleted, dependent AI/category records may be removed through foreign-key cascade. Any new deletion rule must explicitly consider downstream data loss.
 

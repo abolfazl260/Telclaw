@@ -19,6 +19,7 @@ from delivery.telegram_transfer import (
 from services.processing_service import ProcessingService
 import config
 from ui import ConsoleUI
+from terminal_input import ConsoleBack, read_line
 
 
 class SystemConsoleUI(ConsoleUI):
@@ -51,16 +52,22 @@ class SystemConsoleUI(ConsoleUI):
         return download
 
     async def _run_with_q_stop(self, operation):
-        """Run a queue operation while allowing the operator to stop it with Q + Enter."""
+        """Run an operation with Q + Enter as a cooperative stop request.
+
+        The shared stdin reader prevents a completed operation from leaving
+        a blocked input thread that consumes the next menu selection.
+        """
         stop_event = asyncio.Event()
 
         async def wait_for_q():
+            self.show_message("Press Q + Enter to stop after the current item.", Fore.YELLOW)
             while not stop_event.is_set():
-                value = await asyncio.to_thread(
-                    input,
-                    "\nPress Q + Enter to stop the current command: ",
-                )
-                if value.strip().lower() == "q":
+                try:
+                    value = await read_line()
+                except EOFError:
+                    stop_event.set()
+                    return
+                if value.strip().casefold() == "q":
                     stop_event.set()
                     self.show_message(
                         "Stop requested. The current item will finish, then the queue will stop.",
@@ -70,11 +77,10 @@ class SystemConsoleUI(ConsoleUI):
 
         stop_task = asyncio.create_task(wait_for_q())
         try:
-            return await operation(lambda: stop_event.is_set())
+            return await operation(stop_event.is_set)
         finally:
             stop_event.set()
-            if not stop_task.done():
-                stop_task.cancel()
+            stop_task.cancel()
             try:
                 await stop_task
             except asyncio.CancelledError:
@@ -140,6 +146,8 @@ class SystemConsoleUI(ConsoleUI):
                     f"Skipped: {result['skipped']}",
                     Fore.GREEN if result["failed"] == 0 and not result.get("stopped") else Fore.YELLOW,
                 )
+        except ConsoleBack:
+            raise
         except Exception as exc:
             self.show_message(f"AI queue failed: {exc}", Fore.RED)
         await self.pause()
@@ -470,12 +478,20 @@ class SystemConsoleUI(ConsoleUI):
                 await self.pause()
                 return
 
-            result = await send_transfer_ads(client, target_channel, limit=limit)
-            color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
+            result = await self._run_with_q_stop(
+                lambda should_stop: send_transfer_ads(
+                    client, target_channel, limit=limit, should_stop=should_stop
+                )
+            )
+            stopped = result.get("stopped", False)
+            color = Fore.GREEN if result["failed"] == 0 and not stopped else Fore.YELLOW
             self.show_message(
-                f"Completed. Found: {result['found']} | Sent: {result['sent']} | Failed: {result['failed']}",
+                f"{'Stopped' if stopped else 'Completed'}. Found: {result['found']} | "
+                f"Sent: {result['sent']} | Failed: {result['failed']}",
                 color,
             )
+        except ConsoleBack:
+            raise
         except Exception as exc:
             self.show_message(f"Transfer delivery failed: {exc}", Fore.RED)
         await self.pause()
@@ -589,18 +605,25 @@ class SystemConsoleUI(ConsoleUI):
                 Fore.CYAN,
             )
             async with self.crawler.scheduler._pipeline_lock:
-                result = await asyncio.to_thread(
-                    self.advertio_service.deliver_pending,
-                    limit=limit,
-                    progress=True,
-                    media_downloader=media_downloader,
+                result = await self._run_with_q_stop(
+                    lambda should_stop: asyncio.to_thread(
+                        self.advertio_service.deliver_pending,
+                        limit=limit,
+                        progress=True,
+                        media_downloader=media_downloader,
+                        should_stop=should_stop,
+                    )
                 )
-            color = Fore.GREEN if result["failed"] == 0 else Fore.YELLOW
+            stopped = result.get("stopped", False)
+            color = Fore.GREEN if result["failed"] == 0 and not stopped else Fore.YELLOW
             self.show_message(
-                f"Completed. Found: {result['found']} | Sent: {result['sent']} | "
-                f"Already existed: {result['already_existed']} | Failed: {result['failed']}",
+                f"{'Stopped' if stopped else 'Completed'}. Found: {result['found']} | "
+                f"Sent: {result['sent']} | Already existed: {result['already_existed']} | "
+                f"Failed: {result['failed']}",
                 color,
             )
+        except ConsoleBack:
+            raise
         except Exception as exc:
             self.show_message(f"Advertio delivery failed: {exc}", Fore.RED)
         await self.pause()
@@ -610,13 +633,23 @@ class SystemConsoleUI(ConsoleUI):
         self.show_banner()
         self.show_section_header("Groq Connection Test")
         try:
-            success = await asyncio.to_thread(test_groq_connection)
-            self.show_message(
-                "Groq minimal connection test succeeded."
-                if success
-                else "Groq minimal connection test failed. See diagnostic output above.",
-                Fore.GREEN if success else Fore.RED,
-            )
+            async def run_check(should_stop):
+                success = await asyncio.to_thread(test_groq_connection)
+                return success, should_stop()
+
+            success, stopped = await self._run_with_q_stop(run_check)
+            if stopped:
+                self.show_message(
+                    "Stop requested. The in-flight connection test finished; returning to the menu.",
+                    Fore.YELLOW,
+                )
+            else:
+                self.show_message(
+                    "Groq minimal connection test succeeded."
+                    if success
+                    else "Groq minimal connection test failed. See diagnostic output above.",
+                    Fore.GREEN if success else Fore.RED,
+                )
         except Exception as exc:
             self.show_message(f"Groq connection test failed: {exc}", Fore.RED)
         await self.pause()
@@ -637,34 +670,50 @@ class SystemConsoleUI(ConsoleUI):
             print(f"{Fore.GREEN}│  9. 📋 Manage channels")
             print(f"{Fore.GREEN}│  10. 👤 Switch / add account")
             print(f"{Fore.GREEN}│  11. 🚪 Exit")
+            print(f"{Fore.YELLOW}│  Q. 🚪 Exit and stop scheduled crawler jobs")
             self.show_section_footer()
 
-            choice = await self.prompt_choice(
-                "\nChoose an option [1-11]: ",
-                {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"},
-            )
-            if choice == "1":
-                await self.start_crawler_flow()
-            elif choice == "2":
-                await self.run_processing_queue()
-            elif choice == "3":
-                await self.run_ai_queue()
-            elif choice == "4":
-                await self.classification_menu()
-            elif choice == "5":
-                await self.run_advertio_delivery()
-            elif choice == "6":
-                await self.transfer_ads_menu()
-            elif choice == "7":
-                await self.run_groq_connection_test()
-            elif choice == "8":
-                await self.change_settings()
-            elif choice == "9":
-                await self.manage_channels()
-            elif choice == "10":
-                await self.account_menu()
-            else:
+            try:
+                choice = await self.prompt_choice(
+                    "\nChoose an option [1-11/Q]: ",
+                    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"},
+                )
+            except (ConsoleBack, EOFError):
+                choice = "11"
+
+            if choice == "11":
                 self.crawler.stop_all()
                 await self.accounts.disconnect(self.client)
                 self.client = None
+                self.client_account = None
+                break
+
+            try:
+                if choice == "1":
+                    await self.start_crawler_flow()
+                elif choice == "2":
+                    await self.run_processing_queue()
+                elif choice == "3":
+                    await self.run_ai_queue()
+                elif choice == "4":
+                    await self.classification_menu()
+                elif choice == "5":
+                    await self.run_advertio_delivery()
+                elif choice == "6":
+                    await self.transfer_ads_menu()
+                elif choice == "7":
+                    await self.run_groq_connection_test()
+                elif choice == "8":
+                    await self.change_settings()
+                elif choice == "9":
+                    await self.manage_channels()
+                elif choice == "10":
+                    await self.account_menu()
+            except ConsoleBack:
+                self.show_message("Returned to the main menu.", Fore.YELLOW)
+            except EOFError:
+                self.crawler.stop_all()
+                await self.accounts.disconnect(self.client)
+                self.client = None
+                self.client_account = None
                 break

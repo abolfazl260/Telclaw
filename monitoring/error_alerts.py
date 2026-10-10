@@ -102,7 +102,7 @@ class ErrorAlertDispatcher:
                         self.last_sent.pop(old, None)
                         self.suppressed.pop(old, None)
                 if repeats:
-                    message += f"\\nSimilar errors suppressed: {repeats}"
+                    message += f"\nSimilar errors suppressed: {repeats}"
                 await self.monitor.error(level, source, message)
                 if self.dropped:
                     dropped = self.dropped

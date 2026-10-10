@@ -8,7 +8,7 @@ import pytest
 
 import config
 from monitoring.error_alerts import ErrorAlertDispatcher, redact_secrets
-from monitoring.telegram_monitor import TelegramMonitor
+from monitoring.telegram_monitor import ADMIN_USER_IDS, TelegramMonitor
 from storage import database
 
 
@@ -22,7 +22,7 @@ def monitor_db(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_background_worker_error_reaches_only_subscribed_admin(monitor_db, monkeypatch):
+async def test_background_worker_error_reaches_all_admins_without_start(monitor_db, monkeypatch):
     monitor = TelegramMonitor()
     calls = []
     async def fake_api(method, payload):
@@ -34,10 +34,6 @@ async def test_background_worker_error_reaches_only_subscribed_admin(monitor_db,
 
     monkeypatch.setattr(monitor, "_api", fake_api)
     monkeypatch.setattr(monitor, "_poll_updates", idle_poll)
-    monkeypatch.setattr(
-        "monitoring.telegram_monitor.database.get_monitor_subscribers",
-        lambda: [{"chat_id": 266809220}, {"chat_id": 123456789}],
-    )
     before = set(logging.getLogger().handlers)
     await monitor.start()
     try:
@@ -54,12 +50,14 @@ async def test_background_worker_error_reaches_only_subscribed_admin(monitor_db,
         notifications = [
             payload for method, payload in calls if method == "sendMessage"
         ]
-        assert len(notifications) == 1
-        assert notifications[0]["chat_id"] == 266809220
-        text = notifications[0]["text"]
-        assert "telclaw.test.worker" in text
-        assert "Worker crashed" in text
-        assert "98311" in text
+        assert len(notifications) == len(ADMIN_USER_IDS)
+        assert {item["chat_id"] for item in notifications} == ADMIN_USER_IDS
+        assert all(item["chat_id"] != 123456789 for item in notifications)
+        for item in notifications:
+            text = item["text"]
+            assert "telclaw.test.worker" in text
+            assert "Worker crashed" in text
+            assert "98311" in text
 
         with database.get_connection() as conn:
             activity = conn.execute(
@@ -70,6 +68,61 @@ async def test_background_worker_error_reaches_only_subscribed_admin(monitor_db,
     finally:
         await monitor.stop()
     assert set(logging.getLogger().handlers) == before
+
+
+@pytest.mark.asyncio
+async def test_admin_stop_before_start_opts_out_of_default_errors(monitor_db, monkeypatch):
+    monitor = TelegramMonitor()
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+
+    # Existing subscription list stays empty; errors still reach allowed admins.
+    assert database.get_monitor_subscribers() == []
+    await monitor.broadcast("ordinary subscribed report")
+    assert calls == []
+
+    await monitor._handle_update({
+        "message": {"from": {"id": 266809220},
+                    "chat": {"id": 266809220, "type": "private"},
+                    "text": "/stop"}
+    })
+    assert database.get_monitor_alert_opt_outs() == {266809220}
+    assert database.get_monitor_subscribers() == []
+    calls.clear()
+    await monitor.error("ERROR", "test.stop", "Failed from a default-on monitor")
+    assert {payload["chat_id"] for method, payload in calls if method == "sendMessage"} == (
+        ADMIN_USER_IDS - {266809220}
+    )
+
+    # /start re-enables both error delivery and ordinary subscribed reports.
+    calls.clear()
+    await monitor._handle_update({
+        "message": {"from": {"id": 266809220},
+                    "chat": {"id": 266809220, "type": "private"},
+                    "text": "/start"}
+    })
+    assert database.get_monitor_alert_opt_outs() == set()
+    calls.clear()
+    await monitor.error("ERROR", "test.resume", "New error after opt-in")
+    assert {payload["chat_id"] for method, payload in calls if method == "sendMessage"} == ADMIN_USER_IDS
+
+
+@pytest.mark.asyncio
+async def test_error_notifications_respect_disabled_monitor(monitor_db, monkeypatch):
+    monitor = TelegramMonitor()
+    monitor.enabled = False
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    await monitor.error("ERROR", "test.disabled", "Stored but not transmitted")
+    assert calls == []
 
 
 @pytest.mark.asyncio

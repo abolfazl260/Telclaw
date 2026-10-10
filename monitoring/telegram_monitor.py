@@ -122,7 +122,7 @@ class TelegramMonitor:
         if command == "/start":
             database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
         elif command == "/stop":
-            database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت گزارش‌های Telclaw متوقف شد.")
+            database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت اعلان خطاها و گزارش‌های Telclaw متوقف شد. برای فعال‌سازی دوباره /start را ارسال کنید.")
         elif command == "/status": await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard())
         elif command == "/health": await self._send(chat_id,await self._build_health_message())
         elif command == "/today": await self._send(chat_id,await self._build_today_message())
@@ -250,12 +250,28 @@ class TelegramMonitor:
             if not self._is_admin_chat(subscriber.get("chat_id")): continue
             try: await self._send(int(subscriber["chat_id"]),text)
             except Exception: logger.warning("Telegram monitor delivery failed for subscriber %s",subscriber["chat_id"])
+    async def broadcast_admin_errors(self, text):
+        """Send errors to every allowlisted admin unless they explicitly /stop.
+
+        General pipeline reports keep their existing /start subscription behavior.
+        Telegram may reject delivery if an admin has never opened the bot.
+        """
+        if not self.enabled:
+            return
+        disabled = database.get_monitor_alert_opt_outs()
+        for admin_id in sorted(ADMIN_USER_IDS - disabled):
+            try:
+                await self._send(admin_id, text)
+            except Exception:
+                # Do not recursively report failures inside the notifier.
+                logger.warning("Telegram admin error alert failed for admin %s", admin_id)
+
     async def error(self,level,source,message):
         try:
             database.record_system_activity("error",level,source,str(message)[:4000])
         except Exception:
             logger.exception("Failed to persist system error activity")
-        await self.broadcast(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
+        await self.broadcast_admin_errors(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
     async def report(self,kind,stats):
         try:
             database.record_system_activity(kind,"INFO","telegram_monitor",f"{kind} report",stats)

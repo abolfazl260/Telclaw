@@ -55,7 +55,8 @@ PROCESSING_INTERVAL_MINUTES = _float_env("TELCLAW_PROCESSING_INTERVAL_MINUTES", 
 AI_INTERVAL_MINUTES = _float_env("TELCLAW_AI_INTERVAL_MINUTES", 1, minimum=0)
 TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 
-TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+# Enabled by default when a bot token is configured; operators can explicitly disable it.
+TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 TELEGRAM_BOT_TOKEN = os.getenv("TELCLAW_TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = _float_env("TELCLAW_TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", 30, minimum=0)
 BACKOFFICE_ENABLED = os.getenv("TELCLAW_BACKOFFICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}

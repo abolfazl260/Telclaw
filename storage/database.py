@@ -192,9 +192,29 @@ def subscribe_monitor_chat(chat_id,username=None,first_name=None):
     try: conn.execute("INSERT INTO telegram_monitor_subscribers(chat_id,username,first_name,enabled) VALUES(?,?,?,1) ON CONFLICT(chat_id) DO UPDATE SET username=excluded.username,first_name=excluded.first_name,enabled=1,last_seen=CURRENT_TIMESTAMP",(int(chat_id),username,first_name)); conn.commit()
     finally: conn.close()
 def unsubscribe_monitor_chat(chat_id):
+    """Persist explicit /stop even if the admin never used /start."""
     conn=get_connection()
-    try: conn.execute("UPDATE telegram_monitor_subscribers SET enabled=0,last_seen=CURRENT_TIMESTAMP WHERE chat_id=?",(int(chat_id),)); conn.commit()
+    try:
+        conn.execute(
+            """INSERT INTO telegram_monitor_subscribers(chat_id,enabled)
+               VALUES(?,0)
+               ON CONFLICT(chat_id) DO UPDATE SET
+                   enabled=0,last_seen=CURRENT_TIMESTAMP""",
+            (int(chat_id),),
+        )
+        conn.commit()
     finally: conn.close()
+
+def get_monitor_alert_opt_outs():
+    """Admins without a row receive errors by default; enabled=0 opts out."""
+    conn=get_connection()
+    try:
+        return {int(row["chat_id"]) for row in conn.execute(
+            "SELECT chat_id FROM telegram_monitor_subscribers WHERE enabled=0"
+        ).fetchall()}
+    finally:
+        conn.close()
+
 def get_monitor_subscribers():
     conn=get_connection()
     try: return [dict(r) for r in conn.execute("SELECT * FROM telegram_monitor_subscribers WHERE enabled=1 ORDER BY chat_id").fetchall()]

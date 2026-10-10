@@ -88,7 +88,7 @@ SPECS = (
     _s("TELCLAW_AI_EXTRACTION_TRANSFERLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="false"),
     _s("TELCLAW_AI_EXTRACTION_JOBLIST_ENABLED", None, "AI Extraction", kind="bool", fallback="false"),
 
-    _s("TELCLAW_TELEGRAM_MONITOR_ENABLED", "TELEGRAM_MONITOR_ENABLED", "Monitoring", kind="bool", restart=True, fallback="false"),
+    _s("TELCLAW_TELEGRAM_MONITOR_ENABLED", "TELEGRAM_MONITOR_ENABLED", "Monitoring", kind="bool", restart=True, fallback="true"),
     _s("TELCLAW_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN", "Monitoring", secret=True, restart=True),
     _s("TELCLAW_TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", "TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", "Monitoring", kind="float", minimum=0, fallback="30"),
 

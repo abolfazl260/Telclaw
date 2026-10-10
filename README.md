@@ -213,18 +213,27 @@ AI output must never be sent directly to an external service without validation.
 ### Administrator error notifications
 
 The existing Telegram monitoring bot sends application `ERROR` and `CRITICAL`
-log events to subscribed, allowlisted administrators. This includes worker-thread
-processing failures, crawler and storage errors, AI classification/extraction
-errors, Advertio delivery failures, Back Office operation failures, and terminal
+log events **by default to every administrator on `ADMIN_USER_IDS`** (not
+only those who used `/start`). This includes worker-thread processing
+failures, crawler and storage errors, AI classification/extraction errors,
+Advertio delivery failures, Back Office operation failures, and terminal
 queue exceptions. Alerts contain the component/source, error message and
 Tehran-local timestamp.
 
-To receive notifications, set `TELCLAW_TELEGRAM_MONITOR_ENABLED=true`, provide
-`TELCLAW_TELEGRAM_BOT_TOKEN`, restart Telclaw, then open a private chat with
-the monitoring bot and send `/start` **from an admin account on the
-`ADMIN_USER_IDS` allowlist**. Telegram bots cannot initiate a conversation
-with accounts that have not opened the bot. `/stop` disables reports for that
-administrator. Unrecognized users and group chats cannot subscribe.
+Set `TELCLAW_TELEGRAM_BOT_TOKEN` to enable monitoring (the
+`TELCLAW_TELEGRAM_MONITOR_ENABLED` setting defaults to `true`; setting it
+explicitly to `false` disables it). Restart Telclaw after updating settings.
+No `/start` subscription is required to receive error alerts; an administrator
+can send `/stop` **even before `/start`** to opt out of both error alerts
+and ordinary subscribed reports, and `/start` to enable them again.
+Ordinary pipeline reports and transfer-live summaries remain opt-in via
+`/start`, as before; this default-on behavior only applies to system errors.
+
+**Telegram platform limitation:** the bot cannot send a message to an admin
+who has never initiated a private conversation with the bot, or has blocked
+it. Those admins must open the bot at least once to permit delivery; this is
+a Telegram requirement, not a Telclaw subscription requirement. Unauthorized
+users and group chats never receive the alerts.
 
 The notifier uses a bounded asynchronous queue, safely accepts Python logging
 events from worker threads, redacts configured API credentials, and limits

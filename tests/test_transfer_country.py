@@ -1,3 +1,5 @@
+import pytest
+
 from monitoring.transfer_live import _build_country_messages, _country_summary_rows
 
 
@@ -76,6 +78,7 @@ def test_country_rich_message_empty_state_keeps_heading_counters_and_buttons(mon
     assert message.endswith("</tg-button-row>")
 
 
+@pytest.mark.asyncio
 async def test_country_command_sends_buttons_as_part_of_rich_message(monkeypatch):
     from monitoring.transfer_live import _send_transfer_country
 

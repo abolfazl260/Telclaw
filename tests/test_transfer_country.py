@@ -54,7 +54,8 @@ def test_country_rich_message_contains_persian_heading_live_counts_and_embedded_
 
     # Rich Message native buttons, not an external inline keyboard.
     assert message.count('<tg-button-row align="center">') == 1
-    assert message.count('<tg-button type="url" style="primary"') == 2
+    assert message.count('<tg-button-row>') == 1
+    assert message.count('<tg-button type="url" style="primary"') == 3
     match = re.search(
         r'<tg-button type="url" style="primary" url="([^"]+)">📝 ثبت آگهی</tg-button>',
         message,
@@ -71,7 +72,17 @@ def test_country_rich_message_contains_persian_heading_live_counts_and_embedded_
     assert " " not in draft_url
     assert "پشتیبان" not in message
     assert 'url="https://t.me/advertio_cargo">✈️ کانال ارسال بار هوایی</tg-button>' in message
-    assert message.endswith("</tg-button-row>")
+    assert message.endswith(
+        '<tg-button-row>'
+        '<tg-button type="url" style="primary" url="https://t.me/Flightiranbot">'
+        '✈️ بلیط پرواز ادورتیو بدون واسطه</tg-button>'
+        '</tg-button-row>'
+    )
+    # The booking bot must be the only button in its own full-length row.
+    assert message.index('✈️ کانال ارسال بار هوایی</tg-button>') < message.index(
+        '<tg-button-row><tg-button type="url" style="primary" '
+        'url="https://t.me/Flightiranbot">'
+    )
 
 
 def test_country_rich_message_empty_state_keeps_heading_counters_and_buttons(monkeypatch):
@@ -94,7 +105,10 @@ def test_country_rich_message_empty_state_keeps_heading_counters_and_buttons(mon
     assert "📤 تعداد آگهی های ثبت شده: <b>9,524</b>" in message
     assert "در حال حاضر آگهی فعال" in message
     assert "<table" not in message
-    assert message.count('<tg-button type="url" style="primary"') == 2
+    assert message.count('<tg-button type="url" style="primary"') == 3
+    assert message.count('<tg-button-row>') == 1
+    assert "https://t.me/Flightiranbot" in message
+    assert "✈️ بلیط پرواز ادورتیو بدون واسطه" in message
     assert "📝 ثبت آگهی" in message
     assert "https://t.me/advertio_support?text=" in message
     assert "✈️ کانال ارسال بار هوایی" in message
@@ -130,4 +144,6 @@ async def test_country_command_sends_buttons_as_part_of_rich_message(monkeypatch
     assert "<tg-button-row" in payload["rich_message"]["html"]
     assert "📝 ثبت آگهی" in payload["rich_message"]["html"]
     assert "https://t.me/advertio_support?text=" in payload["rich_message"]["html"]
+    assert "https://t.me/Flightiranbot" in payload["rich_message"]["html"]
+    assert payload["rich_message"]["html"].count('<tg-button-row>') == 1
     assert "reply_markup" not in payload

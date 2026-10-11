@@ -94,6 +94,7 @@ async def test_queue_metrics_exclude_nonhousing_advertio_and_count_unique_failed
     html = await monitor._build_health_message()
     assert "Pipeline backlog (unique messages):</b> 5" in html
     assert "Failed items (unique messages):</b> 4" in html
+    assert "Pending/eligible = current queue; failed = stored failure states" in html
     assert "Last crawl:</b> Not recorded" in html
     assert "2026-10-01 03:30:00" not in html
 
@@ -149,3 +150,84 @@ def test_failed_crawl_is_not_healthy_just_because_a_report_exists(health_data):
         conn.commit()
         result = collect(conn, now=when)
     assert result["states"]["crawler"] == "WARNING"
+
+
+def test_historical_failures_do_not_trigger_critical_with_empty_active_queues(health_data):
+    """A stale failed record is history, not evidence of a stalled live worker."""
+    now = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
+    old = datetime(2026, 10, 9, 12, tzinfo=timezone.utc).isoformat()
+    with database.get_connection() as conn:
+        # Drain all actionable queues while retaining failed records intact.
+        conn.execute("UPDATE messages SET processing_status='processed' WHERE message_id=1")
+        conn.execute(
+            "UPDATE messages SET classification_status='processed', ai_category='none', "
+            "ai_status='skipped' WHERE message_id=2"
+        )
+        # Keep the exhausted classification failure for history, but make it
+        # ineligible for an automatic retry under the configured retry budget.
+        conn.execute(
+            "UPDATE messages SET classification_attempts=3 WHERE message_id=3"
+        )
+        conn.execute("UPDATE messages SET ai_status='skipped' WHERE message_id=4")
+        conn.execute("UPDATE messages SET advertio_status='sent' WHERE message_id=7")
+        for kind in ("processing", "classification", "ai", "advertio"):
+            conn.execute(
+                "INSERT INTO system_activity(kind, level, created_at) "
+                "VALUES(?, 'INFO', ?)", (kind, old),
+            )
+        conn.commit()
+        result = collect(conn, now=now)
+
+    assert result["backlog"] == 0
+    assert result["processing_pending"] == 0
+    assert result["classification_pending"] == 0
+    assert result["ai_pending"] == 0
+    assert result["advertio_pending"] == 0
+    # Do not discard or rewrite actual failed statuses in persisted records.
+    assert result["processing_failed"] == 1
+    assert result["ai_failed"] == 2
+    assert result["advertio_failed"] == 1
+    assert result["failed"] == 4
+    for stage in ("processing", "classification", "ai", "advertio"):
+        assert result["states"][stage] == "WARNING", stage
+
+
+def test_stale_stage_with_actual_pending_work_remains_critical(health_data):
+    now = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
+    old = datetime(2026, 10, 9, 12, tzinfo=timezone.utc).isoformat()
+    with database.get_connection() as conn:
+        for kind in ("processing", "classification", "ai", "advertio"):
+            conn.execute(
+                "INSERT INTO system_activity(kind, level, created_at) "
+                "VALUES(?, 'INFO', ?)", (kind, old),
+            )
+        conn.commit()
+        result = collect(conn, now=now)
+
+    assert result["backlog"] == 5
+    for stage in ("processing", "classification", "ai", "advertio"):
+        assert result["states"][stage] == "CRITICAL", stage
+
+
+def test_advertio_health_eligibility_matches_the_actual_terminal_queue(health_data):
+    """Partly processed rows must not inflate the live Advertio queue."""
+    from storage.message_repository import MessageRepository
+
+    with database.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO messages(channel_username, message_id, text, date, "
+            "collection_status, processing_status, classification_status, "
+            "ai_status, ai_category, advertio_status) "
+            "VALUES('source', 11, 'old', '2026-10-01', 'collected', 'pending', "
+            "'processed', 'processed', 'housinglist', 'waiting')"
+        )
+        conn.execute(
+            "INSERT INTO housinglist(processed_message_id, title) "
+            "SELECT id, 'Not processed yet' FROM messages WHERE message_id=11"
+        )
+        conn.commit()
+        result = collect(conn)
+
+    eligible = MessageRepository().get_advertio_pending(limit=1000)
+    assert result["advertio_pending"] == 1
+    assert {r["message_id"] for r in eligible} == {7}

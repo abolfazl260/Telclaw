@@ -160,7 +160,12 @@ def test_historical_failures_do_not_trigger_critical_with_empty_active_queues(he
         conn.execute("UPDATE messages SET processing_status='processed' WHERE message_id=1")
         conn.execute(
             "UPDATE messages SET classification_status='processed', ai_category='none', "
-            "ai_status='skipped' WHERE message_id IN (2, 3)"
+            "ai_status='skipped' WHERE message_id=2"
+        )
+        # Keep the exhausted classification failure for history, but make it
+        # ineligible for an automatic retry under the configured retry budget.
+        conn.execute(
+            "UPDATE messages SET classification_attempts=3 WHERE message_id=3"
         )
         conn.execute("UPDATE messages SET ai_status='skipped' WHERE message_id=4")
         conn.execute("UPDATE messages SET advertio_status='sent' WHERE message_id=7")

@@ -170,3 +170,36 @@ def test_missing_prompt_is_configuration_error(monkeypatch, tmp_path):
     monkeypatch.setattr(prompt_loader, "PROMPT_DIR", tmp_path)
     with __import__("pytest").raises(RuntimeError, match="Missing extraction prompt.*housinglist"):
         prompt_loader.load_prompt("housinglist")
+
+
+def test_extraction_failure_records_only_safe_reason(monkeypatch):
+    from ai.extractor import AIExtractionError
+
+    class InvalidOutputExtractor:
+        name = "cloudflare"
+
+        def extract(self, *args, **kwargs):
+            raise AIExtractionError(
+                "Invalid Cloudflare JSON output",
+                provider="cloudflare",
+                reason="invalid_provider_output",
+            )
+
+    repo = FakeRepository()
+    monkeypatch.setattr(config, "AI_EXTRACTION_ENABLED", True)
+    monkeypatch.setitem(config.AI_EXTRACTION_CATEGORY_ENABLED, "joblist", True)
+    monkeypatch.setattr(config, "GROQ_INVALID_JSON_MAX_RETRIES", 0)
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_ENABLED", False)
+
+    service = AIProcessingService(repository=repo, extractor=InvalidOutputExtractor())
+    stats = service._process([{
+        "id": 1,
+        "message_id": 19868,
+        "channel_username": "china_chamedan",
+        "classification_category": "joblist",
+        "cleaned_text": "Job available",
+    }])
+
+    assert stats[1] == 1
+    assert repo.results[0]["success"] is False
+    assert repo.results[0]["ai_error"] == "invalid_provider_output"

@@ -14,6 +14,11 @@ from storage import database
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_RICH_MESSAGE_LENGTH = 30000
 AD_SUBMISSION_DRAFT = "سلام وقت بخیر درخواست ثبت آگهی ارسال بار/مسافر داشتم در کانال Advertio"
+FLIGHT_BOT_QUOTE = (
+    "✈️ با ربات ویزا و پرواز ادورتیو، بلیط پرواز از مبدأ ایران رو بدون واسطه "
+    "و با بهترین نرخ پیدا کن، زنگوله کاهش قیمت ۲۰٪ رو فعال کن و از قوانین "
+    "ویزای فرودگاهی کشورها مطلع شو."
+)
 COUNTRY_NAMES = {
     "IR": "Iran", "DE": "Germany", "TR": "Turkey", "CA": "Canada", "US": "United States",
     "GB": "United Kingdom", "FR": "France", "IT": "Italy", "ES": "Spain", "NL": "Netherlands",
@@ -324,26 +329,28 @@ def _country_report_header(active: int, published: dict) -> str:
 
 
 def _country_report_buttons() -> str:
-    """Render two half-row actions and a standalone flight-bot action.
+    """Render a stretching two-button row, then flight info and a full-row CTA.
 
-    Native Telegram Rich Message blocks determine row layout. A single
-    button in the final row reserves that entire row for the flight bot;
-    its actual displayed width is controlled by the Telegram client.
+    Telegram stretches default-aligned native button rows to the available
+    space (unlike the previous center-aligned row). Final dimensions remain
+    under client control; there is no supported explicit width attribute.
     """
     draft_url = "https://t.me/advertio_support?text=" + quote(AD_SUBMISSION_DRAFT, safe="")
     return (
-        '<tg-button-row align="center">'
+        '<tg-button-row>'
         f'<tg-button type="url" style="primary" url="{html.escape(draft_url, quote=True)}">'
         '📝 ثبت آگهی</tg-button>'
         '<tg-button type="url" style="primary" url="https://t.me/advertio_cargo">'
         '✈️ کانال ارسال بار هوایی</tg-button>'
         '</tg-button-row>'
+        '<blockquote><p>'
+        f'{html.escape(FLIGHT_BOT_QUOTE)}'
+        '</p></blockquote>'
         '<tg-button-row>'
         '<tg-button type="url" style="primary" url="https://t.me/Flightiranbot">'
-        '✈️ بلیط پرواز ادورتیو بدون واسطه</tg-button>'
+        'ربات بلیط و پرواز ادورتیو</tg-button>'
         '</tg-button-row>'
     )
-
 
 def _build_country_messages():
     """Build Rich Messages for the active request country summary."""

@@ -21,6 +21,9 @@ class FakeClassificationRepository:
     def retry_failed_classifications(self):
         return 4
 
+    def retry_invalid_provider_output_classifications(self):
+        return 2
+
 
 class FakeClassification:
     def __init__(self):
@@ -133,6 +136,11 @@ async def test_backoffice_operations_runs_same_processing_and_classification_ser
 
     retried = await operations.retry_failed_classifications(requested_by=7)
     assert retried == 4
+
+    invalid_retried = await operations.retry_failed_classifications(
+        requested_by=7, invalid_output_only=True
+    )
+    assert invalid_retried == 2
 
 
 @pytest.mark.asyncio

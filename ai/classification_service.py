@@ -79,6 +79,33 @@ class CategoryClassificationService:
                 rate_limit_attempts += 1
                 self._rate_limit_wait(exc, rate_limit_attempts)
 
+    def _classify_with_invalid_output_fallback(self, batch):
+        """Retry malformed batch responses in smaller groups without losing good rows."""
+        try:
+            return self._classify_with_retry(batch), {}
+        except AIExtractionError as exc:
+            if getattr(exc, "reason", None) != "invalid_provider_output":
+                raise
+            if len(batch) == 1:
+                return {}, {int(batch[0]["message_id"]): exc}
+
+            split_at = len(batch) // 2
+            logger.warning(
+                "[AI CLASSIFICATION INVALID OUTPUT] splitting batch size=%s into %s and %s",
+                len(batch), split_at, len(batch) - split_at,
+            )
+            first_results, first_errors = self._classify_with_invalid_output_fallback(batch[:split_at])
+            second_results, second_errors = self._classify_with_invalid_output_fallback(batch[split_at:])
+            return {**first_results, **second_results}, {**first_errors, **second_errors}
+
+    @staticmethod
+    def _failure_text(exc):
+        reason = getattr(exc, "reason", None)
+        message = str(exc)
+        if reason == "invalid_provider_output":
+            return f"invalid_provider_output: {message}"[:4000]
+        return message[:4000]
+
     def _mark_no_text(self, record):
         self.repository.mark_classification_result(
             record["message_id"],
@@ -101,7 +128,7 @@ class CategoryClassificationService:
 
     def _mark_batch_failed(self, candidates, exc, skipped):
         now = datetime.now(timezone.utc).isoformat()
-        error = str(exc)[:4000]
+        error = self._failure_text(exc)
         for item in candidates:
             record = item["record"]
             self.repository.mark_classification_result(
@@ -141,7 +168,7 @@ class CategoryClassificationService:
             return {"processed": 0, "failed": 0, "skipped": skipped, "stopped": False}
 
         try:
-            classifications = self._classify_with_retry(candidates)
+            classifications, invalid_errors = self._classify_with_invalid_output_fallback(candidates)
         except AIExtractionError as exc:
             return self._mark_batch_failed(candidates, exc, skipped)
         except Exception as exc:
@@ -151,7 +178,8 @@ class CategoryClassificationService:
         now = datetime.now(timezone.utc).isoformat()
         for item in candidates:
             record = item["record"]
-            category = classifications.get(int(record["message_id"]))
+            message_id = int(record["message_id"])
+            category = classifications.get(message_id)
             if category:
                 self.repository.mark_classification_result(
                     record["message_id"],
@@ -165,18 +193,21 @@ class CategoryClassificationService:
                 if progress:
                     print(f"[AI CLASSIFICATION] message={record['message_id']} -> {category}")
             else:
+                invalid_exc = invalid_errors.get(message_id)
+                error = self._failure_text(invalid_exc) if invalid_exc else "missing classification result"
                 self.repository.mark_classification_result(
                     record["message_id"],
                     record["channel_username"],
                     success=False,
-                    error="missing classification result",
+                    error=error,
                     processed_at=now,
                     attempts=int(record.get("classification_attempts") or 0) + 1,
                 )
                 self._report_error(
-                    "[AI CLASSIFICATION ERROR] message=%s channel=%s: missing classification result",
+                    "[AI CLASSIFICATION ERROR] message=%s channel=%s: %s",
                     record["message_id"],
                     record["channel_username"],
+                    error,
                 )
                 failed += 1
         return {"processed": processed, "failed": failed, "skipped": skipped, "stopped": False}

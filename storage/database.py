@@ -321,6 +321,32 @@ def retry_failed_classifications():
         return cursor.rowcount
     finally: conn.close()
 
+def retry_invalid_provider_output_classifications():
+    """Requeue only malformed-provider-output failures, including older error text."""
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""UPDATE messages
+            SET classification_status='pending',
+                classification_error=NULL,
+                classification_processed_at=NULL,
+                classification_started_at=NULL,
+                classification_attempts=0
+            WHERE classification_status='failed'
+              AND processing_status='processed'
+              AND NULLIF(TRIM(ai_category), '') IS NULL
+              AND (
+                  classification_error LIKE 'invalid_provider_output:%'
+                  OR classification_error LIKE 'Invalid Cloudflare JSON output%'
+                  OR classification_error LIKE 'Invalid Cloudflare classification JSON output%'
+                  OR classification_error LIKE 'Invalid Groq JSON output%'
+                  OR classification_error LIKE 'Invalid Groq classification JSON output%'
+              )""")
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def _last_time(conn,where,params=()):
     row=conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}",params).fetchone(); return row["value"] if row and row["value"] else None
 

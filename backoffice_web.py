@@ -1419,6 +1419,11 @@ async def operations_page(request):
         "Retry Failed",
         disabled=pipeline_busy or int(classification.get("failed") or 0) == 0,
     )
+    classification_controls += action_form(
+        "retry_invalid_classification",
+        "Retry Invalid AI Output",
+        disabled=pipeline_busy or int(classification.get("failed") or 0) == 0,
+    )
     if classification_running:
         classification_controls += action_form(
             "stop_classification", "Stop Classification", danger=True
@@ -1705,6 +1710,9 @@ async def operations_action(request):
         if action == "retry_classification":
             retried = await operations.retry_failed_classifications(admin_id)
             _operations_redirect(notice=f"Requeued {retried} failed classification(s).")
+        if action == "retry_invalid_classification":
+            retried = await operations.retry_failed_classifications(admin_id, invalid_output_only=True)
+            _operations_redirect(notice=f"Requeued {retried} invalid AI output classification(s).")
 
         if action == "run_ai":
             operations.start_ai(data.get("account"), admin_id)

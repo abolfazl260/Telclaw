@@ -288,6 +288,27 @@ class BackofficeOperations:
         )
         return retried
 
+    async def retry_failed_extractions(self, requested_by=None, *, invalid_output_only=False):
+        busy = [
+            name for name in SERIAL_PIPELINE_JOBS
+            if self.state(name)["status"] in {"queued", "running", "stopping"}
+        ]
+        if busy:
+            raise RuntimeError(
+                f"Cannot retry AI extraction while manual pipeline work is active: {', '.join(sorted(busy))}"
+            )
+        retried = await asyncio.to_thread(
+            self.ai.repository.retry_failed_extractions,
+            invalid_output_only=invalid_output_only,
+        )
+        self._activity(
+            "extraction_invalid_output_retry" if invalid_output_only else "extraction_retry",
+            "INFO",
+            f"Requeued {retried} failed AI extraction(s) from Back Office",
+            {"requested_by": requested_by, "retried": retried, "invalid_output_only": invalid_output_only},
+        )
+        return retried
+
     async def _connect_account(self, account_name):
         account_name = str(account_name or "").strip()
         if not account_name:

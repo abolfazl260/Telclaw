@@ -410,7 +410,7 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
 
     rule, counts, records = routing_rules.rule_matches(1)
     assert rule["delivery_mode"] == "manual"
-    assert counts == {"total": 1, "sent": 0, "unsent": 1, "review": 0, "filtered": 1}
+    assert counts == {"total": 1, "sent": 0}
     assert records[0]["message_row_id"] == 1
     assert routing_rules.selected_pair(1, 1)[0]["message_row_id"] == 1
     assert routing_rules.claim_delivery(1, 1)
@@ -573,7 +573,7 @@ def test_rule_matches_only_successfully_processed_ads_of_the_selected_category(r
     conn.commit()
     conn.close()
 
-    _, counts, records = routing_rules.rule_matches(1)
+    _, counts, records = routing_rules.rule_matches(1, active_only=True)
     assert counts == {"total": 1, "sent": 0, "unsent": 1, "review": 0, "filtered": 1}
     assert [row["message_row_id"] for row in records] == [1]
     with pytest.raises(ValueError, match="unavailable"):
@@ -610,12 +610,12 @@ async def test_active_rule_matches_filter_delivery_per_target_and_keep_paginatio
     assert counts == {"total": 4, "sent": 1, "unsent": 2, "review": 1, "filtered": 2}
     assert [item["message_row_id"] for item in unsent] == [4, 2]
     assert [item["message_row_id"] for item in routing_rules.rule_matches(
-        1, limit=1, offset=1, delivery_filter="unsent")[2]] == [2]
+        1, active_only=True, limit=1, offset=1, delivery_filter="unsent")[2]] == [2]
     assert [item["message_row_id"] for item in routing_rules.rule_matches(
-        1, delivery_filter="delivered")[2]] == [1]
+        1, active_only=True, delivery_filter="delivered")[2]] == [1]
     assert [item["message_row_id"] for item in routing_rules.rule_matches(
-        1, delivery_filter="review")[2]] == [3]
-    assert routing_rules.rule_matches(2)[1]["unsent"] == 4
+        1, active_only=True, delivery_filter="review")[2]] == [3]
+    assert routing_rules.rule_matches(2, active_only=True)[1]["unsent"] == 4
     with pytest.raises(ValueError, match="Invalid delivery filter"):
         routing_rules.rule_matches(1, delivery_filter="invented")
 

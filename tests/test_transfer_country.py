@@ -1,3 +1,7 @@
+import re
+from html import unescape
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
 from monitoring.transfer_live import _build_country_messages, _country_summary_rows
@@ -37,8 +41,10 @@ def test_country_rich_message_contains_persian_heading_live_counts_and_embedded_
     assert "📅 آگهی های ۷ روز گذشته: <b>396</b>" in message
     assert "📅 تعداد آگهی های ۳۰ روز گذشته: <b>2,167</b>" in message
     assert "📤 تعداد آگهی های ثبت شده: <b>9,524</b>" in message
-    assert "Origin" in message
-    assert "Destination" in message
+    assert '<th align="right">مبدا</th>' in message
+    assert '<th align="right">مقصد</th>' in message
+    assert '<th align="center">آگهی</th>' in message
+    assert "Open Requests" not in message
     assert "Iran 🇮🇷" in message
     assert "Germany 🇩🇪" in message
     assert "Turkey 🇹🇷" in message
@@ -49,7 +55,21 @@ def test_country_rich_message_contains_persian_heading_live_counts_and_embedded_
     # Rich Message native buttons, not an external inline keyboard.
     assert message.count('<tg-button-row align="center">') == 1
     assert message.count('<tg-button type="url" style="primary"') == 2
-    assert 'url="https://t.me/advertio_support">💬 پشتیبان</tg-button>' in message
+    match = re.search(
+        r'<tg-button type="url" style="primary" url="([^"]+)">📝 ثبت آگهی</tg-button>',
+        message,
+    )
+    assert match is not None
+    draft_url = unescape(match.group(1))
+    parsed = urlsplit(draft_url)
+    assert (parsed.scheme, parsed.netloc, parsed.path) == (
+        "https", "t.me", "/advertio_support"
+    )
+    assert parse_qs(parsed.query) == {
+        "text": ["سلام وقت بخیر درخواست ثبت آگهی ارسال بار/مسافر داشتم در کانال Advertio"]
+    }
+    assert " " not in draft_url
+    assert "پشتیبان" not in message
     assert 'url="https://t.me/advertio_cargo">✈️ کانال ارسال بار هوایی</tg-button>' in message
     assert message.endswith("</tg-button-row>")
 
@@ -75,6 +95,9 @@ def test_country_rich_message_empty_state_keeps_heading_counters_and_buttons(mon
     assert "در حال حاضر آگهی فعال" in message
     assert "<table" not in message
     assert message.count('<tg-button type="url" style="primary"') == 2
+    assert "📝 ثبت آگهی" in message
+    assert "https://t.me/advertio_support?text=" in message
+    assert "✈️ کانال ارسال بار هوایی" in message
     assert message.endswith("</tg-button-row>")
 
 
@@ -105,4 +128,6 @@ async def test_country_command_sends_buttons_as_part_of_rich_message(monkeypatch
     assert payload["chat_id"] == 123
     assert payload["rich_message"]["is_rtl"] is True
     assert "<tg-button-row" in payload["rich_message"]["html"]
+    assert "📝 ثبت آگهی" in payload["rich_message"]["html"]
+    assert "https://t.me/advertio_support?text=" in payload["rich_message"]["html"]
     assert "reply_markup" not in payload

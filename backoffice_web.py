@@ -648,7 +648,7 @@ def _rule_panel(rule, target, csrf, request):
         except ValueError:
             pass
     _, counts, records = routing_rules.rule_matches(
-        rule["id"], limit=20, offset=page * 20, delivery_filter=view)
+        rule["id"], limit=20, offset=page * 20, delivery_filter=view, active_only=True)
     mode = rule.get("delivery_mode") or "auto"
     mode_label = "Manual review" if mode == "manual" else "Automatic"
     paused = routing_rules.is_rate_limited()

@@ -710,6 +710,10 @@ class SystemConsoleUI(ConsoleUI):
                     f"{name} eligible / failed: {health[key + '_pending']} / {health[key + '_failed']}",
                     Fore.CYAN,
                 )
+            self.show_message(
+                "Pending/eligible = current queue; failed = stored failure states "
+                "(possibly historical).", Fore.CYAN,
+            )
             if health["warning"]:
                 self.show_message(f"Warning: {health['warning']}", Fore.YELLOW)
         except Exception as exc:

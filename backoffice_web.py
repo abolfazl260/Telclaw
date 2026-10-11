@@ -1419,6 +1419,11 @@ async def operations_page(request):
         "Retry Failed",
         disabled=pipeline_busy or int(classification.get("failed") or 0) == 0,
     )
+    classification_controls += action_form(
+        "retry_invalid_classification",
+        "Retry Invalid AI Output",
+        disabled=pipeline_busy or int(classification.get("failed") or 0) == 0,
+    )
     if classification_running:
         classification_controls += action_form(
             "stop_classification", "Stop Classification", danger=True
@@ -1430,6 +1435,17 @@ async def operations_page(request):
         "Run AI Extraction",
         extra=f'<label>Telegram account{ai_account_select}</label>',
         disabled=pipeline_busy or not account_names,
+    )
+    ai_controls += action_form(
+        "retry_invalid_extraction",
+        "Retry Invalid AI Extraction",
+        disabled=pipeline_busy or int(pipeline.get("ai_failed") or 0) == 0,
+    )
+    ai_controls += action_form(
+        "retry_failed_extraction",
+        "Retry Failed Extraction (includes legacy errors)",
+        disabled=pipeline_busy or int(pipeline.get("ai_failed") or 0) == 0,
+        confirm="Requeue all failed AI extraction rows, including legacy failures with unknown causes?",
     )
     if ai_running:
         ai_controls += action_form("stop_ai", "Stop AI Extraction", danger=True)
@@ -1705,7 +1721,16 @@ async def operations_action(request):
         if action == "retry_classification":
             retried = await operations.retry_failed_classifications(admin_id)
             _operations_redirect(notice=f"Requeued {retried} failed classification(s).")
+        if action == "retry_invalid_classification":
+            retried = await operations.retry_failed_classifications(admin_id, invalid_output_only=True)
+            _operations_redirect(notice=f"Requeued {retried} invalid AI output classification(s).")
 
+        if action == "retry_invalid_extraction":
+            retried = await operations.retry_failed_extractions(admin_id, invalid_output_only=True)
+            _operations_redirect(notice=f"Requeued {retried} invalid-output AI extraction(s).")
+        if action == "retry_failed_extraction":
+            retried = await operations.retry_failed_extractions(admin_id)
+            _operations_redirect(notice=f"Requeued {retried} failed AI extraction(s).")
         if action == "run_ai":
             operations.start_ai(data.get("account"), admin_id)
             _operations_redirect(notice="AI extraction queue started.")

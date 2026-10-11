@@ -124,3 +124,50 @@ def test_unclassified_waiting_record_is_not_misclassified(ai_db):
     )
     database.initialize_db()
     assert _ai_record(104)["ai_status"] == "waiting"
+
+def test_invalid_extraction_error_code_persisted_without_provider_detail(ai_db):
+    _eligible_record(201)
+    ai_db.mark_ai_result(
+        201, "ai_migration", success=False,
+        ai_error="invalid_provider_output",
+        ai_processed_at="2026-10-11T18:20:00+00:00",
+    )
+    assert _ai_record(201)["ai_error"] == "invalid_provider_output"
+    database.initialize_db()
+    assert _ai_record(201)["ai_status"] == "failed"
+    assert _ai_record(201)["ai_error"] == "invalid_provider_output"
+
+
+def test_only_safe_reason_codes_can_be_persisted(ai_db):
+    _eligible_record(202)
+    ai_db.mark_ai_result(
+        202, "ai_migration", success=False,
+        ai_error="request_id=secret: raw provider output",
+    )
+    assert _ai_record(202)["ai_error"] is None
+
+
+def test_targeted_extraction_retry_preserves_legacy_and_other_errors(ai_db):
+    for message_id in (211, 212, 213, 214, 215):
+        _eligible_record(message_id)
+    ai_db.mark_ai_result(211, "ai_migration", success=False, ai_error="invalid_provider_output")
+    ai_db.mark_ai_result(212, "ai_migration", success=False, ai_error="rate_limit")
+    ai_db.mark_ai_result(213, "ai_migration", success=False)  # Legacy NULL reason
+    ai_db.mark_ai_result(214, "ai_migration", success=False, ai_error="invalid_provider_output")
+    ai_db.mark_ai_result(215, "ai_migration", success=False, ai_error="invalid_provider_output")
+    database.update_message(214, "ai_migration", advertio_status="sent")
+    database.update_message(215, "ai_migration", classification_status="failed")
+
+    assert ai_db.retry_failed_extractions(invalid_output_only=True) == 1
+    assert _ai_record(211)["ai_status"] == "pending"
+    assert _ai_record(211)["ai_error"] is None
+    assert _ai_record(212)["ai_status"] == "failed"
+    assert _ai_record(213)["ai_status"] == "failed"
+    assert _ai_record(214)["ai_status"] == "failed"
+    assert _ai_record(215)["ai_status"] == "failed"
+    assert {row["message_id"] for row in ai_db.get_ai_pending(limit=20)} == {211}
+
+    # Explicit broad retry is available for older NULL-reason failures and 429.
+    assert ai_db.retry_failed_extractions() == 2
+    assert {row["message_id"] for row in ai_db.get_ai_pending(limit=20)} == {211, 212, 213}
+    assert ai_db.retry_failed_extractions() == 0

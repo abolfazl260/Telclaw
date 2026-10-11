@@ -265,7 +265,7 @@ class BackofficeOperations:
             operation,
         )
 
-    async def retry_failed_classifications(self, requested_by=None):
+    async def retry_failed_classifications(self, requested_by=None, *, invalid_output_only=False):
         busy = [
             name for name in SERIAL_PIPELINE_JOBS
             if self.state(name)["status"] in {"queued", "running", "stopping"}
@@ -274,14 +274,38 @@ class BackofficeOperations:
             raise RuntimeError(
                 f"Cannot retry classifications while manual pipeline work is active: {', '.join(sorted(busy))}"
             )
+        retry_method = (
+            self.classification.repository.retry_invalid_provider_output_classifications
+            if invalid_output_only
+            else self.classification.repository.retry_failed_classifications
+        )
+        retried = await asyncio.to_thread(retry_method)
+        self._activity(
+            "classification_invalid_output_retry" if invalid_output_only else "classification_retry",
+            "INFO",
+            f"Requeued {retried} {'invalid-provider-output' if invalid_output_only else 'failed'} classification(s) from Back Office",
+            {"requested_by": requested_by, "retried": retried, "invalid_output_only": invalid_output_only},
+        )
+        return retried
+
+    async def retry_failed_extractions(self, requested_by=None, *, invalid_output_only=False):
+        busy = [
+            name for name in SERIAL_PIPELINE_JOBS
+            if self.state(name)["status"] in {"queued", "running", "stopping"}
+        ]
+        if busy:
+            raise RuntimeError(
+                f"Cannot retry AI extraction while manual pipeline work is active: {', '.join(sorted(busy))}"
+            )
         retried = await asyncio.to_thread(
-            self.classification.repository.retry_failed_classifications
+            self.ai.repository.retry_failed_extractions,
+            invalid_output_only=invalid_output_only,
         )
         self._activity(
-            "classification_retry",
+            "extraction_invalid_output_retry" if invalid_output_only else "extraction_retry",
             "INFO",
-            f"Requeued {retried} failed classification(s) from Back Office",
-            {"requested_by": requested_by, "retried": retried},
+            f"Requeued {retried} failed AI extraction(s) from Back Office",
+            {"requested_by": requested_by, "retried": retried, "invalid_output_only": invalid_output_only},
         )
         return retried
 

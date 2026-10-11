@@ -265,3 +265,111 @@ def test_validate_classification_result_rejects_unknown_category():
         assert "unsupported classification category" in str(exc)
     else:
         raise AssertionError("unknown category should fail validation")
+
+
+class InvalidOutputClassifier:
+    """A single bad response must not keep unrelated messages from processing."""
+
+    def __init__(self):
+        self.calls = []
+        self.broken = True
+
+    def classify_batch(self, messages):
+        from ai.extractor import AIExtractionError
+
+        ids = [int(item["message_id"]) for item in messages]
+        self.calls.append(ids)
+        if self.broken and 302 in ids:
+            raise AIExtractionError(
+                "Invalid Cloudflare JSON output",
+                provider="cloudflare",
+                reason="invalid_provider_output",
+            )
+        return {message_id: "housinglist" for message_id in ids}
+
+
+def test_invalid_provider_output_splits_batch_and_retries_only_failed_message(monkeypatch, tmp_path):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from ai.classification_service import CategoryClassificationService
+    from storage.message_repository import MessageRepository
+
+    monkeypatch.setattr(config, "GROQ_INVALID_JSON_MAX_RETRIES", 0)
+    database.initialize_db()
+    repo = MessageRepository()
+    for message_id in (301, 302, 303):
+        database.insert_message("chan", message_id, f"message {message_id}", "2026-08-27")
+        repo.mark_processing_result(
+            message_id, "chan", success=True,
+            text=f"message {message_id}", cleaned_text=f"message {message_id}",
+        )
+    classifier = InvalidOutputClassifier()
+    service = CategoryClassificationService(repository=repo, classifier=classifier, batch_size=10)
+
+    first = service.process_pending_with_stats()
+
+    assert first["processed"] == 2
+    assert first["failed"] == 1
+    assert first["remaining"] == 1
+    assert [301, 302, 303] in classifier.calls
+    assert [302] in classifier.calls
+    with database.get_connection() as conn:
+        rows = {r["message_id"]: dict(r) for r in conn.execute(
+            "SELECT message_id, text, classification_status, classification_error, "
+            "classification_attempts FROM messages ORDER BY message_id"
+        )}
+    assert rows[301]["classification_status"] == "processed"
+    assert rows[303]["classification_status"] == "processed"
+    assert rows[302]["classification_status"] == "failed"
+    assert rows[302]["classification_error"].startswith("invalid_provider_output:")
+    assert rows[302]["classification_attempts"] == 1
+    assert rows[302]["text"] == "message 302"
+
+    # Failed message remains eligible until the regular retry budget is exhausted.
+    classifier.broken = False
+    second = service.process_pending_with_stats()
+    assert second["processed"] == 1
+    assert second["failed"] == 0
+    assert second["remaining"] == 0
+    assert classifier.calls[-1] == [302]
+
+
+def test_requeue_only_invalid_provider_output_including_exhausted_legacy_errors(monkeypatch, tmp_path):
+    database, config = _load_database(monkeypatch, tmp_path)
+    from storage.message_repository import MessageRepository
+
+    database.initialize_db()
+    repo = MessageRepository()
+    failures = {
+        401: "invalid_provider_output: Invalid Cloudflare JSON output",
+        402: "Invalid Cloudflare JSON output",
+        403: "Invalid Groq classification JSON output: malformed",
+        404: "rate_limit: provider unavailable",
+    }
+    for message_id, error in failures.items():
+        database.insert_message("chan", message_id, "message", "2026-08-27")
+        repo.mark_processing_result(message_id, "chan", success=True, cleaned_text="message")
+        repo.mark_classification_result(
+            message_id, "chan", success=False,
+            error=error, attempts=config.AI_CLASSIFICATION_MAX_RETRIES,
+            processed_at="2026-08-27T00:00:00+00:00",
+        )
+
+    # None are eligible for the ordinary automatic retry after exhaustion.
+    assert repo.get_classification_pending(limit=20) == []
+    assert repo.retry_invalid_provider_output_classifications() == 3
+
+    eligible = repo.get_classification_pending(limit=20)
+    assert {record["message_id"] for record in eligible} == {401, 402, 403}
+    with database.get_connection() as conn:
+        rows = {r["message_id"]: dict(r) for r in conn.execute(
+            "SELECT message_id, classification_status, classification_error, "
+            "classification_attempts, classification_processed_at FROM messages"
+        )}
+    for message_id in (401, 402, 403):
+        assert rows[message_id]["classification_status"] == "pending"
+        assert rows[message_id]["classification_error"] is None
+        assert rows[message_id]["classification_attempts"] == 0
+        assert rows[message_id]["classification_processed_at"] is None
+    assert rows[404]["classification_status"] == "failed"
+    assert rows[404]["classification_error"] == "rate_limit: provider unavailable"
+    assert repo.retry_invalid_provider_output_classifications() == 0

@@ -21,6 +21,9 @@ class FakeClassificationRepository:
     def retry_failed_classifications(self):
         return 4
 
+    def retry_invalid_provider_output_classifications(self):
+        return 2
+
 
 class FakeClassification:
     def __init__(self):
@@ -40,9 +43,15 @@ class FakeClassification:
         }
 
 
+class FakeAIRepository:
+    def retry_failed_extractions(self, *, invalid_output_only=False):
+        return 2 if invalid_output_only else 5
+
+
 class FakeAI:
     def __init__(self):
         self.media_downloader = None
+        self.repository = FakeAIRepository()
 
     def set_media_downloader(self, downloader):
         self.media_downloader = downloader
@@ -133,6 +142,18 @@ async def test_backoffice_operations_runs_same_processing_and_classification_ser
 
     retried = await operations.retry_failed_classifications(requested_by=7)
     assert retried == 4
+
+    invalid_retried = await operations.retry_failed_classifications(
+        requested_by=7, invalid_output_only=True
+    )
+    assert invalid_retried == 2
+
+    ai_invalid_retried = await operations.retry_failed_extractions(
+        requested_by=7, invalid_output_only=True
+    )
+    assert ai_invalid_retried == 2
+    ai_retried = await operations.retry_failed_extractions(requested_by=7)
+    assert ai_retried == 5
 
 
 @pytest.mark.asyncio

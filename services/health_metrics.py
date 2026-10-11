@@ -26,7 +26,8 @@ AI_READY = (
     "AND ai_status='pending'"
 )
 ADVERTIO_READY = (
-    "ai_status='processed' AND ai_category='housinglist' "
+    "processing_status='processed' AND ai_status='processed' "
+    "AND ai_category='housinglist' "
     "AND COALESCE(advertio_status,'waiting') IN ('waiting','retry') "
     "AND EXISTS (SELECT 1 FROM housinglist h WHERE h.processed_message_id=m.id)"
 )
@@ -100,7 +101,10 @@ def _recent(value, now):
 def _stage_status(last, pending, failed, now, *, enabled=True):
     if not enabled:
         return "DISABLED"
-    if (pending or failed) and last and not _recent(last, now):
+    # CRITICAL requires *current actionable work* and stale stage activity.
+    # Historical terminal failure states remain visible in counters, but must
+    # not be interpreted as an ongoing outage after the queue is drained.
+    if pending and last and not _recent(last, now):
         return "CRITICAL"
     if pending or failed or not _recent(last, now):
         return "WARNING"

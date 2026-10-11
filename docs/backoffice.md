@@ -123,8 +123,13 @@ completion timestamps and persisted stage events, never the source message date.
 Old installations without crawl events display **Not recorded** rather than a
 fabricated midnight/03:30 time. Times are UTC in Back Office and Tehran-local
 in Telegram/terminal. A 24-hour freshness window is used for reporting only.
-Stage statuses can be HEALTHY, WARNING, CRITICAL (stale with outstanding
-work), or DISABLED. HEALTHY measures observed activity and queue state; it is
+Stage statuses can be HEALTHY, WARNING, CRITICAL (stale with actionable
+queue work), or DISABLED. Historical failed message states remain visible in
+the failed counters but do not by themselves make a stage CRITICAL; an idle
+stage with stored failures or stale activity is WARNING. Pending/eligible
+counters show current runnable work, not records that have already failed.
+The Advertio eligible count uses the same processing-status and housing-row
+gates as the actual terminal delivery queue. HEALTHY measures observed activity and queue state; it is
 not an external AI/Advertio API probe. Database health uses SQLite
 `PRAGMA quick_check`. Without a `messages` table, health displays an empty
 warning state instead of failing.

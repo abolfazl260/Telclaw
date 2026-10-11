@@ -310,23 +310,49 @@ def _build_messages():
     return chunks
 
 
+def _country_report_header(active: int, published: dict) -> str:
+    """Render live counters as a compact Heading 5 Rich Message header."""
+    return (
+        "<h5>آگهی های فعال ارسال بار در ادورتیو</h5>"
+        f"<p>📊 آگهی های فعال: <b>{active:,}</b></p>"
+        f"<p>📅 آگهی های ۷ روز گذشته: <b>{published['last_7_days']:,}</b></p>"
+        f"<p>📅 تعداد آگهی های ۳۰ روز گذشته: <b>{published['last_30_days']:,}</b></p>"
+        f"<p>📤 تعداد آگهی های ثبت شده: <b>{published['latest_number']:,}</b></p>"
+    )
+
+
+def _country_report_buttons() -> str:
+    """Place both primary-blue links *inside* one Telegram Rich Message row.
+
+    Telegram renders the row and button widths using the receiving app/theme.
+    Keep labels concise to fit both buttons side by side on typical screens.
+    """
+    return (
+        '<tg-button-row align="center">'
+        '<tg-button type="url" style="primary" url="https://t.me/advertio_support">'
+        '💬 پشتیبان</tg-button>'
+        '<tg-button type="url" style="primary" url="https://t.me/advertio_cargo">'
+        '✈️ کانال ارسال بار هوایی</tg-button>'
+        '</tg-button-row>'
+    )
+
+
 def _build_country_messages():
     """Build Rich Messages for the active request country summary."""
     summary = _fetch_active_country_summary()
     published = _fetch_published_transfer_stats()
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
+    total = sum(count for _, count in summary)
+    header = _country_report_header(total, published)
+    actions = _country_report_buttons()
+
     if not summary:
         return [{"html": (
-            "<h1>Advertio Cargo &amp; Passenger</h1>"
-            + "<p>📊 Active ads: <b>0</b></p>"
-            + "<p>📅 Last 7 days: <b>{:,}</b></p>".format(published["last_7_days"])
-            + "<p>📅 Last 30 days: <b>{:,}</b></p>".format(published["last_30_days"])
-            + "<p>📤 Total ads: <b>{:,}</b></p>".format(published["latest_number"])
-            + "<p><b>@advertio_cargo</b></p>"
-            "<p>⚠️ No open transfer requests at the moment.</p>"
+            header
+            + "<p>⚠️ در حال حاضر آگهی فعال ارسال بار وجود ندارد.</p>"
+            + actions
         )}]
 
-    total = sum(count for _, count in summary)
     rows = [
         "<tr>"
         + _cell("Origin", header=True)
@@ -346,16 +372,12 @@ def _build_country_messages():
         )
 
     return [{"html": (
-        "<h1>Advertio Cargo &amp; Passenger</h1>"
-        f"<p>📊 Active ads: <b>{total:,}</b></p>"
-        f"<p>📅 Last 7 days: <b>{published['last_7_days']:,}</b></p>"
-        f"<p>📅 Last 30 days: <b>{published['last_30_days']:,}</b></p>"
-        f"<p>📤 Total ads: <b>{published['latest_number']:,}</b></p>"
-        "<table bordered striped compact>"
+        header
+        + "<table bordered striped compact>"
         + "".join(rows)
         + "</table>"
-        f"<p>🕐 Last updated: {generated} Tehran</p>"
-        "<p><b>@advertio_cargo</b></p>"
+        + f"<p>🕐 Last updated: {generated} Tehran</p>"
+        + actions
     )}]
 
 

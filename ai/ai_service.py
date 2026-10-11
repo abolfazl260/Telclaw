@@ -221,7 +221,13 @@ class AIProcessingService:
                 if progress: self._print_message_status(index, offset + total, record, category, "processed", advertio="ok" if not delivery.get("failed") else "failed")
             except AIExtractionError as exc:
                 self._log_ai_error(record, exc)
-                self.repository.mark_ai_result(message_id=record["message_id"], channel_username=record["channel_username"], success=False, ai_processed_at=datetime.now(timezone.utc).isoformat())
+                self.repository.mark_ai_result(
+                    message_id=record["message_id"],
+                    channel_username=record["channel_username"],
+                    success=False,
+                    ai_error=getattr(exc, "reason", None),
+                    ai_processed_at=datetime.now(timezone.utc).isoformat(),
+                )
                 failed += 1
                 if progress: self._print_message_status(index, offset + total, record, category, "failed", reason=getattr(exc, "reason", "ai_error"))
                 if exc.stop_queue:

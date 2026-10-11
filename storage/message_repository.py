@@ -83,6 +83,9 @@ class MessageRepository:
     def retry_invalid_provider_output_classifications(self):
         return database.retry_invalid_provider_output_classifications()
 
+    def retry_failed_extractions(self, invalid_output_only=False):
+        return database.retry_failed_extractions(invalid_output_only=invalid_output_only)
+
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 
@@ -133,11 +136,14 @@ class MessageRepository:
         return database.claim_ai_message(message_id, channel_username)
 
     def mark_ai_result(self, message_id, channel_username, *, success, **fields):
+        # Only fixed, non-sensitive error codes are allowed into persistent data.
+        # Provider error messages, request IDs and raw responses stay in logs.
+        reason = fields.pop("ai_error", None)
         if success:
-            fields.update(ai_status="processed", ai_started_at=None)
+            fields.update(ai_status="processed", ai_error=None, ai_started_at=None)
         else:
-            fields.pop("ai_error", None)
-            fields.update(ai_status="failed", ai_error=None, ai_started_at=None)
+            safe_reason = reason if reason in {"invalid_provider_output", "rate_limit"} else None
+            fields.update(ai_status="failed", ai_error=safe_reason, ai_started_at=None)
         return self.update_message(message_id, channel_username, **fields)
 
     def mark_ai_skipped(self, message_id, channel_username, *, reason, **fields):

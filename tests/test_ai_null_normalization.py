@@ -133,3 +133,32 @@ def test_cloudflare_extraction_returns_real_none_for_null_like_strings(monkeypat
     assert data["departure_date"] is None
     assert data["contact"] is None
     assert data["destination_city"] == "Tehran"
+
+def test_groq_json_validate_failed_400_is_retryable_invalid_output(monkeypatch):
+    import pytest
+    from ai.extractor import AIExtractionError
+
+    class BadJSONResponse:
+        ok = False
+        status_code = 400
+        headers = {}
+        text = json.dumps({"error": {
+            "message": "Failed to validate JSON.",
+            "type": "invalid_request_error",
+            "code": "json_validate_failed",
+            "failed_generation": "",
+        }})
+
+    monkeypatch.setattr("ai.providers.groq.requests.post", lambda *args, **kwargs: BadJSONResponse())
+    client = GroqClient(api_key="test-key", model="test-model", rate_limiter=FakeRateLimiter())
+
+    with pytest.raises(AIExtractionError) as captured:
+        client.extract("package available", category="transferlist")
+    assert captured.value.status == 400
+    assert captured.value.reason == "invalid_provider_output"
+
+
+def test_groq_other_400_error_remains_provider_error():
+    detail = json.dumps({"error": {"code": "invalid_request_error"}})
+    assert GroqClient._provider_reason(400, detail) == "provider_error"
+    assert GroqClient._provider_reason(400, "invalid response") == "provider_error"

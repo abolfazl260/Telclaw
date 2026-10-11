@@ -35,6 +35,16 @@ class GroqClient:
     @staticmethod
     def _provider_reason(status, detail):
         text = (detail or "").lower()
+        if status == 400:
+            # Groq may reject an otherwise valid request when its generated
+            # JSON fails validation. This is a transient model-output failure,
+            # not a permanent invalid-input error.
+            try:
+                provider_error = json.loads(detail or "{}").get("error", {})
+            except (ValueError, TypeError, AttributeError):
+                provider_error = {}
+            if isinstance(provider_error, dict) and provider_error.get("code") == "json_validate_failed":
+                return "invalid_provider_output"
         if status == 401:
             return "invalid_api_key"
         if status == 403:

@@ -5,6 +5,7 @@ by explicit local fakes; no Telegram or Advertio delivery can occur.
 """
 
 import json
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -129,6 +130,16 @@ async def test_transfer_success_is_not_resent_when_legacy_text_changes(db, monke
     first = await publisher.publish_pending()
     assert first == {"found": 1, "sent": 1, "failed": 0, "rejected": 0}
     assert len(sent) == 1
+    # The publisher must pass the contact draft through to Telegram sendMessage.
+    button = sent[0][1]["inline_keyboard"][0][0]
+    assert button["text"] == "👤 @sourceuser"
+    assert urlsplit(button["url"]).path == "/sourceuser"
+    assert parse_qs(urlsplit(button["url"]).query) == {
+        "text": [
+            "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال "
+            "@advertio_cargo داشتید خدمت شما پیام می دهم"
+        ]
+    }
 
     with database.get_connection() as conn:
         existing = conn.execute(
@@ -290,3 +301,34 @@ def test_routed_non_transfer_preview_preserves_structured_and_raw_fallbacks(monk
     assert routed_publisher._plain_ad({
         **base, "cleaned_text": None, "raw_text": None, "text": "legacy payload",
     }) == ""
+
+
+
+@pytest.mark.parametrize("username", ["alice_123", "@alice_123"])
+def test_transfer_contact_button_opens_ad_owner_with_prefilled_draft(username):
+    markup = TelegramTransferPublisher._contact_button({"sender_username": username})
+    assert markup is not None
+    assert len(markup["inline_keyboard"]) == 1
+    assert len(markup["inline_keyboard"][0]) == 1
+    button = markup["inline_keyboard"][0][0]
+    assert button["text"] == "👤 @alice_123"
+
+    url = urlsplit(button["url"])
+    assert (url.scheme, url.netloc, url.path) == ("https", "t.me", "/alice_123")
+    assert " " not in button["url"]
+    assert "سلام" not in button["url"]  # UTF-8 draft must be percent-encoded.
+    assert parse_qs(url.query) == {
+        "text": [
+            "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال "
+            "@advertio_cargo داشتید خدمت شما پیام می دهم"
+        ]
+    }
+
+
+@pytest.mark.parametrize("username", [
+    None, "", "@", "bob", "ali/evil", "alice?text=overridden", "<script>", "@" * 100,
+])
+def test_transfer_contact_button_rejects_missing_or_unsafe_usernames(username):
+    assert TelegramTransferPublisher._contact_button({
+        "sender_username": username,
+    }) is None

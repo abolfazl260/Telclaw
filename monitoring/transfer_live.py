@@ -324,11 +324,11 @@ def _country_report_header(active: int, published: dict) -> str:
 
 
 def _country_report_buttons() -> str:
-    """Place two native primary buttons in the Rich Message itself.
+    """Render two half-row actions and a standalone flight-bot action.
 
-    Telegram's public-username ?text= deep link opens the support chat and
-    pre-fills a draft for the user to review; it does not send the message.
-    Button dimensions are controlled by Telegram's client and theme.
+    Native Telegram Rich Message blocks determine row layout. A single
+    button in the final row reserves that entire row for the flight bot;
+    its actual displayed width is controlled by the Telegram client.
     """
     draft_url = "https://t.me/advertio_support?text=" + quote(AD_SUBMISSION_DRAFT, safe="")
     return (
@@ -337,6 +337,10 @@ def _country_report_buttons() -> str:
         '📝 ثبت آگهی</tg-button>'
         '<tg-button type="url" style="primary" url="https://t.me/advertio_cargo">'
         '✈️ کانال ارسال بار هوایی</tg-button>'
+        '</tg-button-row>'
+        '<tg-button-row>'
+        '<tg-button type="url" style="primary" url="https://t.me/Flightiranbot">'
+        '✈️ بلیط پرواز ادورتیو بدون واسطه</tg-button>'
         '</tg-button-row>'
     )
 

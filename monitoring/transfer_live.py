@@ -74,22 +74,30 @@ def _dual_date(value) -> tuple[str, str, date | None]:
         return text[:10] or "-", "-", None
 
 
+def _country_code(value) -> str:
+    """Return a usable two-letter country code, or empty for missing/invalid data."""
+    code = str(value or "").strip().upper()
+    if len(code) != 2 or not code.isascii() or not code.isalpha() or code in {"XX", "ZZ"}:
+        return ""
+    return code
+
+
 def _origin_label(row) -> str:
-    country = str(row["origin_country"] or "").strip().upper()
-    city = str(row["origin_city"] or "").strip()
-    country_name = COUNTRY_NAMES.get(country, country) or "نامشخص"
-    return f"{_country_flag(country)} {country_name}" if country else (city or "نامشخص")
+    country = _country_code(row["origin_country"])
+    if not country:
+        return ""
+    return f"{_country_flag(country)} {COUNTRY_NAMES.get(country, country)}"
 
 
 def _destination_label(row) -> str:
-    country = str(row["destination_country"] or "").strip().upper()
-    city = str(row["destination_city"] or "").strip() or "نامشخص"
-    # Rich Message tables are RTL. Use an LTR isolate around the flag+city
-    # so the country flag stays visually before the city instead of being
-    # reordered by the surrounding RTL layout.
-    if country:
-        return f"\u2066{_country_flag(country)} {city}\u2069"
-    return city
+    country = _country_code(row["destination_country"])
+    if not country:
+        return ""
+    city = str(row["destination_city"] or "").strip()
+    if city.casefold() in {"", "نامشخص", "unknown", "none", "null", "n/a", "na", "-", "—", "unspecified"}:
+        city = "—"
+    # Rich Message tables are RTL. An LTR isolate keeps the flag before the city.
+    return f"\u2066{_country_flag(country)} {city}\u2069"
 
 
 def _remaining_label(departure: date | None, today: date) -> str:
@@ -158,11 +166,10 @@ def _country_summary_rows(rows):
     """Aggregate active transfer requests by origin and destination country."""
     counts = {}
     for row in rows:
-        origin = str(row["origin_country"] or "").strip().upper() or "??"
-        destination = str(row["destination_country"] or "").strip().upper() or "??"
-        # Requests without a known origin or destination are not actionable
-        # country-summary rows and must not affect the displayed total.
-        if origin == "??" or destination == "??":
+        origin = _country_code(row["origin_country"])
+        destination = _country_code(row["destination_country"])
+        # The country summary follows the same eligibility rule as /transferlive.
+        if not origin or not destination:
             continue
         key = (origin, destination)
         counts[key] = counts.get(key, 0) + 1
@@ -275,7 +282,12 @@ def _origin_table(origin: str, rows, today: date) -> str:
 
 
 def _build_messages():
-    rows = _fetch_active_rows()
+    # A usable route requires both countries. City is optional; when it is
+    # missing the destination cell shows a dash alongside the country flag.
+    rows = [
+        row for row in _fetch_active_rows()
+        if _country_code(row["origin_country"]) and _country_code(row["destination_country"])
+    ]
     today = datetime.now(TEHRAN_TZ).date()
 
     groups = OrderedDict()

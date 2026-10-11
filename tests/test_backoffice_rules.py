@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs, urlsplit
+
 import sqlite3
 
 import pytest
@@ -323,6 +325,15 @@ async def test_publisher_sends_only_once_per_destination(rule_db, monkeypatch):
     assert (await publisher.publish_pending())["sent"] == 1
     assert (await publisher.publish_pending())["sent"] == 0
     assert [item["chat_id"] for item in posted] == ["@turkeychannel"]
+    contact = posted[0]["reply_markup"]["inline_keyboard"][0][0]
+    assert contact["text"] == "👤 @alice"
+    assert urlsplit(contact["url"]).path == "/alice"
+    assert parse_qs(urlsplit(contact["url"]).query) == {
+        "text": [
+            "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال "
+            "@advertio_cargo داشتید خدمت شما پیام می دهم"
+        ]
+    }
 
 
 @pytest.mark.asyncio
@@ -494,6 +505,14 @@ async def test_sent_ad_can_be_manually_resent_without_overwriting_original(rule_
     assert tuple(original) == ("sent", 900)
     assert tuple(resend) == (1485409432, "sent", 901)
     assert posted[0]["chat_id"] == "@turkeychannel"
+    resend_contact = posted[0]["reply_markup"]["inline_keyboard"][0][0]
+    assert resend_contact["text"] == "👤 @alice"
+    assert parse_qs(urlsplit(resend_contact["url"]).query) == {
+        "text": [
+            "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال "
+            "@advertio_cargo داشتید خدمت شما پیام می دهم"
+        ]
+    }
     history = routing_rules.recent_deliveries(target_id=1)
     assert any(item["delivery_kind"] == "resend" and item["telegram_message_id"] == 901
                for item in history)

@@ -80,6 +80,9 @@ class MessageRepository:
     def retry_failed_classifications(self):
         return database.retry_failed_classifications()
 
+    def retry_invalid_provider_output_classifications(self):
+        return database.retry_invalid_provider_output_classifications()
+
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 

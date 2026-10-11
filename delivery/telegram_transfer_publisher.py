@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime
+from urllib.parse import quote
 
 import aiohttp
 
@@ -12,6 +13,12 @@ from storage import database
 from storage.data_normalizer import normalize_category_data
 
 logger = logging.getLogger(__name__)
+
+# Telegram's public-username deep links prefill this message without sending it.
+TRANSFER_CONTACT_DRAFT = (
+    "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال @advertio_cargo "
+    "داشتید خدمت شما پیام می دهم"
+)
 
 
 class TransferTelegramPublishError(RuntimeError):
@@ -190,7 +197,10 @@ class TelegramTransferPublisher:
         username = cls._telegram_username(record)
         if not username:
             return None
-        return {"inline_keyboard": [[{"text": f"👤 @{username}", "url": f"https://t.me/{username}"}]]}
+        # The ad owner's username determines the destination. The UTF-8
+        # Persian message is only a draft; sending remains the reader's choice.
+        url = f"https://t.me/{username}?text={quote(TRANSFER_CONTACT_DRAFT, safe='')}"
+        return {"inline_keyboard": [[{"text": f"👤 @{username}", "url": url}]]}
 
     @classmethod
     def format_ad(cls, record, data):

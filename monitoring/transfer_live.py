@@ -6,12 +6,14 @@ import sqlite3
 from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 from types import MethodType
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from storage import database
 
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_RICH_MESSAGE_LENGTH = 30000
+AD_SUBMISSION_DRAFT = "سلام وقت بخیر درخواست ثبت آگهی ارسال بار/مسافر داشتم در کانال Advertio"
 COUNTRY_NAMES = {
     "IR": "Iran", "DE": "Germany", "TR": "Turkey", "CA": "Canada", "US": "United States",
     "GB": "United Kingdom", "FR": "France", "IT": "Italy", "ES": "Spain", "NL": "Netherlands",
@@ -322,15 +324,17 @@ def _country_report_header(active: int, published: dict) -> str:
 
 
 def _country_report_buttons() -> str:
-    """Place both primary-blue links *inside* one Telegram Rich Message row.
+    """Place two native primary buttons in the Rich Message itself.
 
-    Telegram renders the row and button widths using the receiving app/theme.
-    Keep labels concise to fit both buttons side by side on typical screens.
+    Telegram's public-username ?text= deep link opens the support chat and
+    pre-fills a draft for the user to review; it does not send the message.
+    Button dimensions are controlled by Telegram's client and theme.
     """
+    draft_url = "https://t.me/advertio_support?text=" + quote(AD_SUBMISSION_DRAFT, safe="")
     return (
         '<tg-button-row align="center">'
-        '<tg-button type="url" style="primary" url="https://t.me/advertio_support">'
-        '💬 پشتیبان</tg-button>'
+        f'<tg-button type="url" style="primary" url="{html.escape(draft_url, quote=True)}">'
+        '📝 ثبت آگهی</tg-button>'
         '<tg-button type="url" style="primary" url="https://t.me/advertio_cargo">'
         '✈️ کانال ارسال بار هوایی</tg-button>'
         '</tg-button-row>'
@@ -355,9 +359,9 @@ def _build_country_messages():
 
     rows = [
         "<tr>"
-        + _cell("Origin", header=True)
-        + _cell("Destination", header=True)
-        + _cell("Open Requests", header=True, align="center")
+        + _cell("مبدا", header=True)
+        + _cell("مقصد", header=True)
+        + _cell("آگهی", header=True, align="center")
         + "</tr>"
     ]
     for (origin, destination), count in summary:

@@ -94,6 +94,7 @@ async def test_queue_metrics_exclude_nonhousing_advertio_and_count_unique_failed
     html = await monitor._build_health_message()
     assert "Pipeline backlog (unique messages):</b> 5" in html
     assert "Failed items (unique messages):</b> 4" in html
+    assert "Pending/eligible = current queue; failed = stored failure states" in html
     assert "Last crawl:</b> Not recorded" in html
     assert "2026-10-01 03:30:00" not in html
 

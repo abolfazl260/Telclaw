@@ -347,6 +347,34 @@ def retry_invalid_provider_output_classifications():
         conn.close()
 
 
+def retry_failed_extractions(*, invalid_output_only=False):
+    """Manually requeue failed Extraction rows without changing completed work.
+
+    The targeted mode only selects failures whose safe reason code was
+    persisted after the new error classification. Legacy rows with NULL
+    reasons require the explicit general retry action.
+    """
+    conn = get_connection()
+    try:
+        sql = """UPDATE messages
+            SET ai_status='pending',
+                ai_started_at=NULL,
+                ai_processed_at=NULL,
+                ai_error=NULL
+            WHERE ai_status='failed'
+              AND processing_status='processed'
+              AND classification_status='processed'
+              AND classification_category IN ('housinglist','transferlist','joblist')
+              AND COALESCE(advertio_status, 'waiting') NOT IN ('sent','already_existed')"""
+        if invalid_output_only:
+            sql += " AND ai_error='invalid_provider_output'"
+        cursor = conn.execute(sql)
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def _last_time(conn,where,params=()):
     row=conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}",params).fetchone(); return row["value"] if row and row["value"] else None
 

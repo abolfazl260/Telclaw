@@ -488,12 +488,13 @@ def matching_targets(record, rules):
     return targets
 
 
-def rule_matches(rule_id, limit=25, offset=0, message_id=None, delivery_filter="all"):
-    """Find AI-processed ads matching a rule, optionally filtered by delivery state.
+def rule_matches(rule_id, limit=25, offset=0, message_id=None, delivery_filter="all", active_only=False):
+    """Find rule matches, with an opt-in view of successfully processed ads.
 
-    An ad must belong to the rule's extracted category and have a successful AI
-    status. Delivery state is per destination; the same ad can be sent to one
-    channel and remain unsent to another.
+    Default behavior retains compatibility for callers inspecting category rows
+    before final AI processing. The admin's active view is stricter and only
+    includes successfully processed messages of the selected category.
+    Delivery state is tracked independently for each destination.
     """
     status_filters = {
         "all": "",
@@ -518,8 +519,10 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None, delivery_filter="
         if category not in categories():
             raise ValueError("Invalid category")
         conditions = effective_conditions(rule)
-        where = ["m.ai_status='processed'", "m.ai_category=?"]
-        params = [category]
+        where, params = [], []
+        if active_only:
+            where.extend(("m.ai_status='processed'", "m.ai_category=?"))
+            params.append(category)
         if message_id is not None:
             where.append("m.id=?")
             params.append(int(message_id))
@@ -533,13 +536,14 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None, delivery_filter="
         joins = (f"FROM {category} c JOIN messages m ON m.id=c.processed_message_id "
                  "LEFT JOIN publishing_deliveries d ON d.message_id=m.id AND d.target_id=?")
         args = [rule["target_id"], *params]
-        clause = " AND ".join(where)
+        clause = " AND ".join(where) or "1"
         counts = dict(conn.execute(f"""SELECT COUNT(*) AS total,
             COUNT(CASE WHEN d.status='sent' THEN 1 END) AS sent,
             COUNT(CASE WHEN d.status IS NULL OR d.status='retry' THEN 1 END) AS unsent,
             COUNT(CASE WHEN d.status IN ('uncertain','rejected','failed','sending') THEN 1 END) AS review
             {joins} WHERE {clause}""", args).fetchone())
-        counts["filtered"] = counts["total"] if delivery_filter == "all" else counts[delivery_filter]
+        counts["filtered"] = (counts["total"] if delivery_filter == "all" else
+                              counts["sent" if delivery_filter == "delivered" else delivery_filter])
         selected_clause = clause
         if status_filters[delivery_filter]:
             selected_clause += " AND " + status_filters[delivery_filter]
@@ -552,12 +556,15 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None, delivery_filter="
             record = dict(row)
             record["ai_category"] = category
             records.append(record)
+        if not active_only and delivery_filter == "all":
+            # Existing internal callers only expect total and sent.
+            counts = {"total": counts["total"], "sent": counts["sent"]}
         return rule, counts, records
     finally:
         conn.close()
 
 def selected_pair(rule_id, message_id, allow_sent=False):
-    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id, active_only=True)
     blocked = {"sending", "uncertain"}
     if not allow_sent:
         blocked.add("sent")
@@ -571,7 +578,7 @@ def selected_pair(rule_id, message_id, allow_sent=False):
 
 
 def selected_resend_pair(rule_id, message_id):
-    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id, active_only=True)
     if (not rule["enabled"] or not rule["target_enabled"]
             or rule["connection_status"] == "disconnected" or not records
             or records[0].get("delivery_status") != "sent"):

@@ -488,8 +488,22 @@ def matching_targets(record, rules):
     return targets
 
 
-def rule_matches(rule_id, limit=25, offset=0, message_id=None):
-    """Count and preview ads matching one database-driven rule, including delivery state."""
+def rule_matches(rule_id, limit=25, offset=0, message_id=None, delivery_filter="all", active_only=False):
+    """Find rule matches, with an opt-in view of successfully processed ads.
+
+    Default behavior retains compatibility for callers inspecting category rows
+    before final AI processing. The admin's active view is stricter and only
+    includes successfully processed messages of the selected category.
+    Delivery state is tracked independently for each destination.
+    """
+    status_filters = {
+        "all": "",
+        "unsent": "(d.status IS NULL OR d.status='retry')",
+        "delivered": "d.status='sent'",
+        "review": "d.status IN ('uncertain','rejected','failed','sending')",
+    }
+    if delivery_filter not in status_filters:
+        raise ValueError("Invalid delivery filter")
     mark_incomplete_deliveries()
     initialize()
     conn = get_connection()
@@ -505,8 +519,10 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
         if category not in categories():
             raise ValueError("Invalid category")
         conditions = effective_conditions(rule)
-        where = []
-        params = []
+        where, params = [], []
+        if active_only:
+            where.extend(("m.ai_status='processed'", "m.ai_category=?"))
+            params.append(category)
         if message_id is not None:
             where.append("m.id=?")
             params.append(int(message_id))
@@ -521,25 +537,34 @@ def rule_matches(rule_id, limit=25, offset=0, message_id=None):
                  "LEFT JOIN publishing_deliveries d ON d.message_id=m.id AND d.target_id=?")
         args = [rule["target_id"], *params]
         clause = " AND ".join(where) or "1"
-        counts = conn.execute(f"""SELECT COUNT(*) AS total,
-            COUNT(CASE WHEN d.status='sent' THEN 1 END) AS sent
-            {joins} WHERE {clause}""", args).fetchone()
+        counts = dict(conn.execute(f"""SELECT COUNT(*) AS total,
+            COUNT(CASE WHEN d.status='sent' THEN 1 END) AS sent,
+            COUNT(CASE WHEN d.status IS NULL OR d.status='retry' THEN 1 END) AS unsent,
+            COUNT(CASE WHEN d.status IN ('uncertain','rejected','failed','sending') THEN 1 END) AS review
+            {joins} WHERE {clause}""", args).fetchone())
+        counts["filtered"] = (counts["total"] if delivery_filter == "all" else
+                              counts["sent" if delivery_filter == "delivered" else delivery_filter])
+        selected_clause = clause
+        if status_filters[delivery_filter]:
+            selected_clause += " AND " + status_filters[delivery_filter]
         rows = conn.execute(f"""SELECT m.id AS message_row_id,m.message_id AS telegram_source_id,
             m.*,c.*,d.status AS delivery_status
-            {joins} WHERE {clause} ORDER BY m.id DESC LIMIT ? OFFSET ?""",
+            {joins} WHERE {selected_clause} ORDER BY m.id DESC LIMIT ? OFFSET ?""",
             [*args, min(max(int(limit), 1), 100), max(int(offset), 0)]).fetchall()
         records = []
         for row in rows:
             record = dict(row)
             record["ai_category"] = category
             records.append(record)
-        return rule, dict(counts), records
+        if not active_only and delivery_filter == "all":
+            # Existing internal callers only expect total and sent.
+            counts = {"total": counts["total"], "sent": counts["sent"]}
+        return rule, counts, records
     finally:
         conn.close()
 
-
 def selected_pair(rule_id, message_id, allow_sent=False):
-    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id, active_only=True)
     blocked = {"sending", "uncertain"}
     if not allow_sent:
         blocked.add("sent")
@@ -553,7 +578,7 @@ def selected_pair(rule_id, message_id, allow_sent=False):
 
 
 def selected_resend_pair(rule_id, message_id):
-    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id)
+    rule, _, records = rule_matches(rule_id, limit=1, message_id=message_id, active_only=True)
     if (not rule["enabled"] or not rule["target_enabled"]
             or rule["connection_status"] == "disconnected" or not records
             or records[0].get("delivery_status") != "sent"):

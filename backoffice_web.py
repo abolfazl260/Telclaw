@@ -484,6 +484,9 @@ async def index(request):
     .matching-messages{{margin-top:.8rem;border-top:1px solid #e3e8ef;padding-top:.8rem}}.matching-header{{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap}}
     .matching-header h5{{font-size:1rem;margin:.2rem 0}}.message-row-meta{{display:flex;gap:.55rem;align-items:center;flex-wrap:wrap}}
     .message-actions{{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.4rem}}.matching-nav{{margin-bottom:0}}
+    .match-filters{{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.65rem}}
+    .match-filters a{{padding:.35rem .6rem;text-decoration:none;color:#1957b8;background:#eff4ff;border-radius:7px;font-size:.85rem}}
+    .match-filters a.active{{background:#1957b8;color:#fff}}
     .danger{{background:#a53732}}.delete-rule{{padding:.4rem 0 0}}.ad-row{{border-top:1px solid #e4e9ef;padding:.75rem 0}}
     .overview-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem;margin:1rem 0}}
     .overview-card{{padding:1rem;border:1px solid #dce4ef;border-radius:12px;background:#f8faff}}
@@ -633,13 +636,19 @@ def _rule_form(rule, target, csrf):
 
 
 def _rule_panel(rule, target, csrf, request):
+    query = getattr(request, "query", {})
+    selected = str(query.get("rule", "")) == str(rule["id"])
+    view = str(query.get("match_view", "all")) if selected else "all"
+    if view not in {"all", "unsent", "delivered", "review"}:
+        view = "all"
     page = 0
-    if str(getattr(request, "query", {}).get("rule", "")) == str(rule["id"]):
+    if selected:
         try:
-            page = min(max(int(request.query.get("page", "0")), 0), 1000)
+            page = min(max(int(query.get("page", "0")), 0), 1000)
         except ValueError:
             pass
-    _, counts, records = routing_rules.rule_matches(rule["id"], limit=20, offset=page * 20)
+    _, counts, records = routing_rules.rule_matches(
+        rule["id"], limit=20, offset=page * 20, delivery_filter=view, active_only=True)
     mode = rule.get("delivery_mode") or "auto"
     mode_label = "Manual review" if mode == "manual" else "Automatic"
     paused = routing_rules.is_rate_limited()
@@ -691,16 +700,27 @@ def _rule_panel(rule, target, csrf, request):
             <div class="message-actions">{send}{resend}{uncertain}</div></div>''')
     nav = ""
     for label, p in (("Previous", page - 1), ("Next", page + 1)):
-        if p >= 0 and p * 20 < counts["total"] and (p != page):
-            nav += (f'<a href="/?channel={target["id"]}&rule={rule["id"]}&page={p}'
+        if p >= 0 and p * 20 < counts["filtered"] and (p != page):
+            nav += (f'<a href="/?channel={target["id"]}&rule={rule["id"]}&match_view={view}&page={p}'
                     f'#rule-{rule["id"]}">{label}</a> ')
+    view_links = "".join(
+        f'<a class="{"active" if view == key else ""}" '
+        f'href="/?channel={target["id"]}&rule={rule["id"]}&match_view={key}#rule-{rule["id"]}">'
+        f'{label} ({counts[count_key]})</a>'
+        for key, label, count_key in (
+            ("all", "All", "total"),
+            ("unsent", "Unsent", "unsent"),
+            ("delivered", "Delivered", "sent"),
+            ("review", "Needs review", "review"),
+        )
+    )
     mode_help = ("Manual review is enabled. Matching messages stay here until you choose Send now."
                  if mode == "manual" else
                  "Automatic delivery is enabled. Matching messages are shown here for visibility.")
     return f'''<div class="rule-panel" id="rule-{rule['id']}">
         <div class="rule-title"><h4>{_escape(rule['name'])}</h4>
         <span class="badge">{_escape(mode_label)}</span>
-        <span class="hint">{counts['total']} matching · {counts['sent']} delivered</span></div>
+        <span class="hint">{counts['total']} active matches · {counts['unsent']} unsent · {counts['sent']} delivered</span></div>
         <details class="rule-edit"><summary>Edit rule</summary>
         {_rule_form(rule, target, csrf)}
         <form method="post" action="/rule/delete" class="delete-rule"><input type="hidden" name="csrf" value="{csrf}">
@@ -709,9 +729,11 @@ def _rule_panel(rule, target, csrf, request):
         <button class="danger" data-confirm="Delete this rule? Existing delivery history will remain.">Delete rule</button>
         </form></details>
         <div class="matching-messages">
-        <div class="matching-header"><h5>Matching messages ({counts['total']})</h5>
+        <div class="matching-header"><h5>Matching active ads ({counts['filtered']} of {counts['total']})</h5>
         <span class="hint">{_escape(mode_help)}</span></div>
-        {''.join(entries) or '<p class="hint">No messages match this rule yet.</p>'}
+        <nav class="match-filters" aria-label="Filter matching ads">{view_links}</nav>
+        <p class="hint">Only successfully AI-processed ads are included. External listing expiry is not verified.</p>
+        {''.join(entries) or '<p class="hint">No active ads match this view.</p>'}
         <p class="matching-nav">{nav}</p></div></div>'''
 
 

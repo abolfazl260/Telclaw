@@ -172,12 +172,26 @@ compatible. When such a rule is opened, those legacy settings are translated int
 generic condition builder so saving the rule moves it to the topic-agnostic model without
 changing its intended matching logic.
 
-Each rule displays the number of matching stored ads and how many were sent to its
-channel/group. Expand **Matching ads** to browse 20 at a time and read the full preview.
-New rules default to **Manual selection**: click **Send this ad** on an individual match
-to publish it. Existing rules retain automatic delivery until switched to manual.
-Already delivered ads show **Send again**; resending requires explicit confirmation and
-keeps the original successful delivery record unchanged.
+Each rule shows **Matching active ads** directly within its destination channel.
+Only successfully AI-processed messages whose `ai_category` equals the rule category,
+with an extracted record in that category, are included. This excludes unprocessed,
+failed, and cross-category records. The list follows the rule's source-channel and
+AND/OR field conditions, supports pagination (20 at a time), and is refreshed when
+the admin reloads the page. Use **All**, **Unsent**, **Delivered**, and **Needs review**
+to filter matches for that individual destination. **Unsent** means no recorded
+delivery or an explicit retry; **Needs review** covers uncertain, rejected,
+failed, and sending states. Statuses are destination-specific and the counters are
+computed over all matches, not just the current page.
+
+Here, "active" means successfully extracted and eligible for rule matching, **not**
+that the external Telegram post or listing is guaranteed to remain available:
+the database currently has no universal expiration or deactivation flag. A
+category-specific expiration policy would need a separate data model.
+
+New rules default to **Automatic publishing**; select **Manual review** to send
+individual matching ads with **Send now**. Existing rules keep their stored
+mode. Already delivered ads show **Send again**; resending requires confirmation
+and preserves the original successful delivery record.
 
 **Delete rule** removes only the rule, leaving past delivery history intact. Rules run in
 priority order. The first matching rule stops evaluation by default; enable **Continue

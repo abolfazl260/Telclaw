@@ -403,7 +403,7 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
                             delivery_mode="manual")
     assert routing_rules.pending() == []
     response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
-    assert "Matching messages (1)" in response.text
+    assert "Matching active ads (1 of 1)" in response.text
     assert "Manual review" in response.text
     assert "Send now" in response.text
     assert "<summary>Matching messages" not in response.text
@@ -419,7 +419,7 @@ async def test_manual_rule_previews_ad_and_does_not_auto_publish(rule_db):
     with pytest.raises(ValueError):
         routing_rules.selected_pair(1, 1)
     response = await backoffice_web.index({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
-    assert "Matching messages (1)" in response.text
+    assert "Matching active ads (1 of 1)" in response.text
     assert "Send again" in response.text
     assert "Delete rule" in response.text
     routing_rules.delete_rule(1, 1)
@@ -549,6 +549,89 @@ async def test_interrupted_send_requires_review_before_manual_retry(rule_db):
     assert "Review and retry" in response.text
     routing_rules.retry_delivery(1, 1)
     assert routing_rules.selected_pair(1, 1)[0]["message_row_id"] == 1
+
+
+def test_rule_matches_only_successfully_processed_ads_of_the_selected_category(rule_db):
+    routing_rules.save_target("Turkey", "@turkeychannel")
+    routing_rules.save_rule("Approved only", "transferlist", "", "either", 1,
+                            delivery_mode="manual", filter_field="origin_country",
+                            filter_value="TR")
+    conn = rule_db()
+    for row_id, category, status in (
+        (2, "transferlist", "failed"),
+        (3, "transferlist", "pending"),
+        (4, "joblist", "processed"),
+    ):
+        conn.execute("""INSERT INTO messages
+            (id,ai_category,ai_status,processing_status,message_id,
+             sender_username,channel_username,message_link)
+            VALUES(?,?,?,'processed',?,'alice','test','')""",
+            (row_id, category, status, row_id + 10))
+        conn.execute("""INSERT INTO transferlist
+            (processed_message_id,origin_country,destination_country)
+            VALUES(?,'TR','IR')""", (row_id,))
+    conn.commit()
+    conn.close()
+
+    _, counts, records = routing_rules.rule_matches(1, active_only=True)
+    assert counts == {"total": 1, "sent": 0, "unsent": 1, "review": 0, "filtered": 1}
+    assert [row["message_row_id"] for row in records] == [1]
+    with pytest.raises(ValueError, match="unavailable"):
+        routing_rules.selected_pair(1, 2)
+    with pytest.raises(ValueError, match="unavailable"):
+        routing_rules.selected_pair(1, 4)
+
+
+@pytest.mark.asyncio
+async def test_active_rule_matches_filter_delivery_per_target_and_keep_pagination(rule_db):
+    routing_rules.save_target("One", "@firstchannel")
+    routing_rules.save_target("Two", "@secondchannel")
+    routing_rules.save_rule("Rule one", "transferlist", "", "either", 1,
+                            delivery_mode="manual")
+    routing_rules.save_rule("Rule two", "transferlist", "", "either", 2,
+                            delivery_mode="manual")
+    conn = rule_db()
+    for row_id in (2, 3, 4):
+        conn.execute("""INSERT INTO messages
+            (id,ai_category,ai_status,processing_status,message_id,
+             sender_username,channel_username,message_link)
+            VALUES(?,'transferlist','processed','processed',?,'alice','test','')""",
+            (row_id, row_id + 10))
+        conn.execute("""INSERT INTO transferlist
+            (processed_message_id,origin_country,destination_country)
+            VALUES(?,'TR','IR')""", (row_id,))
+    conn.commit()
+    conn.close()
+    routing_rules.record_delivery(1, 1, "sent", telegram_message_id=900)
+    routing_rules.record_delivery(2, 1, "retry")
+    routing_rules.record_delivery(3, 1, "uncertain")
+
+    _, counts, unsent = routing_rules.rule_matches(1, delivery_filter="unsent")
+    assert counts == {"total": 4, "sent": 1, "unsent": 2, "review": 1, "filtered": 2}
+    assert [item["message_row_id"] for item in unsent] == [4, 2]
+    assert [item["message_row_id"] for item in routing_rules.rule_matches(
+        1, active_only=True, limit=1, offset=1, delivery_filter="unsent")[2]] == [2]
+    assert [item["message_row_id"] for item in routing_rules.rule_matches(
+        1, active_only=True, delivery_filter="delivered")[2]] == [1]
+    assert [item["message_row_id"] for item in routing_rules.rule_matches(
+        1, active_only=True, delivery_filter="review")[2]] == [3]
+    assert routing_rules.rule_matches(2, active_only=True)[1]["unsent"] == 4
+    with pytest.raises(ValueError, match="Invalid delivery filter"):
+        routing_rules.rule_matches(1, delivery_filter="invented")
+
+    class Request(dict):
+        query = {"channel": "1", "rule": "1", "match_view": "unsent", "page": "0"}
+
+    response = await backoffice_web.index(
+        Request({"session": {"csrf": "test"}, "csp_nonce": "nonce"})
+    )
+    first = response.text.split('id="channel-1"', 1)[1].split('id="channel-2"', 1)[0]
+    assert "Matching active ads (2 of 4)" in first
+    assert "Unsent (2)" in first
+    assert "Delivered (1)" in first
+    assert "Needs review (1)" in first
+    assert "Message #4" in first and "Message #2" in first
+    assert "Message #3" not in first
 
 
 def test_zero_category_value_matches_preview_and_auto_delivery(rule_db):

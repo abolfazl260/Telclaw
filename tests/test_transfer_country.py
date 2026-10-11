@@ -53,9 +53,14 @@ def test_country_rich_message_contains_persian_heading_live_counts_and_embedded_
     assert ">1<" in message
 
     # Rich Message native buttons, not an external inline keyboard.
-    assert message.count('<tg-button-row align="center">') == 1
-    assert message.count('<tg-button-row>') == 1
+    assert '<tg-button-row align="center">' not in message
+    assert message.count('<tg-button-row>') == 2
     assert message.count('<tg-button type="url" style="primary"') == 3
+    # The first row distributes the two existing actions across the full width.
+    first_row = message.split('<tg-button-row>', 1)[1].split('</tg-button-row>', 1)[0]
+    assert first_row.count('<tg-button ') == 2
+    assert '📝 ثبت آگهی' in first_row
+    assert '✈️ کانال ارسال بار هوایی' in first_row
     match = re.search(
         r'<tg-button type="url" style="primary" url="([^"]+)">📝 ثبت آگهی</tg-button>',
         message,
@@ -72,17 +77,25 @@ def test_country_rich_message_contains_persian_heading_live_counts_and_embedded_
     assert " " not in draft_url
     assert "پشتیبان" not in message
     assert 'url="https://t.me/advertio_cargo">✈️ کانال ارسال بار هوایی</tg-button>' in message
+    quote = (
+        '✈️ با ربات ویزا و پرواز ادورتیو، بلیط پرواز از مبدأ ایران رو بدون واسطه '
+        'و با بهترین نرخ پیدا کن، زنگوله کاهش قیمت ۲۰٪ رو فعال کن و از قوانین '
+        'ویزای فرودگاهی کشورها مطلع شو.'
+    )
+    assert f'<blockquote><p>{quote}</p></blockquote>' in message
     assert message.endswith(
         '<tg-button-row>'
         '<tg-button type="url" style="primary" url="https://t.me/Flightiranbot">'
-        '✈️ بلیط پرواز ادورتیو بدون واسطه</tg-button>'
+        'ربات بلیط و پرواز ادورتیو</tg-button>'
         '</tg-button-row>'
     )
-    # The booking bot must be the only button in its own full-length row.
-    assert message.index('✈️ کانال ارسال بار هوایی</tg-button>') < message.index(
-        '<tg-button-row><tg-button type="url" style="primary" '
-        'url="https://t.me/Flightiranbot">'
-    )
+    # Quote sits outside both rows, between the wide first row and flight CTA.
+    first_row_end = message.index('</tg-button-row>')
+    quote_start = message.index('<blockquote>')
+    flight_row_start = message.rindex('<tg-button-row>')
+    assert first_row_end < quote_start < flight_row_start
+    final_row = message[flight_row_start:]
+    assert final_row.count('<tg-button ') == 1
 
 
 def test_country_rich_message_empty_state_keeps_heading_counters_and_buttons(monkeypatch):
@@ -106,9 +119,12 @@ def test_country_rich_message_empty_state_keeps_heading_counters_and_buttons(mon
     assert "در حال حاضر آگهی فعال" in message
     assert "<table" not in message
     assert message.count('<tg-button type="url" style="primary"') == 3
-    assert message.count('<tg-button-row>') == 1
+    assert message.count('<tg-button-row>') == 2
+    assert '<tg-button-row align="center">' not in message
     assert "https://t.me/Flightiranbot" in message
-    assert "✈️ بلیط پرواز ادورتیو بدون واسطه" in message
+    assert '<blockquote><p>✈️ با ربات ویزا و پرواز ادورتیو،' in message
+    assert 'ویزای فرودگاهی کشورها مطلع شو.</p></blockquote>' in message
+    assert "ربات بلیط و پرواز ادورتیو</tg-button>" in message
     assert "📝 ثبت آگهی" in message
     assert "https://t.me/advertio_support?text=" in message
     assert "✈️ کانال ارسال بار هوایی" in message
@@ -145,5 +161,7 @@ async def test_country_command_sends_buttons_as_part_of_rich_message(monkeypatch
     assert "📝 ثبت آگهی" in payload["rich_message"]["html"]
     assert "https://t.me/advertio_support?text=" in payload["rich_message"]["html"]
     assert "https://t.me/Flightiranbot" in payload["rich_message"]["html"]
-    assert payload["rich_message"]["html"].count('<tg-button-row>') == 1
+    assert payload["rich_message"]["html"].count('<tg-button-row>') == 2
+    assert "<blockquote><p>✈️ با ربات ویزا و پرواز ادورتیو،" in payload["rich_message"]["html"]
+    assert "ربات بلیط و پرواز ادورتیو</tg-button>" in payload["rich_message"]["html"]
     assert "reply_markup" not in payload

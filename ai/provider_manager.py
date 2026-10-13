@@ -25,6 +25,7 @@ class AIProviderManager:
             self.active_index = 0
         self._unavailable_until = [0.0] * len(self.providers)
         self._last_recovery_check = 0.0
+        self._last_failover_error = None
         self._select_highest_priority_available(force=True)
 
     @property
@@ -47,13 +48,18 @@ class AIProviderManager:
 
     def _select_highest_priority_available(self, force=False):
         now = time.monotonic()
-        if not force and now - self._last_recovery_check < config.AI_RECOVERY_INTERVAL_SECONDS:
-            return
+        # Recovery priority may be throttled, but cooldown eligibility may not:
+        # even an already-selected provider can become temporarily unavailable.
+        if (not force
+                and self._unavailable_until[self.active_index] <= now
+                and now - self._last_recovery_check < config.AI_RECOVERY_INTERVAL_SECONDS):
+            return self.active_index
         self._last_recovery_check = now
         for index, available_at in enumerate(self._unavailable_until):
             if available_at <= now:
                 self.active_index = index
-                return
+                return index
+        return None
 
     @staticmethod
     def _is_failover_error(exc):
@@ -81,38 +87,57 @@ class AIProviderManager:
                 return index
         return None
 
+    def _cooldown_error(self, last_error=None):
+        """Return the next eligibility time without calling a cooling provider."""
+        remaining = max(0.0, min(self._unavailable_until) - time.monotonic())
+        if last_error is not None and getattr(last_error, "status", None) != 429:
+            # Preserve e.g. a permission error and its stop_queue semantics.
+            return last_error
+        return AIExtractionError(
+            "All AI providers are temporarily unavailable (cooldown active)",
+            status=429,
+            reason="rate_limit",
+            provider=getattr(last_error, "provider", self.provider),
+            retry_after=remaining,
+        )
+
     def _call(self, method, *args, **kwargs):
         attempts = 0
         last_error = None
         while attempts <= config.AI_RETRY_COUNT:
-            self._select_highest_priority_available()
+            if self._select_highest_priority_available() is None:
+                raise self._cooldown_error(self._last_failover_error)
             try:
-                return getattr(self.provider_instance, method)(*args, **kwargs)
+                result = getattr(self.provider_instance, method)(*args, **kwargs)
+                self._last_failover_error = None
+                return result
             except AIExtractionError as exc:
                 last_error = exc
                 if not self._is_failover_error(exc):
                     raise
 
                 current_index = self.active_index
-                next_index = self._next_available()
-                if next_index is not None:
-                    cooldown = getattr(exc, "retry_after", None) if getattr(exc, "status", None) == 429 else None
-                    self._mark_unavailable(current_index, cooldown)
-                    wrapped = next_index <= current_index
-                    self.active_index = next_index
-                    if wrapped:
-                        attempts += 1
-                    continue
+                self._last_failover_error = exc
+                cooldown = getattr(exc, "retry_after", None) if getattr(exc, "status", None) == 429 else None
+                if cooldown is not None and float(cooldown) <= 0:
+                    cooldown = None  # Prevent a 429 with retry_after=0 from hot-looping.
+                self._mark_unavailable(current_index, cooldown)
 
-                # Every configured provider is currently unavailable. Count
-                # this as a completed failover cycle and, once a provider is
-                # available again, resume from the highest-priority provider.
-                if attempts >= config.AI_RETRY_COUNT:
+                # Mark the failing provider BEFORE finding the next one, so a
+                # wrapped search cannot immediately pick the same provider.
+                next_index = self._next_available()
+                if next_index is None:
+                    # The upper Classification/Extraction retry handlers already
+                    # implement bounded waiting on 429. Do not sleep or issue
+                    # another HTTP request here.
+                    if getattr(exc, "status", None) == 429:
+                        raise self._cooldown_error(exc) from exc
                     raise
 
-                self._mark_unavailable(current_index, getattr(exc, "retry_after", None))
-                attempts += 1
-                self._select_highest_priority_available(force=True)
+                wrapped = next_index <= current_index
+                self.active_index = next_index
+                if wrapped:
+                    attempts += 1
 
         raise last_error
 

@@ -85,3 +85,117 @@ def test_highest_priority_provider_recovers_after_cooldown():
 
     assert service.classify_batch([{"message_id": 1, "text": "room"}]) == {1: "housinglist"}
     assert service.active_index == 0
+
+def test_all_rate_limited_providers_are_tried_once_and_return_earliest_retry(monkeypatch):
+    import config
+
+    now = [100.0]
+    monkeypatch.setattr("ai.provider_manager.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(config, "AI_RETRY_COUNT", 3)
+    first = Provider("groq", error=AIExtractionError(
+        "limited", status=429, reason="rate_limit", retry_after=30
+    ))
+    second = Provider("cloudflare", error=AIExtractionError(
+        "limited", status=429, reason="rate_limit", retry_after=5
+    ))
+    service = manager(first, second)
+
+    with pytest.raises(AIExtractionError) as raised:
+        service.extract("listing", "housinglist")
+
+    assert raised.value.status == 429
+    assert raised.value.reason == "rate_limit"
+    assert raised.value.retry_after == pytest.approx(5)
+    assert (first.calls, second.calls) == (1, 1)
+    assert service._unavailable_until == [130.0, 105.0]
+
+    # A repeated queue attempt before the deadline must not send HTTP traffic.
+    with pytest.raises(AIExtractionError) as during_cooldown:
+        service.extract("listing", "housinglist")
+    assert during_cooldown.value.retry_after == pytest.approx(5)
+    assert (first.calls, second.calls) == (1, 1)
+
+    now[0] = 106
+    second.error = None
+    second.result = {"category": "housinglist"}
+    assert service.extract("listing", "housinglist") == {"category": "housinglist"}
+    assert (first.calls, second.calls) == (1, 2)
+
+
+def test_single_provider_cools_down_instead_of_immediate_retries(monkeypatch):
+    import config
+
+    now = [200.0]
+    monkeypatch.setattr("ai.provider_manager.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(config, "AI_RETRY_COUNT", 5)
+    only = Provider("groq", error=AIExtractionError(
+        "limited", status=429, reason="rate_limit", retry_after=10
+    ))
+    service = manager(only)
+
+    for _ in range(3):
+        with pytest.raises(AIExtractionError) as raised:
+            service.classify_batch([{"message_id": 1, "text": "room"}])
+        assert raised.value.status == 429
+        assert raised.value.retry_after == pytest.approx(10)
+    assert only.calls == 1
+
+    now[0] = 211.0
+    only.error = None
+    only.result = {1: "housinglist"}
+    assert service.classify_batch([{"message_id": 1, "text": "room"}]) == {1: "housinglist"}
+    assert only.calls == 2
+
+
+def test_cooling_active_provider_is_skipped_even_within_recovery_interval(monkeypatch):
+    import config
+
+    now = [100.0]
+    monkeypatch.setattr("ai.provider_manager.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(config, "AI_RECOVERY_INTERVAL_SECONDS", 3600)
+    first = Provider("groq", result={1: "none"})
+    second = Provider("cloudflare", result={1: "housinglist"})
+    service = manager(first, second)
+    service.active_index = 0
+    service._last_recovery_check = 100.0
+    service._unavailable_until[0] = 140.0
+
+    assert service.classify_batch([{"message_id": 1, "text": "room"}]) == {1: "housinglist"}
+    assert first.calls == 0
+    assert second.calls == 1
+
+
+def test_zero_retry_after_uses_configured_cooldown(monkeypatch):
+    import config
+
+    now = [100.0]
+    monkeypatch.setattr("ai.provider_manager.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(config, "AI_COOLDOWN_SECONDS", 17)
+    only = Provider("groq", error=AIExtractionError(
+        "limited", status=429, reason="rate_limit", retry_after=0
+    ))
+    service = manager(only)
+
+    with pytest.raises(AIExtractionError) as raised:
+        service.extract("listing", "housinglist")
+    assert raised.value.retry_after == pytest.approx(17)
+    assert only.calls == 1
+
+
+def test_permission_error_preserves_status_and_stop_queue_during_cooldown(monkeypatch):
+    import config
+
+    now = [100.0]
+    monkeypatch.setattr("ai.provider_manager.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(config, "AI_RETRY_COUNT", 3)
+    first = Provider("groq", error=AIExtractionError(
+        "forbidden", status=403, reason="permissions_error", stop_queue=True
+    ))
+    service = manager(first)
+
+    for _ in range(2):
+        with pytest.raises(AIExtractionError) as raised:
+            service.extract("listing", "housinglist")
+        assert raised.value.status == 403
+        assert raised.value.stop_queue is True
+    assert first.calls == 1

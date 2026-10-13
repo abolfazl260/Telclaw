@@ -130,7 +130,9 @@ class AIProviderManager:
                     # The upper Classification/Extraction retry handlers already
                     # implement bounded waiting on 429. Do not sleep or issue
                     # another HTTP request here.
-                    raise self._cooldown_error(exc) from exc
+                    if getattr(exc, "status", None) == 429:
+                        raise self._cooldown_error(exc) from exc
+                    raise
 
                 wrapped = next_index <= current_index
                 self.active_index = next_index

@@ -25,6 +25,85 @@ CRAWL_MODE_ALL = "all"
 CRAWL_MODE_PHOTOS_ONLY = "photos_only"
 VALID_CRAWL_MODES = {CRAWL_MODE_ALL, CRAWL_MODE_PHOTOS_ONLY}
 MIN_MESSAGE_WORDS = 10
+MAX_RECONNECT_ATTEMPTS = 3
+RECONNECT_BASE_DELAY_SECONDS = 1
+
+
+def _client_is_connected(client):
+    """Check connection state; simple test doubles may omit this API."""
+    is_connected = getattr(client, "is_connected", None)
+    return bool(is_connected()) if callable(is_connected) else True
+
+
+async def _retry_telegram_connection(client, channel_username, attempt, reason):
+    """Back off and reconnect only when the Telethon client is disconnected."""
+    delay = RECONNECT_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+    logger.warning(
+        "[CRAWL RECONNECT] channel=%s attempt=%s/%s backoff=%ss reason=%s",
+        channel_username, attempt, MAX_RECONNECT_ATTEMPTS, delay, reason,
+    )
+    await asyncio.sleep(delay)
+    try:
+        if not _client_is_connected(client):
+            await client.connect()
+        if not _client_is_connected(client):
+            raise ConnectionError("Telegram client is still disconnected")
+    except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
+        logger.warning(
+            "[CRAWL RECONNECT FAILED] channel=%s attempt=%s/%s reason=%s",
+            channel_username, attempt, MAX_RECONNECT_ATTEMPTS, exc,
+        )
+        if attempt == MAX_RECONNECT_ATTEMPTS:
+            raise ConnectionError(
+                f"Telegram reconnect failed after {MAX_RECONNECT_ATTEMPTS} attempts"
+            ) from exc
+    else:
+        logger.info("[CRAWL CONNECTION READY] channel=%s", channel_username)
+
+
+async def _get_input_entity_with_reconnect(client, channel_username):
+    """Resolve a channel even when the shared client lost its connection."""
+    retries = 0
+    while True:
+        try:
+            if not _client_is_connected(client):
+                raise ConnectionError("Telegram client is disconnected")
+            return await client.get_input_entity(channel_username)
+        except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
+            if retries >= MAX_RECONNECT_ATTEMPTS:
+                raise ConnectionError(
+                    f"Channel lookup failed after {MAX_RECONNECT_ATTEMPTS} reconnect attempts"
+                ) from exc
+            retries += 1
+            await _retry_telegram_connection(client, channel_username, retries, exc)
+
+
+async def _iter_messages_with_reconnect(client, entity, channel_username):
+    """Resume descending message history after a bounded reconnect attempt.
+
+    Telethon's offset_id is exclusive, so restarting below the last yielded ID
+    avoids revisiting messages already handed to the collection loop.
+    """
+    last_message_id = None
+    retries = 0
+    while True:
+        try:
+            if not _client_is_connected(client):
+                raise ConnectionError("Telegram client is disconnected")
+            kwargs = {"offset_id": last_message_id} if last_message_id is not None else {}
+            async for message in client.iter_messages(entity, **kwargs):
+                if message is not None:
+                    last_message_id = message.id
+                    retries = 0
+                yield message
+            return
+        except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
+            if retries >= MAX_RECONNECT_ATTEMPTS:
+                raise ConnectionError(
+                    f"Message retrieval failed after {MAX_RECONNECT_ATTEMPTS} reconnect attempts"
+                ) from exc
+            retries += 1
+            await _retry_telegram_connection(client, channel_username, retries, exc)
 
 
 async def _forward_origin_kind(client, message):
@@ -195,10 +274,10 @@ async def crawl_channel(
         duplicate_conn = get_connection()
         ensure_duplicate_schema(duplicate_conn)
 
-        entity = await client.get_input_entity(channel_username)
+        entity = await _get_input_entity_with_reconnect(client, channel_username)
         await asyncio.sleep(random.randint(30, 60))
 
-        async for message in client.iter_messages(entity):
+        async for message in _iter_messages_with_reconnect(client, entity, channel_username):
             if should_stop and should_stop():
                 stopped = True
                 print(f"\n⏭ [CRAWL-SKIPPED] Operator requested stage skip; remaining messages were not checked.")

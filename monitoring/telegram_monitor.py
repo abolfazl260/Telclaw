@@ -202,7 +202,7 @@ class TelegramMonitor:
             if db_path.stat().st_size==0: await self._send(chat_id,"⚠️ Database file is empty."); return
             timestamp=self._tehran_timestamp(datetime.now(ZoneInfo("UTC")).isoformat())
             # A live SQLite file may not contain committed WAL data. Back up first.
-            with tempfile.TemporaryDirectory(prefix="telclaw-db-") as temp_dir:
+            with tempfile.TemporaryDirectory(prefix="telclaw-db-",dir=db_path.parent) as temp_dir:
                 snapshot_path=Path(temp_dir) / db_path.name
                 await asyncio.to_thread(_snapshot_sqlite_database,db_path,snapshot_path)
                 snapshot_size=snapshot_path.stat().st_size

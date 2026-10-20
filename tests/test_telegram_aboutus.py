@@ -63,6 +63,36 @@ def test_aboutus_html_has_all_registry_assets_and_fits_telegram_message():
     assert "https://t.me/AdvertioBot" not in parser.urls
 
 
+def test_aboutus_member_counts_and_each_link_is_on_its_own_line():
+    text = build_aboutus_message()
+    assert "مسکن | حدود 5K عضو" in text
+    assert "ارسال بار | حدود 9K عضو" in text
+    assert "۳ لینک" not in text and "۵ گروه" not in text
+    assert "<b>پرواز و ویزا</b>" in text
+    for _, username in (*CHANNELS, *GROUPS, *BOTS):
+        assert sum(f'https://t.me/{username}' in line for line in text.splitlines()) == 1
+    assert all(
+        line.startswith("• <a href=")
+        for line in text.splitlines()
+        if '<a href="https://t.me/' in line and "پشتیبانی" not in line
+    )
+
+
+def test_aboutus_button_labels_and_priorities():
+    rows = aboutus_keyboard()["inline_keyboard"]
+    assert [item["url"] for item in rows[0]] == [
+        "https://t.me/canadahouse24", "https://t.me/advertio_cargo"
+    ]
+    assert [item["url"] for item in rows[1]] == [
+        "https://t.me/Flightiranbot", "https://t.me/advertio_bot"
+    ]
+    assert [item["url"] for item in rows[2]] == [
+        "https://t.me/Ontario_Job", "https://t.me/advertio_shop"
+    ]
+    assert rows[1][1]["text"] == "🤖 ثبت آگهی"
+    assert all("ثبت و مشاهده آگهی" not in item["text"] for row in rows for item in row)
+
+
 def test_aboutus_inline_keyboard_only_has_valid_direct_links():
     rows = aboutus_keyboard()["inline_keyboard"]
     assert len(rows) == 4

@@ -79,11 +79,12 @@ class TelegramMonitor:
                 "offset":int(self._offset or 0)}
     async def _register_commands(self):
         commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"aboutus","description":"آشنایی با مجموعه ادورتیو و لینک‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
-        try:
-            await self._api("setMyCommands",{"commands":commands})
-            await self._api("setMyCommands",{"commands":commands,"scope":{"type":"all_private_chats"}})
-            logger.info("Telegram monitor commands registered for default and private chats")
-        except Exception: logger.exception("Failed to register Telegram monitor commands")
+        for scope in ({"type":"default"},{"type":"all_private_chats"}):
+            try:
+                await self._api("setMyCommands",{"commands":commands,"scope":scope})
+            except Exception:
+                logger.exception("Failed to register Telegram commands for scope %s",scope)
+        logger.info("Telegram monitor command registration attempted for default and private chats")
     async def stop(self):
         self._stopping.set()
         if self._error_handler: logging.getLogger().removeHandler(self._error_handler); self._error_handler=None

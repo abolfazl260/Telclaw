@@ -11,6 +11,7 @@ from storage import database
 from services.stage_control import get_stage_control
 from monitoring.error_alerts import ErrorAlertDispatcher
 from monitoring.source_formatter import format_source_messages
+from monitoring.aboutus import build_aboutus_message, aboutus_keyboard
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
@@ -77,7 +78,7 @@ class TelegramMonitor:
         return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
                 "offset":int(self._offset or 0)}
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"aboutus","description":"آشنایی با مجموعه ادورتیو و لینک‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -138,9 +139,15 @@ class TelegramMonitor:
         if update.get("callback_query"):
             await self._handle_callback(update["callback_query"]); return
         message=update.get("message") or {}; chat=message.get("chat") or {}; chat_id=chat.get("id")
-        if not self._is_admin_private_chat(chat,message.get("from")): return
         text=(message.get("text") or "").strip().lower()
         command=text.split(maxsplit=1)[0].split("@",1)[0] if text else ""
+        # The public directory is the only non-admin command; never expose status or controls.
+        if command == "/aboutus":
+            user=message.get("from")
+            if chat.get("type") == "private" and isinstance(chat_id,int) and isinstance(user,dict) and user.get("id") == chat_id:
+                await self._send_aboutus(chat_id)
+            return
+        if not self._is_admin_private_chat(chat,message.get("from")): return
         if command == "/start":
             database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
         elif command == "/stop":
@@ -178,6 +185,16 @@ class TelegramMonitor:
         return chat.get("type") == "private" and cls._is_admin_chat(user.get("id")) and chat.get("id") == user.get("id")
     def _is_subscribed(self,chat_id):
         return self._is_admin_chat(chat_id) and any(int(s["chat_id"])==int(chat_id) for s in database.get_monitor_subscribers())
+    async def _send_aboutus(self,chat_id):
+        # Intentionally public, unlike _send() which must remain admin-only.
+        await self._api("sendMessage",{
+            "chat_id":chat_id,
+            "text":build_aboutus_message(),
+            "parse_mode":"HTML",
+            "disable_web_page_preview":True,
+            "reply_markup":aboutus_keyboard(),
+        })
+
     async def _download_errors(self,chat_id):
         if not self._is_subscribed(chat_id): await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
         log_path=CRAWLER_ERRORS_LOG

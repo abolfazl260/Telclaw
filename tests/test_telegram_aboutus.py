@@ -65,10 +65,17 @@ def test_aboutus_html_has_all_registry_assets_and_fits_telegram_message():
 
 def test_aboutus_member_counts_and_each_link_is_on_its_own_line():
     text = build_aboutus_message()
-    assert "مسکن | حدود 5K عضو" in text
-    assert "ارسال بار | حدود 9K عضو" in text
+    assert "کانال‌های مسکن | 5K عضو" in text
+    assert "<b>ارسال بار، پرواز و ویزا</b>" in text
+    assert "• <a href=\"https://t.me/advertio_cargo\">ارسال بار و مدارک</a> | 9K عضو" in text
     assert "۳ لینک" not in text and "۵ گروه" not in text
-    assert "<b>پرواز و ویزا</b>" in text
+    assert "حدود" not in text
+    assert "✨ <b>Advertio | ادورتیو</b>" in text
+    assert "<b>ادورتیو</b> با دو سال فعالیت در حوزه آگهی و خدمات آنلاین" in text
+    assert "تلاش می‌کند ارتباط میان افراد، فرصت‌ها و خدمات موردنیازشان را ساده‌تر و مستقیم‌تر کند." in text
+    assert "<b>پیدا کردن خانه و فرصت‌های شغلی در کانادا</b>" in text
+    assert "<b>ارسال بار و مدارک بین‌المللی، خدمات پرواز و ویزا و ثبت آگهی</b>" in text
+    assert "ادورتیو مجموعه‌ای از خدمات و جوامع تخصصی را در کنار هم گرد آورده است." in text
     for _, username in (*CHANNELS, *GROUPS, *BOTS):
         assert sum(f'https://t.me/{username}' in line for line in text.splitlines()) == 1
     assert all(
@@ -173,9 +180,27 @@ async def test_aboutus_command_is_registered(monkeypatch):
     monkeypatch.setattr(monitor, "_api", fake_api)
     await monitor._register_commands()
 
-    assert len(registered) == 1
-    method, payload = registered[0]
-    assert method == "setMyCommands"
-    commands = [item["command"] for item in payload["commands"]]
-    assert commands.count("aboutus") == 1
-    assert "database" in commands and "status" in commands
+    assert len(registered) == 2
+    assert all(method == "setMyCommands" for method, _ in registered)
+    assert [payload["scope"] for _, payload in registered] == [
+        {"type": "default"},
+        {"type": "all_private_chats"},
+    ]
+    for _, payload in registered:
+        commands = [item["command"] for item in payload["commands"]]
+        assert commands.count("aboutus") == 1
+        assert "database" in commands and "status" in commands
+
+@pytest.mark.asyncio
+async def test_public_private_command_registration_survives_default_failure(monkeypatch):
+    monitor = TelegramMonitor()
+    scopes = []
+
+    async def fake_api(method, payload):
+        scopes.append(payload["scope"]["type"])
+        if payload["scope"]["type"] == "default":
+            raise RuntimeError("simulated failure")
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    await monitor._register_commands()
+    assert scopes == ["default", "all_private_chats"]

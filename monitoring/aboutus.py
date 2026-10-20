@@ -41,34 +41,36 @@ def _link(name: str, username: str) -> str:
 
 
 def build_aboutus_message() -> str:
-    """Readable, clickable Persian directory within Telegram's message limit."""
+    """Persian directory with separate links and approximate member counts."""
     lines = [
         "✨ <b>Advertio | ادورتیو</b>",
-        "<i>از پیدا کردن فرصت تا ارتباط با آدم‌های مناسب.</i>",
+        "<i>شبکه‌ای برای کشف فرصت‌ها و ارتباط با افراد مناسب.</i>",
         "",
-        "در شبکه ادورتیو می‌توانی آگهی‌های مسکن و شغل در کانادا، "
-        "ارسال بار مسافری، خدمات سفر و فروشگاه را دنبال کنی.",
+        "ادورتیو مجموعه‌ای از کانال‌ها، گروه‌ها و ربات‌های کاربردی است "
+        "که پیدا کردن مسکن و کار در کانادا، ارسال بار، خدمات سفر و "
+        "ثبت آگهی را ساده‌تر می‌کند.",
         "",
-        "🏠 <b>کانال‌های مسکن</b>",
-        " · ".join(_link(*item) for item in CHANNELS[:3]),
-        "",
-        "💼 <b>کانال‌های فرصت شغلی</b>",
-        " · ".join(_link(*item) for item in CHANNELS[3:5]),
-        "",
-        "📦 <b>بار و خرید</b>",
-        " · ".join(_link(*item) for item in CHANNELS[5:]),
-        "",
-        "👥 <b>گروه‌های گفت‌وگو</b>",
-        " · ".join(_link(*item) for item in GROUPS[:3]),
-        " · ".join(_link(*item) for item in GROUPS[3:]),
-        "",
-        "🤖 <b>ربات‌های ادورتیو</b>",
-        " · ".join(_link(*item) for item in BOTS),
+        "🏠 <b>کانال‌های مسکن | حدود 5K عضو</b>",
+    ]
+    lines.extend("• " + _link(*item) for item in CHANNELS[:3])
+    lines.extend(["", "📦 <b>ارسال بار | حدود 9K عضو</b>"])
+    lines.append("• " + _link(*CHANNELS[5]))
+    lines.extend(["", "✈️ <b>پرواز و ویزا</b>"])
+    lines.append("• " + _link(*BOTS[1]))
+    lines.extend(["", "💼 <b>کانال‌های فرصت شغلی</b>"])
+    lines.extend("• " + _link(*item) for item in CHANNELS[3:5])
+    lines.extend(["", "🛍 <b>فروشگاه</b>"])
+    lines.append("• " + _link(*CHANNELS[6]))
+    lines.extend(["", "👥 <b>گروه‌های گفت‌وگو</b>"])
+    lines.extend("• " + _link(*item) for item in GROUPS)
+    lines.extend(["", "🤖 <b>ربات ثبت آگهی</b>"])
+    lines.append("• " + _link(*BOTS[0]))
+    lines.extend([
         "",
         "💬 " + _link(*SUPPORT),
         "",
         "<i>👇 برای شروع سریع، یکی از دکمه‌های زیر را انتخاب کن.</i>",
-    ]
+    ])
     return "\n".join(lines)
 
 
@@ -78,14 +80,14 @@ def aboutus_keyboard() -> dict:
         "inline_keyboard": [
             [
                 {"text": "🏠 خانه و اجاره", "url": "https://t.me/canadahouse24"},
-                {"text": "💼 فرصت‌های شغلی", "url": "https://t.me/Ontario_Job"},
-            ],
-            [
                 {"text": "📦 ارسال بار", "url": "https://t.me/advertio_cargo"},
-                {"text": "✈️ پرواز و ویزا", "url": "https://t.me/Flightiranbot"},
             ],
             [
-                {"text": "🤖 ثبت و مشاهده آگهی", "url": "https://t.me/advertio_bot"},
+                {"text": "✈️ پرواز و ویزا", "url": "https://t.me/Flightiranbot"},
+                {"text": "🤖 ثبت آگهی", "url": "https://t.me/advertio_bot"},
+            ],
+            [
+                {"text": "💼 فرصت‌های شغلی", "url": "https://t.me/Ontario_Job"},
                 {"text": "🛍 فروشگاه", "url": "https://t.me/advertio_shop"},
             ],
             [

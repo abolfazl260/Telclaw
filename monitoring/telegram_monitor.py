@@ -1,6 +1,7 @@
 """Independent Telegram Bot API monitor for Telclaw."""
 from __future__ import annotations
-import asyncio, html, json, logging
+import asyncio, html, json, logging, sqlite3, tempfile
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -10,11 +11,13 @@ from storage import database
 from services.stage_control import get_stage_control
 from monitoring.error_alerts import ErrorAlertDispatcher
 from monitoring.source_formatter import format_source_messages
+from monitoring.aboutus import build_aboutus_message, aboutus_keyboard
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
 CRAWLER_ERRORS_LOG=PROJECT_ROOT / "crawler_errors.log"
 TELEGRAM_MAX_DOCUMENT_BYTES=50*1024*1024
+TELEGRAM_DATABASE_PART_BYTES=40*1024*1024
 ADMIN_USER_IDS=frozenset({1485409432, 266809220, 7469291969, 106056586})
 
 def _is_expected_aiohttp_client_noise(record):
@@ -30,6 +33,25 @@ def _is_expected_aiohttp_client_noise(record):
         return False
     detail = str(exc)
     return "Pause on PRI/Upgrade" in detail or "Invalid method encountered" in detail
+
+
+def _snapshot_sqlite_database(source_path, snapshot_path):
+    """Snapshot committed SQLite data, including uncheckpointed WAL transactions."""
+    with closing(sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True)) as source:
+        with closing(sqlite3.connect(str(snapshot_path))) as target:
+            source.backup(target)
+
+
+def _write_database_part(snapshot_path, part_path, offset, size):
+    """Copy a bounded slice with a small buffer instead of loading a part in RAM."""
+    with snapshot_path.open("rb") as source, part_path.open("wb") as target:
+        source.seek(offset)
+        while size > 0:
+            chunk = source.read(min(size, 1024 * 1024))
+            if not chunk:
+                break
+            target.write(chunk)
+            size -= len(chunk)
 
 
 class _TelegramErrorHandler(logging.Handler):
@@ -56,7 +78,7 @@ class TelegramMonitor:
         return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
                 "offset":int(self._offset or 0)}
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
+        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"aboutus","description":"آشنایی با مجموعه ادورتیو و لینک‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
         try: await self._api("setMyCommands",{"commands":commands}); logger.info("Telegram monitor commands registered")
         except Exception: logger.exception("Failed to register Telegram monitor commands")
     async def stop(self):
@@ -117,9 +139,15 @@ class TelegramMonitor:
         if update.get("callback_query"):
             await self._handle_callback(update["callback_query"]); return
         message=update.get("message") or {}; chat=message.get("chat") or {}; chat_id=chat.get("id")
-        if not self._is_admin_private_chat(chat,message.get("from")): return
         text=(message.get("text") or "").strip().lower()
         command=text.split(maxsplit=1)[0].split("@",1)[0] if text else ""
+        # The public directory is the only non-admin command; never expose status or controls.
+        if command == "/aboutus":
+            user=message.get("from")
+            if chat.get("type") == "private" and isinstance(chat_id,int) and isinstance(user,dict) and user.get("id") == chat_id:
+                await self._send_aboutus(chat_id)
+            return
+        if not self._is_admin_private_chat(chat,message.get("from")): return
         if command == "/start":
             database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
         elif command == "/stop":
@@ -157,6 +185,16 @@ class TelegramMonitor:
         return chat.get("type") == "private" and cls._is_admin_chat(user.get("id")) and chat.get("id") == user.get("id")
     def _is_subscribed(self,chat_id):
         return self._is_admin_chat(chat_id) and any(int(s["chat_id"])==int(chat_id) for s in database.get_monitor_subscribers())
+    async def _send_aboutus(self,chat_id):
+        # Intentionally public, unlike _send() which must remain admin-only.
+        await self._api("sendMessage",{
+            "chat_id":chat_id,
+            "text":build_aboutus_message(),
+            "parse_mode":"HTML",
+            "disable_web_page_preview":True,
+            "reply_markup":aboutus_keyboard(),
+        })
+
     async def _download_errors(self,chat_id):
         if not self._is_subscribed(chat_id): await self._send(chat_id,"⛔ You are not subscribed to Telclaw monitoring.\n\nUse /start first."); return
         log_path=CRAWLER_ERRORS_LOG
@@ -178,14 +216,40 @@ class TelegramMonitor:
             if not db_path.is_absolute(): db_path=PROJECT_ROOT / db_path
             db_path=db_path.resolve()
             if not db_path.exists() or not db_path.is_file(): await self._send(chat_id,"❌ Database file not found."); return
-            size=db_path.stat().st_size
-            if size==0: await self._send(chat_id,"⚠️ Database file is empty."); return
-            if size>TELEGRAM_MAX_DOCUMENT_BYTES:
-                await self._send(chat_id,"❌ <b>Database file is too large to send via Telegram.</b>\n\n" f"File size: {size/(1024*1024):.2f} MB"); return
+            if db_path.stat().st_size==0: await self._send(chat_id,"⚠️ Database file is empty."); return
             timestamp=self._tehran_timestamp(datetime.now(ZoneInfo("UTC")).isoformat())
-            await self._send_document(chat_id,db_path,"🗄 Telclaw SQLite database\n" f"🕐 Generated: {timestamp} Tehran")
+            # A live SQLite file may not contain committed WAL data. Back up first.
+            with tempfile.TemporaryDirectory(prefix="telclaw-db-",dir=db_path.parent) as temp_dir:
+                snapshot_path=Path(temp_dir) / db_path.name
+                await asyncio.to_thread(_snapshot_sqlite_database,db_path,snapshot_path)
+                snapshot_size=snapshot_path.stat().st_size
+                if snapshot_size<=TELEGRAM_DATABASE_PART_BYTES:
+                    await self._send_document(chat_id,snapshot_path,"🗄 Telclaw SQLite database\n" f"🕐 Generated: {timestamp} Tehran")
+                    return
+                part_count=(snapshot_size+TELEGRAM_DATABASE_PART_BYTES-1)//TELEGRAM_DATABASE_PART_BYTES
+                digits=max(3,len(str(part_count)))
+                for part_number in range(1,part_count+1):
+                    part_path=Path(temp_dir) / f"{db_path.name}.part{part_number:0{digits}d}"
+                    await asyncio.to_thread(
+                        _write_database_part,snapshot_path,part_path,
+                        (part_number-1)*TELEGRAM_DATABASE_PART_BYTES,TELEGRAM_DATABASE_PART_BYTES,
+                    )
+                    try:
+                        await self._send_document(
+                            chat_id,part_path,
+                            f"🗄 Telclaw database — part {part_number}/{part_count}\n"
+                            f"🕐 Generated: {timestamp} Tehran",
+                        )
+                    finally:
+                        part_path.unlink(missing_ok=True)
+                await self._send(
+                    chat_id,
+                    f"✅ All {part_count} database parts sent. Join the .part files in numeric order "
+                    f"to restore <code>{html.escape(db_path.name)}</code> (no decompression needed).",
+                )
         except Exception:
             logger.exception("Failed to send database to chat %s",chat_id); await self._send(chat_id,"❌ Failed to send database file.")
+
     async def _build_status_message(self):
         status=database.get_pipeline_status(); last=status.get("last_crawl")
         return ("📊 <b>Telclaw Current Status</b>\n\n" f"🟢 <b>System:</b> {html.escape(str(status['system']))}\n" f"📥 <b>Collected:</b> {status['collected']}\n" f"⚙️ <b>Processing pending:</b> {status['processing_pending']}\n" f"⚙️ <b>Processing failed:</b> {status['processing_failed']}\n" f"🏷️ <b>Classification pending:</b> {status['classification_pending']}\n" f"🏷️ <b>Classification failed:</b> {status['classification_failed']}\n" f"🤖 <b>AI pending:</b> {status['ai_pending']}\n" f"🤖 <b>AI failed:</b> {status['ai_failed']}\n" f"📤 <b>Advertio pending:</b> {status['advertio_pending']}\n" f"📤 <b>Advertio failed:</b> {status['advertio_failed']}\n" f"📦 <b>Total messages:</b> {status['total_messages']}\n" f"📡 <b>Channels:</b> {status['channels']}\n" f"👥 <b>Active subscribers:</b> {status['subscribers']}\n" f"📥 <b>Last crawl:</b> {html.escape(self._tehran_timestamp(last)) + ' Tehran' if last else 'Not recorded'}")

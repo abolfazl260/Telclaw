@@ -1,6 +1,7 @@
 """Scheduling service for continuous crawl -> processing -> AI cycles."""
 
 import asyncio
+import logging
 import random
 import time
 from datetime import date, datetime, timezone
@@ -16,6 +17,9 @@ from services.crawl_job_service import CrawlJobService
 from services.processing_service import ProcessingService
 from services.stage_control import get_stage_control
 from monitoring.telegram_monitor import get_telegram_monitor
+
+
+logger = logging.getLogger("telclaw.scheduler")
 
 
 class SchedulerService:

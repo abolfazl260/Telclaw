@@ -34,6 +34,7 @@ class SchedulerService:
         self.stage_control = get_stage_control()
         self._tasks = {}
         self._pipeline_lock = asyncio.Lock()
+        self._advertio_cargo_service = None
 
     def request_stage_skip(self, stage):
         if stage not in {"crawl", "processing", "ai", "advertio"}:
@@ -176,9 +177,10 @@ class SchedulerService:
                     and config.ADVERTIO_INGEST_KEY and not skip_advertio):
                 from delivery.advertio_cargo import AdvertioCargoService
                 try:
-                    cargo_service = AdvertioCargoService()
+                    if self._advertio_cargo_service is None:
+                        self._advertio_cargo_service = AdvertioCargoService()
                     cargo_stats = await asyncio.to_thread(
-                        cargo_service.deliver_pending,
+                        self._advertio_cargo_service.deliver_pending,
                         limit=config.ADVERTIO_CARGO_BATCH_SIZE,
                         before_datetime=advertio_cycle_cutoff,
                         progress=True,

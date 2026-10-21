@@ -138,6 +138,10 @@ publication:
   sent/already-existed, expired/stale, today's requests and last delivery error.
   Recent rows include Telegram message ID, source, route, date, failure cause,
   and next retry time. This report is read-only and does not call the API.
+- Click **Test Advertio API /health** first: it runs an unauthenticated HTTPS
+  GET without sending a listing or the ingest key and reports reachability
+  and HTTP status. A successful health response does not prove the ingest key
+  is valid, but failures reveal DNS, TLS or API availability problems.
 - Click **Send Cargo to Advertio website** with limit 10 for a small pilot.
   Results appear in the independent job status box. No housing media or
   Telegram message will be published by this action.

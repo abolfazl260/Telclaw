@@ -131,6 +131,7 @@ class CloudflareProvider(AIProvider):
 
     def _request(self, messages):
         attempts = 0
+        invalid_json_attempts = 0
         while attempts <= config.AI_RETRY_COUNT:
             now = time.monotonic()
             if self._unavailable_until[self.active_index] > now:
@@ -140,6 +141,9 @@ class CloudflareProvider(AIProvider):
                 else:
                     self.active_index = next_index
             payload = {"messages": messages, "temperature": 0, "response_format": {"type": "json_object"}}
+            if config.CLOUDFLARE_MAX_TOKENS:
+                # Optional: the configured Workers AI model must support this cap.
+                payload["max_tokens"] = config.CLOUDFLARE_MAX_TOKENS
             try:
                 self.rate_limiter.wait()
                 with self.rate_limiter.slot():
@@ -178,6 +182,19 @@ class CloudflareProvider(AIProvider):
                     raise ValueError("Cloudflare returned an unsuccessful response")
                 return self._parse_json_candidate(self._extract_json_candidate(body))
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                # A 200 response may still contain a truncated/unclosed JSON
+                # string. Retry the entire inference once rather than trying
+                # to repair incomplete data or store a partial advertisement.
+                if invalid_json_attempts < config.CLOUDFLARE_INVALID_JSON_MAX_RETRIES:
+                    invalid_json_attempts += 1
+                    logger.warning(
+                        "Cloudflare invalid JSON: model=%s retry=%d/%d error_type=%s",
+                        self.model,
+                        invalid_json_attempts,
+                        config.CLOUDFLARE_INVALID_JSON_MAX_RETRIES,
+                        type(exc).__name__,
+                    )
+                    continue
                 raise AIExtractionError("Invalid Cloudflare JSON output", provider=self.name, reason="invalid_provider_output") from exc
         raise RuntimeError("Cloudflare provider retry budget exhausted")
 

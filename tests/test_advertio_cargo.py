@@ -202,3 +202,27 @@ def test_budget_and_already_existed(env, monkeypatch):
     assert stats["already_existed"] == 1
     assert stats["budget_remaining"] == 0
     assert service.deliver_pending()["found"] == 0
+
+
+def test_rate_limit_pauses_other_waiting_records(env):
+    service, client = env
+    add_post(311)
+    add_post(312)
+    client.failure = AdvertioError("over limit", status=429, retryable=True)
+    first = service.deliver_pending()
+    assert first["retry"] == 1
+    assert first["paused_until"]
+    assert len(client.sent) == 1
+    client.failure = None
+    second = service.deliver_pending()
+    assert second["found"] == 0
+    assert second["paused_until"]
+    assert len(client.sent) == 1
+
+
+def test_source_name_is_stable_under_username_change_when_channel_id_exists():
+    first = {"channel_username": "old_name", "channel_id": 123456}
+    renamed = {"channel_username": "new_name", "channel_id": 123456}
+    other = {"channel_username": "new_name", "channel_id": 999999}
+    assert source_name(first) == source_name(renamed)
+    assert source_name(first) != source_name(other)

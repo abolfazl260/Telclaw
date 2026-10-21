@@ -1527,6 +1527,21 @@ async def operations_page(request):
         if cargo_rows else '<p class="muted">No processed cargo records found in SQLite.</p>'
     )
 
+    cargo_ai_failures = "".join(
+        "<tr><td>" + _escape(str(item.get("message_id") or "")) + "</td>"
+        "<td>@" + _escape(item.get("channel_username") or "") + "</td>"
+        "<td>" + _escape(item.get("ai_error") or "unknown") + "</td></tr>"
+        for item in cargo_report.get("recent_ai_failed", [])
+    )
+    cargo_ai_table = (
+        '<h3>Recent Cargo AI Extraction Failures</h3>'
+        '<p class="muted">These messages never reached the Advertio API. Use the AI retry controls above.</p>'
+        '<div style="overflow-x:auto"><table><thead><tr><th>Telegram ID</th>'
+        '<th>Source</th><th>AI error</th></tr></thead><tbody>'
+        + cargo_ai_failures + '</tbody></table></div>'
+        if cargo_ai_failures else ""
+    )
+
     groq_controls = action_form(
         "run_groq", "Test Groq connection", disabled=groq_running
     )
@@ -1729,6 +1744,7 @@ async def operations_page(request):
         <div class="op-actions">{cargo_controls}</div>
         <h3>Recent Cargo API records</h3>
         {cargo_table}
+        {cargo_ai_table}
       </section>
 
       <section class="op-card"><h2>Groq Connection Test</h2>

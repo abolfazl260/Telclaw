@@ -226,3 +226,66 @@ def test_source_name_is_stable_under_username_change_when_channel_id_exists():
     other = {"channel_username": "new_name", "channel_id": 999999}
     assert source_name(first) == source_name(renamed)
     assert source_name(first) != source_name(other)
+
+
+def test_backoffice_cargo_report_shows_unattempted_and_completed_posts(env):
+    from backoffice_health import _cargo_delivery_report
+    service, client = env
+    add_post(801)
+    add_post(802)
+    conn = database.get_connection()
+    try:
+        before = _cargo_delivery_report(conn)
+    finally:
+        conn.close()
+    assert before["processed"] == 2
+    assert before["waiting"] == 2
+    assert before["attempts_today"] == 0
+    assert before["recent"][0]["message_id"] == 802
+    service.deliver_pending(limit=1)
+    conn = database.get_connection()
+    try:
+        after = _cargo_delivery_report(conn)
+    finally:
+        conn.close()
+    assert after["sent"] == 1
+    assert after["waiting"] == 1
+    assert after["attempts_today"] == 1
+    assert after["recent"][0]["status"] == "waiting"
+    assert all("row_id" in row for row in after["recent"])
+
+
+def test_backoffice_cargo_report_explains_expired_and_stale(env):
+    from backoffice_health import _cargo_delivery_report
+    service, client = env
+    add_post(901, age_days=91)
+    add_post(902, departure=(date.today() - timedelta(days=2)).isoformat())
+    conn = database.get_connection()
+    try:
+        report = _cargo_delivery_report(conn)
+    finally:
+        conn.close()
+    assert report["processed"] == 2
+    assert report["waiting"] == 0
+    assert report["expired"] == 1
+    assert report["stale"] == 1
+
+
+def test_cargo_requeue_rejected_is_targeted_and_auditable(env, monkeypatch):
+    from backoffice_operations import BackofficeOperations
+    service, client = env
+    row_id = add_post(903, overrides={"destination_city": "unlisted"})
+    assert service.deliver_pending()["rejected"] == 1
+    monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *a, **k: None)
+    controller = BackofficeOperations(console_ui=None)
+    assert controller.requeue_rejected_cargo(row_id) == row_id
+    conn = database.get_connection()
+    try:
+        assert conn.execute(
+            "SELECT status FROM advertio_cargo_deliveries WHERE processed_message_id=?",
+            (row_id,),
+        ).fetchone()[0] == "waiting"
+    finally:
+        conn.close()
+    with pytest.raises(ValueError, match="not a rejected"):
+        controller.requeue_rejected_cargo(row_id)

@@ -18,10 +18,10 @@ As of 2026-10-21, `travel_date` is optional.
 3. Set `TELCLAW_ADVERTIO_INGEST_ENABLED=true`. Cargo is on by default only
    when this parent switch is on; set `TELCLAW_ADVERTIO_CARGO_ENABLED=false`
    to turn off cargo alone without affecting Housing or Telegram.
-4. Keep `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=false` during the first quality
-   review. When posts have been validated by moderators, explicitly switch
-   to `true` for future unique posts. Existing `PendingReview` posts must
-   still be approved by admins. This feature flag is **independent** of the
+4. `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=true` by default for cargo only.
+   Only unique, API-validated new cargo leads become Active. Similar leads remain
+   PendingReview. Existing PendingReview records **do not** become Active
+   merely because this setting changed. Disable this flag for any untrusted source. This feature flag is **independent** of the
    housing `TELCLAW_ADVERTIO_AUTO_PUBLISH` switch.
 
 ### Cargo environment settings
@@ -29,7 +29,7 @@ As of 2026-10-21, `travel_date` is optional.
 | Setting | Default | Meaning |
 |---|---|---|
 | `TELCLAW_ADVERTIO_CARGO_ENABLED` | `true` | Enabled if parent ingestion is enabled |
-| `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH` | `false` | New unique leads require manual approval initially |
+| `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH` | `true` | Automatically publish newly ingested, validated, unique cargo only; source-specific caution required |
 | `TELCLAW_ADVERTIO_CARGO_BACKFILL_DAYS` | `30` | Undated historical posts must be this recent |
 | `TELCLAW_ADVERTIO_CARGO_BATCH_SIZE` | `50` | Maximum records examined per scheduled cycle, capped at 100 |
 | `TELCLAW_ADVERTIO_CARGO_DAILY_LIMIT` | `250` | Local cap on cargo ingest POST attempts (maximum configurable 500) |
@@ -121,9 +121,9 @@ publication:
 3. `TELCLAW_ADVERTIO_INGEST_ENABLED`, the cargo switch and the ingest key
    must all be configured, and the API must be reachable. Network errors,
    invalid keys, rate limiting and schema errors are shown in the cargo queue.
-4. Successful API ingestion with `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=false`
-   creates a **PendingReview** listing. An Advertio moderator must approve
-   it before it appears on the public website.
+4. `autoPublish=true` publishes new unique cargo leads immediately; records
+   flagged Similar still require moderation. Existing PendingReview leads
+   remain pending until a separate backend approval flow handles them safely.
 
 ### From Telclaw Back Office (after deployment)
 
@@ -131,8 +131,8 @@ publication:
   parent ingest switch also enables Housing; check Housing readiness first.
   Restart Telclaw after changing settings marked *restart required*.
 - **Settings → Advertio Cargo**: set the dedicated cargo switch, backfill
-  freshness window, batch size and daily request budget. Keep auto-publish
-  disabled during pilot moderation.
+  freshness window, batch size and daily request budget. Auto-publish is enabled
+  by default for new unique cargo leads; disable it for untrusted sources.
 - **Operations → Advertio Cargo — Website API**: separate from
   `@advertio_cargo`, shows AI processed/failed/pending, waiting/retry/rejected,
   sent/already-existed, expired/stale, today's requests and last delivery error.
@@ -185,3 +185,8 @@ No 400 should be retried automatically. Inspect
   `DELETE /api/ingest/leads/{sourceName}/{externalId}`. The destination's
   30-day TTL remains a fallback; future removal handling should use
   verified Telegram deletion events to avoid accidental data loss.
+
+**Existing production configuration wins:** The `.env` or saved Back Office
+`TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=false` override remains authoritative;
+changing repository defaults does not overwrite deployment settings. Inspect
+Back Office → Settings → Advertio Cargo and switch it on explicitly if needed.

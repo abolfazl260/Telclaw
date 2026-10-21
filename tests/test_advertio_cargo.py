@@ -289,3 +289,13 @@ def test_cargo_requeue_rejected_is_targeted_and_auditable(env, monkeypatch):
         conn.close()
     with pytest.raises(ValueError, match="not a rejected"):
         controller.requeue_rejected_cargo(row_id)
+
+
+def test_new_unique_cargo_is_submitted_for_auto_publish(env, monkeypatch):
+    service, client = env
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
+    add_post(8808)
+    stats = service.deliver_pending(limit=1)
+    assert stats["sent"] == 1
+    assert client.sent[0]["autoPublish"] is True
+    assert client.sent[0]["categorySlug"] == "passenger-cargo"

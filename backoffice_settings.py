@@ -108,7 +108,7 @@ SPECS = (
     _s("TELCLAW_ADVERTIO_CONCURRENCY", "ADVERTIO_CONCURRENCY", "Advertio", kind="int", minimum=1, maximum=3, restart=True, fallback="3"),
     _s("TELCLAW_ADVERTIO_TIMEOUT_SECONDS", "ADVERTIO_TIMEOUT_SECONDS", "Advertio", kind="float", minimum=1, fallback="60"),
     _s("TELCLAW_ADVERTIO_CARGO_ENABLED", "ADVERTIO_CARGO_ENABLED", "Advertio Cargo", kind="bool", fallback="true"),
-    _s("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", "ADVERTIO_CARGO_AUTO_PUBLISH", "Advertio Cargo", kind="bool", fallback="false"),
+    _s("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", "ADVERTIO_CARGO_AUTO_PUBLISH", "Advertio Cargo", kind="bool", fallback="true"),
     _s("TELCLAW_ADVERTIO_CARGO_BACKFILL_DAYS", "ADVERTIO_CARGO_BACKFILL_DAYS", "Advertio Cargo", kind="int", minimum=1, maximum=3650, fallback="30"),
     _s("TELCLAW_ADVERTIO_CARGO_BATCH_SIZE", "ADVERTIO_CARGO_BATCH_SIZE", "Advertio Cargo", kind="int", minimum=1, maximum=100, fallback="50"),
     _s("TELCLAW_ADVERTIO_CARGO_DAILY_LIMIT", "ADVERTIO_CARGO_DAILY_LIMIT", "Advertio Cargo", kind="int", minimum=1, maximum=500, fallback="250"),

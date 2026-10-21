@@ -4,7 +4,9 @@
 
 **وضعیت سمت سرور:** ساخته و تست‌شده؛ این سند قرارداد integration است، نه پیشنهاد طراحی.
 
-**آخرین به‌روزرسانی قرارداد:** ۲۰۲۶-۰۸-۰۶
+**تاریخ این مستند تاریخی:** ۲۰۲۶-۰۸-۰۶
+
+> برای قرارداد به‌روز کارگو (۲۱ اکتبر ۲۰۲۶) به [راهنمای اتصال کارگو](../ADVERTIO_CARGO_DELIVERY.md) و [قرارداد پلتفرم](https://gitlab.com/advertio/platform/advertio-monorepo/-/blob/master/docs/CRAWLER-INTEGRATION.md) مراجعه کنید. این سند قدیمی ممکن است تمام ویژگی‌های جدید کارگو را پوشش ندهد.
 
 > این integration در انتهای pipeline قرار دارد. Telclaw نباید قبل از تکمیل Collection، Cleaning، Normalization، Category/AI Processing و Validation، داده را به این API ارسال کند.
 

@@ -440,12 +440,23 @@ class BackofficeOperations:
                 client = await self._connect_account(account_name)
                 media_downloader = self._make_sync_media_downloader(client)
             async with self.pipeline_lock:
-                return await asyncio.to_thread(
+                housing = await asyncio.to_thread(
                     service.deliver_pending,
                     limit=limit,
                     progress=True,
                     media_downloader=media_downloader,
                 )
+                if config.ADVERTIO_CARGO_ENABLED and config.ADVERTIO_INGEST_KEY:
+                    from delivery.advertio_cargo import AdvertioCargoService
+                    cargo = await asyncio.to_thread(
+                        AdvertioCargoService().deliver_pending,
+                        limit=min(limit, config.ADVERTIO_CARGO_BATCH_SIZE),
+                        progress=True,
+                        should_stop=_stop_event.is_set,
+                    )
+                    # Existing housing metrics and response fields remain valid.
+                    housing["cargo"] = cargo
+                return housing
 
         return self._start_background(
             "advertio",

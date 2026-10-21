@@ -1634,9 +1634,10 @@ async def operations_page(request):
         <div class="op-actions">{ai_controls}</div></section>
 
       <section class="op-card"><h2>Advertio Delivery</h2>
-        <p>Pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
+        <p>Housing pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
         Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
         {_operation_state_box("Advertio", states["advertio"])}
+        <p class="muted">When cargo ingest is enabled, this action also submits eligible passenger-cargo records and active historical backfill. Housing and cargo have separate delivery queues and statuses.</p>
         <div class="op-actions">{advertio_controls}</div></section>
 
       <section class="op-card"><h2>Groq Connection Test</h2>

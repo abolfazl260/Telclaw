@@ -193,8 +193,6 @@ def _normalize_defaults(result):
     if category == "housinglist":
         category_data.setdefault("country_code", "CA")
         category_data.setdefault("currency", "CAD")
-    elif category == "transferlist":
-        category_data.setdefault("currency", "CAD")
     elif category == "joblist" and category_data.get("salary") is not None:
         category_data.setdefault("salary_currency", "CAD")
     return result
@@ -208,9 +206,16 @@ def _normalize_currencies(result):
     if not isinstance(data, dict) or category not in data or not isinstance(data[category], dict):
         return result
     category_data = data[category]
-    if category in {"housinglist", "transferlist"}:
+    if category == "housinglist":
         currency = category_data.get("currency")
         if currency is not None and str(currency).strip().upper() != "CAD":
+            category_data["price"] = None
+            category_data["currency"] = None
+    elif category == "transferlist":
+        # Do not destroy explicit USD/EUR/GBP cargo prices before they reach
+        # the dedicated API adapter; the adapter still checks per-kg and source.
+        currency = category_data.get("currency")
+        if currency is not None and str(currency).strip().upper() not in {"CAD", "USD", "EUR", "GBP"}:
             category_data["price"] = None
             category_data["currency"] = None
     elif category == "joblist":

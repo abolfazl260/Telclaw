@@ -2,6 +2,13 @@
 
 Telclaw is a Telegram data-processing pipeline. Its purpose is to collect information from selected Telegram sources, clean and normalize the data, prepare structured datasets for category-based AI processing, validate AI results, and eventually deliver approved structured outputs to downstream services.
 
+## Advertio cargo delivery
+
+Processed passenger-cargo (`transferlist`) ads can also be delivered to the Advertio
+Ingest API, **independently** of the existing Telegram cargo publisher and the
+Housing Advertio adapter. Historical records are backfilled when still eligible;
+see [Cargo delivery, configuration, rollback, and limitations](docs/ADVERTIO_CARGO_DELIVERY.md).
+
 ## System Goals
 
 Telclaw is being developed around the following business and technical goals:

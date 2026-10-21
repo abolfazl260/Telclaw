@@ -382,3 +382,31 @@ async def test_operations_page_exposes_separate_cargo_status_and_controls(monkey
     assert "Requeue" in response.text
     assert "<script>alert(123)</script>" not in response.text
     assert "secret-for-testing" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_api_health_probe_does_not_send_ingest_key_or_any_listing(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "ADVERTIO_BASE_URL", "https://api.advertio.ir")
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_KEY", "secret-should-not-leak")
+    monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *a, **k: None)
+    import requests
+    calls = []
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        class Response:
+            ok = True
+            status_code = 200
+        return Response()
+    monkeypatch.setattr(requests, "get", fake_get)
+    ops = BackofficeOperations(console_ui=FakeConsole())
+    ops.start_advertio_probe(requested_by=7)
+    await ops._tasks["advertio_probe"]
+    assert ops.state("advertio_probe")["result"] == {
+        "reachable": True, "status": 200,
+        "endpoint": "https://api.advertio.ir/health",
+    }
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/health")
+    assert "headers" not in calls[0][1]
+    assert "secret-should-not-leak" not in str(calls)

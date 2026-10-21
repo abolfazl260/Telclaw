@@ -32,8 +32,8 @@ from storage import database
 
 logger = logging.getLogger('telclaw.backoffice.operations')
 
-RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "groq")
-SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio"}
+RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "advertio_cargo", "groq")
+SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio", "advertio_cargo"}
 
 
 def _now_iso():
@@ -49,6 +49,7 @@ class BackofficeOperations:
         self._classification = getattr(console_ui, "classification_service", None)
         self._ai = getattr(console_ui, "ai_service", None)
         self._advertio = getattr(console_ui, "advertio_service", None)
+        self._advertio_cargo = None
         self._crawler = getattr(console_ui, "crawler", None)
         self._accounts = getattr(console_ui, "accounts", None)
         self._channels = getattr(console_ui, "channels", None)
@@ -446,16 +447,6 @@ class BackofficeOperations:
                     progress=True,
                     media_downloader=media_downloader,
                 )
-                if config.ADVERTIO_CARGO_ENABLED and config.ADVERTIO_INGEST_KEY:
-                    from delivery.advertio_cargo import AdvertioCargoService
-                    cargo = await asyncio.to_thread(
-                        AdvertioCargoService().deliver_pending,
-                        limit=min(limit, config.ADVERTIO_CARGO_BATCH_SIZE),
-                        progress=True,
-                        should_stop=_stop_event.is_set,
-                    )
-                    # Existing housing metrics and response fields remain valid.
-                    housing["cargo"] = cargo
                 return housing
 
         return self._start_background(
@@ -464,6 +455,61 @@ class BackofficeOperations:
             {"limit": limit, "account": str(account_name or "")},
             operation,
         )
+
+    def start_advertio_cargo(self, limit=10, requested_by=None):
+        """Manually deliver cargo only; never depend on Housing or Telegram."""
+        if not config.ADVERTIO_INGEST_ENABLED or not config.ADVERTIO_CARGO_ENABLED:
+            raise RuntimeError("Advertio cargo ingest is disabled in the server configuration")
+        if not config.ADVERTIO_INGEST_KEY:
+            raise RuntimeError("TELCLAW_ADVERTIO_INGEST_KEY is missing")
+        limit = int(limit)
+        if not 1 <= limit <= 100:
+            raise ValueError("Cargo delivery limit must be between 1 and 100")
+        limit = min(limit, config.ADVERTIO_CARGO_BATCH_SIZE)
+
+        async def operation(stop_event):
+            from delivery.advertio_cargo import AdvertioCargoService
+            async with self.pipeline_lock:
+                if self._advertio_cargo is None:
+                    self._advertio_cargo = await asyncio.to_thread(AdvertioCargoService)
+                return await asyncio.to_thread(
+                    self._advertio_cargo.deliver_pending,
+                    limit=limit,
+                    progress=True,
+                    should_stop=stop_event.is_set,
+                )
+        return self._start_background(
+            "advertio_cargo", requested_by, {"limit": limit}, operation,
+        )
+
+    def requeue_rejected_cargo(self, message_row_id, requested_by=None):
+        """Explicit per-row retry after correcting a rejected source mapping."""
+        message_row_id = int(message_row_id)
+        if message_row_id < 1:
+            raise ValueError("Invalid cargo message ID")
+        conn = database.get_connection()
+        try:
+            cursor = conn.execute("""
+                UPDATE advertio_cargo_deliveries
+                   SET status='waiting', error=NULL, next_attempt_at=NULL,
+                       updated_at=?
+                 WHERE processed_message_id=? AND status='rejected'
+                   AND EXISTS (
+                       SELECT 1 FROM messages m JOIN transferlist t
+                         ON t.processed_message_id=m.id
+                       WHERE m.id=advertio_cargo_deliveries.processed_message_id
+                         AND m.ai_status='processed' AND m.ai_category='transferlist'
+                   )
+            """, (_now_iso(), message_row_id))
+            conn.commit()
+        finally:
+            conn.close()
+        if cursor.rowcount != 1:
+            raise ValueError("This cargo record is not a rejected, processed transfer ad")
+        self._activity("advertio_cargo_requeue", "WARNING",
+            f"Requeued rejected cargo record {message_row_id} for mapping review",
+            {"message_row_id": message_row_id, "requested_by": requested_by})
+        return message_row_id
 
     def start_groq_test(self, requested_by=None):
         async def operation(_stop_event):

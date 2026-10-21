@@ -64,7 +64,7 @@ It persists API state under:
 
 The tables are created idempotently at cargo service startup.
 Abandoned `sending` rows older than 30 minutes are reclaimed as `retry`.
-HTTP 429, 401, 404 and transient failures are throttled; 400 mapping
+HTTP 429, 401, 404 and transient failures trigger global cooldown; 400 mapping
 errors are terminal until an operator corrects the source data. A successful
 `alreadyExisted` response is terminal and must not trigger retry.
 

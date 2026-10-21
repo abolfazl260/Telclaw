@@ -1,4 +1,7 @@
-# Telclaw → Advertio Ingest Integration
+# Telclaw → Advertio Ingest Integration (Housing)
+
+For the independently queued `transferlist` → `passenger-cargo` API delivery, see
+[Advertio Cargo Delivery](ADVERTIO_CARGO_DELIVERY.md). Telegram cargo publishing is preserved.
 
 ## Purpose
 
@@ -44,7 +47,7 @@ The integration is disabled by default:
 
 ```env
 TELCLAW_ADVERTIO_INGEST_ENABLED=false
-TELCLAW_ADVERTIO_BASE_URL=https://api.advertio.ca
+TELCLAW_ADVERTIO_BASE_URL=https://api.advertio.ir
 TELCLAW_ADVERTIO_INGEST_KEY=...
 TELCLAW_ADVERTIO_SOURCE_NAME=telegram-rent
 TELCLAW_ADVERTIO_AUTO_PUBLISH=false

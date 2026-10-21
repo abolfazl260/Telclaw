@@ -66,6 +66,25 @@ class AdvertioClient:
             raise AdvertioError("Advertio media response did not contain a valid key") from exc
         return key
 
+    def list_cities(self, country_code):
+        """Read the platform's authoritative public city catalog (no guesses)."""
+        try:
+            response = requests.get(
+                f"{self.base_url}/api/locations/cities",
+                params={"countryCode": country_code, "limit": 200},
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise AdvertioError(f"Advertio catalog transport error: {exc}", retryable=True) from exc
+        self._raise_for_response(response)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AdvertioError("Invalid Advertio city catalog JSON", retryable=True) from exc
+        if not isinstance(body, list):
+            raise AdvertioError("Invalid Advertio city catalog response shape", retryable=True)
+        return body
+
     def create_lead(self, payload):
         try:
             response = requests.post(

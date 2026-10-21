@@ -378,7 +378,7 @@ async def crawl_channel(
                     ai_status="waiting",
                     pipeline_version=COLLECTION_VERSION,
                     cleaned_at=None,
-                    channel_id=getattr(entity, "channel_id", None),
+                    channel_id=getattr(entity, "channel_id", None) or getattr(entity, "id", None),
                     channel_name=getattr(entity, "title", None),
                     sender_id=sender_id,
                     sender_username=sender_username,

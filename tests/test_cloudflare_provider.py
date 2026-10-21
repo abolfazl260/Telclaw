@@ -66,3 +66,55 @@ def test_manager_can_instantiate_both_providers(monkeypatch):
     monkeypatch.setattr("config.CLOUDFLARE_API_TOKEN", "token")
     monkeypatch.setattr("config.CLOUDFLARE_MODEL", "model")
     assert isinstance(AIProviderManager().provider_instance, CloudflareProvider)
+
+
+def test_cloudflare_retries_truncated_json_then_returns_complete_result(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", 1)
+    monkeypatch.setattr(config, "CLOUDFLARE_MAX_TOKENS", 0)
+    replies = iter([
+        Response('{"category":"joblist","data":{"joblist":{"title":"unclosed'),
+        Response(json.dumps({
+            "category": "joblist",
+            "data": {"joblist": {"title": "Developer", "job_title": "Developer"}},
+        })),
+    ])
+    calls = []
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs["json"])
+        return next(replies)
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    assert provider().extract("Developer wanted", "joblist")["category"] == "joblist"
+    assert len(calls) == 2
+
+
+def test_cloudflare_invalid_json_retry_is_bounded(monkeypatch, caplog):
+    import config
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", 1)
+    monkeypatch.setattr(config, "CLOUDFLARE_MAX_TOKENS", 0)
+    calls = []
+    def fake_post(*args, **kwargs):
+        calls.append(1)
+        return Response('{"description": "sensitive listing text')
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    with pytest.raises(AIExtractionError) as raised:
+        provider().extract("sensitive listing text", "transferlist")
+    assert raised.value.reason == "invalid_provider_output"
+    assert len(calls) == 2
+    assert "sensitive listing text" not in caplog.text
+
+
+def test_cloudflare_max_tokens_is_only_sent_when_configured(monkeypatch):
+    import config
+    result = json.dumps({"classifications": [{"message_id": 12, "category": "none"}]})
+    calls = []
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs["json"])
+        return Response(result)
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    monkeypatch.setattr(config, "CLOUDFLARE_MAX_TOKENS", 0)
+    provider().classify_batch([{"message_id": 12, "text": "hello"}])
+    assert "max_tokens" not in calls[-1]
+    monkeypatch.setattr(config, "CLOUDFLARE_MAX_TOKENS", 2048)
+    provider().classify_batch([{"message_id": 12, "text": "hello"}])
+    assert calls[-1]["max_tokens"] == 2048

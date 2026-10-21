@@ -97,6 +97,11 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "").strip()
 CLOUDFLARE_REQUESTS_PER_MINUTE = _int_env("TELCLAW_CLOUDFLARE_REQUESTS_PER_MINUTE", 30, minimum=1)
 CLOUDFLARE_TIMEOUT_SECONDS = _float_env("TELCLAW_CLOUDFLARE_TIMEOUT_SECONDS", AI_TIMEOUT_SECONDS, minimum=1)
+# Cloudflare can return a truncated JSON document with HTTP 200.
+# This is separate from the outer AI extraction retry and strictly bounded.
+CLOUDFLARE_INVALID_JSON_MAX_RETRIES = min(2, _int_env("TELCLAW_CLOUDFLARE_INVALID_JSON_MAX_RETRIES", 1, minimum=0))
+# Optional override when the selected Workers AI model supports a larger output cap.
+CLOUDFLARE_MAX_TOKENS = min(8192, _int_env("TELCLAW_CLOUDFLARE_MAX_TOKENS", 0, minimum=0))
 
 
 def _build_groq_providers():

@@ -142,6 +142,10 @@ class AdvertioCargoService:
                 );
                 CREATE INDEX IF NOT EXISTS idx_advertio_cargo_status
                     ON advertio_cargo_deliveries(status,next_attempt_at);
+                CREATE TABLE IF NOT EXISTS advertio_cargo_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS advertio_cargo_attempts (
                     id INTEGER PRIMARY KEY,
                     processed_message_id INTEGER NOT NULL,
@@ -235,6 +239,33 @@ class AdvertioCargoService:
             conn.commit()
         finally:
             conn.close()
+
+    @staticmethod
+    def _pause_until():
+        conn = get_connection()
+        try:
+            row = conn.execute(
+                "SELECT value FROM advertio_cargo_meta WHERE key='paused_until'"
+            ).fetchone()
+            if row and row[0] > datetime.now(timezone.utc).isoformat():
+                return row[0]
+            return None
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _pause(seconds):
+        until = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+        conn = get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO advertio_cargo_meta(key,value) VALUES('paused_until',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+            """, (until,))
+            conn.commit()
+        finally:
+            conn.close()
+        return until
 
     @staticmethod
     def _record_api_attempt(message_row_id):
@@ -362,6 +393,10 @@ class AdvertioCargoService:
         limit = min(int(limit or config.ADVERTIO_CARGO_BATCH_SIZE), self._remaining_budget())
         result = {"found": 0, "sent": 0, "already_existed": 0,
                   "rejected": 0, "retry": 0, "budget_remaining": self._remaining_budget()}
+        paused_until = self._pause_until()
+        if paused_until:
+            result["paused_until"] = paused_until
+            return result
         if limit <= 0:
             return result
         records = self.pending(limit=limit, channel_username=channel_username,
@@ -393,13 +428,18 @@ class AdvertioCargoService:
                 result[status] += 1
                 log.warning("Cargo ingest %s message=%s http=%s: %s",
                             status, record["message_id"], exc.status, exc)
-                if exc.status in (401, 404, 429) or (exc.status is not None and exc.status >= 500):
-                    # Broken auth/endpoint, rate limit, or service outage: stop the batch.
+                if retry:
+                    # Stop all cargo requests until the destination recovers; a
+                    # per-row retry timer alone would hammer other waiting rows.
+                    seconds = 21600 if exc.status in (401, 404, 429) else 600
+                    result["paused_until"] = self._pause(seconds)
                     break
             except Exception as exc:
                 self._result(record, "retry", error=str(exc))
                 result["retry"] += 1
+                result["paused_until"] = self._pause(600)
                 log.exception("Unexpected cargo delivery failure for %s", record["message_id"])
+                break
             if progress:
                 log.info("Cargo ingest progress: %s/%s", sum(result[k] for k in
                          ("sent", "already_existed", "rejected", "retry")), len(records))

@@ -1517,7 +1517,7 @@ async def operations_page(request):
             "<td>" + _escape(route) + "</td>"
             "<td>" + _escape(item.get("departure_date") or "Undated") + "</td>"
             "<td>" + _escape(status) + "</td>"
-            "<td>" + _escape(item.get("error") or item.get("next_attempt_at") or "") + "</td>"
+            "<td>" + _escape(item.get("error") or item.get("blocked_reason") or item.get("next_attempt_at") or "") + "</td>"
             "<td>" + retry_button + "</td></tr>"
         )
     cargo_table = (

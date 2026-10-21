@@ -441,7 +441,7 @@ def _cargo_delivery_report(conn, limit=30):
         "sending": 0, "sent": 0, "already_existed": 0,
         "expired": 0, "stale": 0, "attempts_today": 0,
         "paused_until": None, "last_error": None,
-        "recent": [],
+        "recent": [], "recent_ai_failed": [],
     }
     if not _table_exists(conn, "messages"):
         return report
@@ -450,6 +450,15 @@ def _cargo_delivery_report(conn, limit=30):
         report["ai_failed"] = _count(conn, "messages", "ai_status='failed' AND classification_category='transferlist'")
         report["ai_pending"] = _count(conn, "messages",
             "classification_category='transferlist' AND ai_status IN ('waiting','pending','processing')")
+    if {"ai_status", "classification_category", "ai_error"} <= columns:
+        report["recent_ai_failed"] = [
+            dict(row) for row in conn.execute("""
+                SELECT message_id, channel_username, ai_error, date AS message_date
+                FROM messages WHERE ai_status='failed'
+                  AND classification_category='transferlist'
+                ORDER BY id DESC LIMIT 10
+            """).fetchall()
+        ]
     if not _table_exists(conn, "transferlist"):
         return report
     has_delivery = _table_exists(conn, "advertio_cargo_deliveries")

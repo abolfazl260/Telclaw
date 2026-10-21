@@ -181,7 +181,7 @@ ADVERTIO_TIMEOUT_SECONDS = _float_env("TELCLAW_ADVERTIO_TIMEOUT_SECONDS", 60, mi
 # Separate cargo delivery state. Enabled whenever Advertio ingest is enabled unless
 # explicitly disabled; housing, Telegram routing and legacy status are untouched.
 ADVERTIO_CARGO_ENABLED = os.getenv("TELCLAW_ADVERTIO_CARGO_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-ADVERTIO_CARGO_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", "false").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_CARGO_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", "true").lower() in {"1", "true", "yes", "on"}
 ADVERTIO_CARGO_BACKFILL_DAYS = _int_env("TELCLAW_ADVERTIO_CARGO_BACKFILL_DAYS", 30, minimum=1)
 ADVERTIO_CARGO_BATCH_SIZE = max(1, min(100, _int_env("TELCLAW_ADVERTIO_CARGO_BATCH_SIZE", 50, minimum=1)))
 ADVERTIO_CARGO_DAILY_LIMIT = max(1, min(500, _int_env("TELCLAW_ADVERTIO_CARGO_DAILY_LIMIT", 250, minimum=1)))

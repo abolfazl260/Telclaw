@@ -1452,7 +1452,7 @@ async def operations_page(request):
 
     advertio_controls = action_form(
         "run_advertio",
-        "Send Housing + Cargo to Advertio",
+        "Send eligible ads to Advertio",
         extra=(
             '<label>Limit<input type="number" name="limit" min="1" value="100"></label>'
             f'<label>Telegram account for missing photos{account_select}</label>'

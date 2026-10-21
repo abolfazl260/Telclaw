@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import config
@@ -122,6 +123,7 @@ class AdvertioCargoService:
             )
         self.client = client
         self._cities = {}
+        self._cities_checked_at = {}
         self._ensure_tables()
 
     @staticmethod
@@ -262,7 +264,8 @@ class AdvertioCargoService:
         country = str(country or "").strip().upper()
         if country not in COUNTRIES:
             raise CargoMappingError("Cargo route country outside Advertio catalog: " + country)
-        if country not in self._cities:
+        if country not in self._cities or time.monotonic() - self._cities_checked_at.get(country, 0) >= 86400:
+            # One refresh per country per day, even with 5-minute crawl cycles.
             # Only the public API decides canonical names and province codes.
             entries = self.client.list_cities(country)
             if not isinstance(entries, list):
@@ -275,6 +278,7 @@ class AdvertioCargoService:
                     if alias:
                         lookup[_name(alias)] = city
             self._cities[country] = lookup
+            self._cities_checked_at[country] = time.monotonic()
         city = self._cities[country].get(_name(value))
         if not city:
             raise CargoMappingError("City is not in Advertio catalog: " + country + "/" + str(value))
@@ -389,8 +393,8 @@ class AdvertioCargoService:
                 result[status] += 1
                 log.warning("Cargo ingest %s message=%s http=%s: %s",
                             status, record["message_id"], exc.status, exc)
-                if exc.status in (401, 404, 429):
-                    # Broken auth/endpoint or edge rate limit: never hammer the API.
+                if exc.status in (401, 404, 429) or (exc.status is not None and exc.status >= 500):
+                    # Broken auth/endpoint, rate limit, or service outage: stop the batch.
                     break
             except Exception as exc:
                 self._result(record, "retry", error=str(exc))

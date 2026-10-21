@@ -492,6 +492,17 @@ class SystemConsoleUI(ConsoleUI):
                     client, target_channel, limit=limit, should_stop=should_stop
                 )
             )
+            cargo_stats = None
+            if cargo_service is not None:
+                async with self.crawler.scheduler._pipeline_lock:
+                    cargo_stats = await self._run_with_q_stop(
+                        lambda should_stop: asyncio.to_thread(
+                            cargo_service.deliver_pending,
+                            limit=min(limit, config.ADVERTIO_CARGO_BATCH_SIZE),
+                            should_stop=should_stop,
+                            progress=True,
+                        )
+                    )
             stopped = result.get("stopped", False)
             color = Fore.GREEN if result["failed"] == 0 and not stopped else Fore.YELLOW
             self.show_message(
@@ -499,6 +510,11 @@ class SystemConsoleUI(ConsoleUI):
                 f"Sent: {result['sent']} | Failed: {result['failed']}",
                 color,
             )
+            if cargo_stats is not None:
+                self.show_message(
+                    "Cargo API: " + str(cargo_stats),
+                    Fore.GREEN if not cargo_stats["retry"] else Fore.YELLOW,
+                )
         except ConsoleBack:
             raise
         except Exception as exc:
@@ -559,9 +575,15 @@ class SystemConsoleUI(ConsoleUI):
 
         try:
             preview = self.advertio_service.repository.get_advertio_pending(limit=100, channel_username=None)
-            eligible = len(preview)
+            cargo_service = None
+            cargo_pending = []
+            if config.ADVERTIO_CARGO_ENABLED and config.ADVERTIO_INGEST_KEY:
+                from delivery.advertio_cargo import AdvertioCargoService
+                cargo_service = AdvertioCargoService()
+                cargo_pending = cargo_service.pending(limit=100)
+            eligible = len(preview) + len(cargo_pending)
             if eligible == 0:
-                self.show_message("No eligible housing listings are waiting for Advertio.", Fore.YELLOW)
+                self.show_message("No eligible housing or cargo listings are waiting for Advertio.", Fore.YELLOW)
                 self.show_message("No new crawl or AI processing is required for this menu.", Fore.CYAN)
                 await self.pause()
                 return
@@ -571,7 +593,7 @@ class SystemConsoleUI(ConsoleUI):
                 Fore.CYAN,
             )
             self.show_message(
-                "Eligible = AI processed + housing data exists + Advertio status is waiting/retry.",
+                f"Eligible housing: {len(preview)} | cargo (includes active backfill): {len(cargo_pending)}.",
                 Fore.CYAN,
             )
             limit_text = await self.prompt_text(

@@ -1306,6 +1306,7 @@ async def operations_page(request):
     states = operations.states()
     cargo_report = report.get("advertio_cargo") or {}
     cargo_state = states.get("advertio_cargo", {"status": "idle", "result": None, "error": None})
+    probe_state = states.get("advertio_probe", {"status": "idle", "result": None, "error": None})
 
     try:
         accounts = await operations.list_accounts()
@@ -1477,6 +1478,10 @@ async def operations_page(request):
     )
     if cargo_running:
         cargo_controls += action_form("stop_advertio_cargo", "Stop Cargo Delivery", danger=True)
+    cargo_controls += action_form(
+        "probe_advertio_api", "Test Advertio API /health",
+        disabled=probe_state.get("status") in {"queued", "running", "stopping"},
+    )
 
     cargo_alerts = []
     if not config.ADVERTIO_INGEST_ENABLED:
@@ -1741,6 +1746,7 @@ async def operations_page(request):
         {cargo_alert_html}
         {cargo_error_html}
         {_operation_state_box("Advertio website cargo", cargo_state)}
+        {_operation_state_box("Advertio API health", probe_state)}
         <div class="op-actions">{cargo_controls}</div>
         <h3>Recent Cargo API records</h3>
         {cargo_table}
@@ -1855,6 +1861,9 @@ async def operations_action(request):
             )
             _operations_redirect(notice="Advertio delivery started.")
 
+        if action == "probe_advertio_api":
+            operations.start_advertio_probe(requested_by=admin_id)
+            _operations_redirect(notice="Advertio API health check started. No listing is sent.")
         if action == "run_advertio_cargo":
             operations.start_advertio_cargo(
                 limit=int(data.get("limit") or 10),

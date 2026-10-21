@@ -101,3 +101,15 @@ def test_invalid_numeric_setting_is_rejected(settings_db):
 
     with pytest.raises(ValueError, match="must be <= 3"):
         backoffice_settings.save_override("TELCLAW_ADVERTIO_CONCURRENCY", "4")
+
+
+def test_cargo_autopublish_override_can_disable_auto_publication(settings_db, monkeypatch):
+    monkeypatch.delenv("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", raising=False)
+    spec = next(item for item in backoffice_settings.SPECS
+                if item.key == "TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH")
+    assert backoffice_settings.env_default(spec) == "true"
+    backoffice_settings.save_override("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", "false")
+    assert config.ADVERTIO_CARGO_AUTO_PUBLISH is False
+    assert backoffice_settings.overrides()[spec.key] == "false"
+    backoffice_settings.reset_override(spec.key)
+    assert config.ADVERTIO_CARGO_AUTO_PUBLISH is True

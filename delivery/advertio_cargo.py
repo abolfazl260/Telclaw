@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import re
-import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 import config
@@ -268,6 +267,8 @@ class AdvertioCargoService:
             entries = self.client.list_cities(country)
             if not isinstance(entries, list):
                 raise AdvertioError("Unexpected city catalog response", retryable=True)
+            if not entries:
+                raise AdvertioError("Empty Advertio location catalog for " + country, retryable=True)
             lookup = {}
             for city in entries:
                 for alias in (city.get("code"), city.get("name"), city.get("nameFa")):

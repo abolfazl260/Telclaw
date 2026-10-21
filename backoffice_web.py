@@ -1452,13 +1452,13 @@ async def operations_page(request):
 
     advertio_controls = action_form(
         "run_advertio",
-        "Send eligible ads to Advertio",
+        "Send Housing + Cargo to Advertio",
         extra=(
             '<label>Limit<input type="number" name="limit" min="1" value="100"></label>'
             f'<label>Telegram account for missing photos{account_select}</label>'
         ),
         disabled=pipeline_busy or not config.ADVERTIO_INGEST_ENABLED,
-        confirm="Send eligible existing housing listings to Advertio now?",
+        confirm="Send eligible existing housing and active cargo listings to Advertio now?",
     )
 
     groq_controls = action_form(
@@ -1634,9 +1634,10 @@ async def operations_page(request):
         <div class="op-actions">{ai_controls}</div></section>
 
       <section class="op-card"><h2>Advertio Delivery</h2>
-        <p>Pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
+        <p>Housing pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
         Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
         {_operation_state_box("Advertio", states["advertio"])}
+        <p class="muted">When cargo ingest is enabled, this action also submits eligible passenger-cargo records and active historical backfill. Housing and cargo have separate delivery queues and statuses.</p>
         <div class="op-actions">{advertio_controls}</div></section>
 
       <section class="op-card"><h2>Groq Connection Test</h2>

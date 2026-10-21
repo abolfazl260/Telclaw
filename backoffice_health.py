@@ -505,6 +505,18 @@ def _cargo_delivery_report(conn, limit=30):
     sql = f"""SELECT m.id row_id, m.message_id, m.channel_username, m.date message_date,
         t.origin_country, t.origin_city, t.destination_country, t.destination_city,
         t.departure_date, {status} status, {error} error, {updated} updated_at,
+        CASE
+            WHEN t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
+                 AND substr(t.departure_date,1,10)<'{today}' THEN 'Expired departure date'
+            WHEN (t.departure_date IS NULL OR TRIM(t.departure_date)='')
+                 AND substr(m.date,1,10)<'{recent}' THEN 'Outside undated backfill window'
+            WHEN t.origin_city IS NULL OR TRIM(t.origin_city)=''
+                 OR t.destination_city IS NULL OR TRIM(t.destination_city)=''
+                 OR t.origin_country IS NULL OR TRIM(t.origin_country)=''
+                 OR t.destination_country IS NULL OR TRIM(t.destination_country)=''
+                 THEN 'Incomplete origin/destination route'
+            ELSE NULL
+        END blocked_reason,
         {next_attempt} next_attempt_at, {lead_id} lead_id
         FROM messages m JOIN transferlist t ON t.processed_message_id=m.id {join}
         WHERE {expr} ORDER BY m.id DESC LIMIT ?"""

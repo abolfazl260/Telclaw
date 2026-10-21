@@ -1458,7 +1458,7 @@ async def operations_page(request):
             f'<label>Telegram account for missing photos{account_select}</label>'
         ),
         disabled=pipeline_busy or not config.ADVERTIO_INGEST_ENABLED,
-        confirm="Send eligible existing housing and active cargo listings to Advertio now?",
+        confirm="Send eligible existing housing listings to Advertio now?",
     )
 
     groq_controls = action_form(

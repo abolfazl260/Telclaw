@@ -417,6 +417,118 @@ def _overview_report(conn):
     }
 
 
+def _cargo_delivery_report(conn, limit=30):
+    """Read-only Advertio API cargo diagnostics, including never-attempted ads.
+
+    Important: this is the website ingest, not the @advertio_cargo Telegram target.
+    Never create/migrate tables or contact the remote API while rendering a page.
+    """
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    from datetime import timedelta
+    recent = (now - timedelta(days=config.ADVERTIO_CARGO_BACKFILL_DAYS)).date().isoformat()
+    configured = bool(config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_CARGO_ENABLED)
+    key_ready = bool(config.ADVERTIO_INGEST_KEY)
+    report = {
+        "enabled": configured, "key_configured": key_ready,
+        "base_url": config.ADVERTIO_BASE_URL,
+        "auto_publish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH),
+        "batch_size": config.ADVERTIO_CARGO_BATCH_SIZE,
+        "daily_limit": config.ADVERTIO_CARGO_DAILY_LIMIT,
+        "backfill_days": config.ADVERTIO_CARGO_BACKFILL_DAYS,
+        "processed": 0, "ai_failed": 0, "ai_pending": 0,
+        "eligible": 0, "waiting": 0, "retry": 0, "rejected": 0,
+        "sending": 0, "sent": 0, "already_existed": 0,
+        "expired": 0, "stale": 0, "attempts_today": 0,
+        "paused_until": None, "last_error": None,
+        "recent": [], "recent_ai_failed": [],
+    }
+    if not _table_exists(conn, "messages"):
+        return report
+    columns = _columns(conn, "messages")
+    if {"ai_status", "ai_category", "classification_category"} <= columns:
+        report["ai_failed"] = _count(conn, "messages", "ai_status='failed' AND classification_category='transferlist'")
+        report["ai_pending"] = _count(conn, "messages",
+            "classification_category='transferlist' AND ai_status IN ('waiting','pending','processing')")
+    if {"ai_status", "classification_category", "ai_error"} <= columns:
+        report["recent_ai_failed"] = [
+            dict(row) for row in conn.execute("""
+                SELECT message_id, channel_username, ai_error, date AS message_date
+                FROM messages WHERE ai_status='failed'
+                  AND classification_category='transferlist'
+                ORDER BY id DESC LIMIT 10
+            """).fetchall()
+        ]
+    if not _table_exists(conn, "transferlist"):
+        return report
+    has_delivery = _table_exists(conn, "advertio_cargo_deliveries")
+    join = ("LEFT JOIN advertio_cargo_deliveries d ON d.processed_message_id=m.id"
+            if has_delivery else "")
+    status = "COALESCE(d.status,'waiting')" if has_delivery else "'waiting'"
+    next_attempt = "d.next_attempt_at" if has_delivery else "NULL"
+    error = "d.error" if has_delivery else "NULL"
+    updated = "d.updated_at" if has_delivery else "NULL"
+    lead_id = "d.lead_id" if has_delivery else "NULL"
+    expr = f"""m.processing_status='processed' AND m.ai_status='processed'
+               AND m.ai_category='transferlist'"""
+    report["processed"] = conn.execute(f"""SELECT COUNT(*) FROM messages m
+        JOIN transferlist t ON t.processed_message_id=m.id WHERE {expr}""").fetchone()[0]
+    eligibility = f"""(
+        (t.departure_date IS NULL OR TRIM(t.departure_date)='' OR substr(t.departure_date,1,10)>=?)
+        AND (substr(m.date,1,10)>=? OR substr(t.departure_date,1,10)>=?)
+    )"""
+    sql = f"""SELECT {status} status, COUNT(*) n FROM messages m
+        JOIN transferlist t ON t.processed_message_id=m.id {join}
+        WHERE {expr} AND {eligibility}
+        GROUP BY {status}"""
+    for row in conn.execute(sql, (today, recent, today)):
+        key = str(row["status"] or "waiting")
+        if key in report:
+            report[key] = int(row["n"])
+    report["eligible"] = sum(report[key] for key in
+        ("waiting","retry","sending","sent","already_existed","rejected"))
+    report["expired"] = conn.execute(f"""SELECT COUNT(*) FROM messages m
+        JOIN transferlist t ON t.processed_message_id=m.id WHERE {expr}
+        AND t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
+        AND substr(t.departure_date,1,10)<?""", (today,)).fetchone()[0]
+    report["stale"] = conn.execute(f"""SELECT COUNT(*) FROM messages m
+        JOIN transferlist t ON t.processed_message_id=m.id WHERE {expr}
+        AND substr(m.date,1,10)<? AND
+        (t.departure_date IS NULL OR TRIM(t.departure_date)='')""", (recent,)).fetchone()[0]
+    if _table_exists(conn, "advertio_cargo_attempts"):
+        report["attempts_today"] = _count(conn, "advertio_cargo_attempts",
+            "attempted_at>=?", (today,))
+    if _table_exists(conn, "advertio_cargo_meta"):
+        row = conn.execute("SELECT value FROM advertio_cargo_meta WHERE key='paused_until'").fetchone()
+        if row and row[0] > now.isoformat():
+            report["paused_until"] = str(row[0])
+    sql = f"""SELECT m.id row_id, m.message_id, m.channel_username, m.date message_date,
+        t.origin_country, t.origin_city, t.destination_country, t.destination_city,
+        t.departure_date, {status} status, {error} error, {updated} updated_at,
+        CASE
+            WHEN t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
+                 AND substr(t.departure_date,1,10)<'{today}' THEN 'Expired departure date'
+            WHEN (t.departure_date IS NULL OR TRIM(t.departure_date)='')
+                 AND substr(m.date,1,10)<'{recent}' THEN 'Outside undated backfill window'
+            WHEN t.origin_city IS NULL OR TRIM(t.origin_city)=''
+                 OR t.destination_city IS NULL OR TRIM(t.destination_city)=''
+                 OR t.origin_country IS NULL OR TRIM(t.origin_country)=''
+                 OR t.destination_country IS NULL OR TRIM(t.destination_country)=''
+                 THEN 'Incomplete origin/destination route'
+            ELSE NULL
+        END blocked_reason,
+        {next_attempt} next_attempt_at, {lead_id} lead_id
+        FROM messages m JOIN transferlist t ON t.processed_message_id=m.id {join}
+        WHERE {expr} ORDER BY m.id DESC LIMIT ?"""
+    report["recent"] = [dict(row) for row in conn.execute(sql, (min(max(int(limit),1),100),))]
+    if has_delivery:
+        row = conn.execute("""SELECT error FROM advertio_cargo_deliveries
+            WHERE error IS NOT NULL AND TRIM(error)<>'' ORDER BY updated_at DESC LIMIT 1""").fetchone()
+        if row:
+            report["last_error"] = str(row[0])[:500]
+    return report
+
+
 def snapshot():
     """Build one consistent read-only health snapshot from SQLite and configuration."""
     conn = get_connection()
@@ -432,6 +544,7 @@ def snapshot():
             "activity": _recent_activity(conn),
             "edits": _recent_edits(conn),
             "publishing": _publishing_report(conn),
+            "advertio_cargo": _cargo_delivery_report(conn),
             "overview": _overview_report(conn),
             "system": _system_report(conn),
             "bot": {

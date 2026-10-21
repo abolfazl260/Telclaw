@@ -309,3 +309,104 @@ async def test_account_switch_is_blocked_while_crawler_job_is_active():
 
     with pytest.raises(RuntimeError, match="Stop active crawler jobs"):
         await operations.connect_account("secondary", requested_by=1)
+
+
+@pytest.mark.asyncio
+async def test_manual_cargo_delivery_does_not_require_housing_service(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_ENABLED", True)
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_ENABLED", True)
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_KEY", "test-in-memory-key")
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_BATCH_SIZE", 50)
+    monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *a, **k: None)
+
+    class FakeCargoService:
+        def deliver_pending(self, **kwargs):
+            assert kwargs["limit"] == 10
+            return {"found": 1, "sent": 1, "already_existed": 0,
+                    "retry": 0, "rejected": 0, "budget_remaining": 9}
+
+    monkeypatch.setattr("delivery.advertio_cargo.AdvertioCargoService", FakeCargoService)
+    console = FakeConsole()
+    assert console.advertio_service is None
+    op = BackofficeOperations(console_ui=console)
+    op.start_advertio_cargo(limit=10, requested_by=4)
+    await op._tasks["advertio_cargo"]
+    assert op.state("advertio_cargo")["result"]["sent"] == 1
+    assert op.state("advertio_cargo")["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_operations_page_exposes_separate_cargo_status_and_controls(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_ENABLED", True)
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_ENABLED", True)
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_KEY", "secret-for-testing")
+    monkeypatch.setattr(
+        backoffice_web.backoffice_health, "snapshot",
+        lambda: {
+            "pipeline": {
+                "processing_pending": 0, "processing_failed": 0,
+                "classification_pending": 0, "classification_failed": 0,
+                "ai_pending": 0, "ai_failed": 0,
+                "advertio_pending": 0, "advertio_failed": 0,
+            },
+            "activity": [],
+            "advertio_cargo": {
+                "enabled": True, "key_configured": True, "auto_publish": False,
+                "processed": 6, "waiting": 2, "retry": 1, "sent": 1,
+                "rejected": 1, "already_existed": 1, "ai_failed": 1,
+                "daily_limit": 250, "attempts_today": 4,
+                "recent": [{
+                    "row_id": 301, "message_id": 5592,
+                    "channel_username": "air_cargo070",
+                    "origin_city": "Toronto", "destination_city": "Tehran",
+                    "status": "rejected",
+                    "error": "<script>alert(123)</script>",
+                }],
+            },
+        }
+    )
+    class Request(dict):
+        query = {}
+        app = {"operations": FakePageOperations()}
+    response = await backoffice_web.operations_page(Request({
+        "session": {"csrf": "csrf", "admin_id": 7},
+        "csp_nonce": "nonce",
+    }))
+    assert response.status == 200
+    assert "Advertio Cargo — Website API" in response.text
+    assert "Send Cargo to Advertio website" in response.text
+    assert "air_cargo070" in response.text
+    assert "5592" in response.text
+    assert "Requeue" in response.text
+    assert "<script>alert(123)</script>" not in response.text
+    assert "secret-for-testing" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_api_health_probe_does_not_send_ingest_key_or_any_listing(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "ADVERTIO_BASE_URL", "https://api.advertio.ir")
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_KEY", "secret-should-not-leak")
+    monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *a, **k: None)
+    import requests
+    calls = []
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        class Response:
+            ok = True
+            status_code = 200
+        return Response()
+    monkeypatch.setattr(requests, "get", fake_get)
+    ops = BackofficeOperations(console_ui=FakeConsole())
+    ops.start_advertio_probe(requested_by=7)
+    await ops._tasks["advertio_probe"]
+    assert ops.state("advertio_probe")["result"] == {
+        "reachable": True, "status": 200,
+        "endpoint": "https://api.advertio.ir/health",
+    }
+    assert len(calls) == 1
+    assert calls[0][0].endswith("/health")
+    assert "headers" not in calls[0][1]
+    assert "secret-should-not-leak" not in str(calls)

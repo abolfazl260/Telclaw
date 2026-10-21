@@ -1304,6 +1304,9 @@ async def operations_page(request):
     report = backoffice_health.snapshot()
     pipeline = report["pipeline"]
     states = operations.states()
+    cargo_report = report.get("advertio_cargo") or {}
+    cargo_state = states.get("advertio_cargo", {"status": "idle", "result": None, "error": None})
+    probe_state = states.get("advertio_probe", {"status": "idle", "result": None, "error": None})
 
     try:
         accounts = await operations.list_accounts()
@@ -1395,8 +1398,9 @@ async def operations_page(request):
     classification_running = states["classification"]["status"] in {"queued", "running", "stopping"}
     ai_running = states["ai"]["status"] in {"queued", "running", "stopping"}
     advertio_running = states["advertio"]["status"] in {"queued", "running", "stopping"}
+    cargo_running = cargo_state["status"] in {"queued", "running", "stopping"}
     groq_running = states["groq"]["status"] in {"queued", "running", "stopping"}
-    pipeline_busy = processing_running or classification_running or ai_running or advertio_running
+    pipeline_busy = processing_running or classification_running or ai_running or advertio_running or cargo_running
 
     processing_controls = action_form(
         "run_processing", "Run Processing", disabled=pipeline_busy
@@ -1459,6 +1463,88 @@ async def operations_page(request):
         ),
         disabled=pipeline_busy or not config.ADVERTIO_INGEST_ENABLED,
         confirm="Send eligible existing housing listings to Advertio now?",
+    )
+
+    # Advertio website cargo is independent of the Telegram @advertio_cargo
+    # channel and of the Housing ingest worker. No API calls on page load.
+    cargo_enabled = bool(cargo_report.get("enabled"))
+    cargo_key_ready = bool(cargo_report.get("key_configured"))
+    cargo_controls = action_form(
+        "run_advertio_cargo",
+        "Send Cargo to Advertio website",
+        extra='<label>Max cargo ads<input type="number" name="limit" min="1" max="100" value="10"></label>',
+        disabled=pipeline_busy or not cargo_enabled or not cargo_key_ready,
+        confirm="Send up to this many eligible cargo listings to the Advertio website for review?",
+    )
+    if cargo_running:
+        cargo_controls += action_form("stop_advertio_cargo", "Stop Cargo Delivery", danger=True)
+    cargo_controls += action_form(
+        "probe_advertio_api", "Test Advertio API /health",
+        disabled=probe_state.get("status") in {"queued", "running", "stopping"},
+    )
+
+    cargo_alerts = []
+    if not config.ADVERTIO_INGEST_ENABLED:
+        cargo_alerts.append("TELCLAW_ADVERTIO_INGEST_ENABLED=false: the parent ingest pipeline is disabled.")
+    elif not config.ADVERTIO_CARGO_ENABLED:
+        cargo_alerts.append("TELCLAW_ADVERTIO_CARGO_ENABLED=false: cargo website ingestion is disabled.")
+    if not cargo_key_ready:
+        cargo_alerts.append("TELCLAW_ADVERTIO_INGEST_KEY is missing. Set it on the server; do not paste it into Back Office.")
+    if cargo_report.get("paused_until"):
+        cargo_alerts.append("API cooldown active until " + str(cargo_report["paused_until"]) + " (UTC).")
+    if cargo_report.get("processed", 0) == 0:
+        cargo_alerts.append("No AI-processed transferlist records found. Check the AI Extraction Queue first.")
+    if cargo_report.get("ai_failed", 0):
+        cargo_alerts.append(str(cargo_report["ai_failed"]) + " cargo extraction(s) failed; use Retry Invalid AI Extraction where applicable.")
+    if cargo_report.get("sent", 0) and not cargo_report.get("auto_publish"):
+        cargo_alerts.append("Successful API submission is not public publication: cargo autoPublish=false; approve PendingReview leads in Advertio.")
+    cargo_alert_html = "".join('<p class="ops-error">' + _escape(item) + '</p>' for item in cargo_alerts)
+    cargo_error_html = ('<p class="ops-error">Last cargo error: ' + _escape(cargo_report["last_error"]) + '</p>'
+        if cargo_report.get("last_error") else "")
+    cargo_rows = []
+    for item in cargo_report.get("recent", []):
+        status = str(item.get("status") or "waiting")
+        row_id = int(item.get("row_id") or 0)
+        retry_button = (
+            action_form("requeue_advertio_cargo", "Requeue",
+                extra='<input type="hidden" name="row_id" value="' + str(row_id) + '">',
+                disabled=pipeline_busy,
+                confirm="Only retry after correcting the rejected cargo data. Requeue this record?")
+            if status == "rejected" and row_id > 0 else ""
+        )
+        route = (
+            (item.get("origin_city") or item.get("origin_country") or "?")
+            + " → " + (item.get("destination_city") or item.get("destination_country") or "?")
+        )
+        cargo_rows.append(
+            "<tr><td>" + _escape(str(item.get("message_id") or "")) + "</td>"
+            "<td>@" + _escape(item.get("channel_username") or "") + "</td>"
+            "<td>" + _escape(route) + "</td>"
+            "<td>" + _escape(item.get("departure_date") or "Undated") + "</td>"
+            "<td>" + _escape(status) + "</td>"
+            "<td>" + _escape(item.get("error") or item.get("blocked_reason") or item.get("next_attempt_at") or "") + "</td>"
+            "<td>" + retry_button + "</td></tr>"
+        )
+    cargo_table = (
+        '<div style="overflow-x:auto"><table><thead><tr><th>Telegram ID</th><th>Source</th>'
+        '<th>Route</th><th>Trip date</th><th>API status</th><th>Error / retry</th><th>Action</th>'
+        '</tr></thead><tbody>' + "".join(cargo_rows) + '</tbody></table></div>'
+        if cargo_rows else '<p class="muted">No processed cargo records found in SQLite.</p>'
+    )
+
+    cargo_ai_failures = "".join(
+        "<tr><td>" + _escape(str(item.get("message_id") or "")) + "</td>"
+        "<td>@" + _escape(item.get("channel_username") or "") + "</td>"
+        "<td>" + _escape(item.get("ai_error") or "unknown") + "</td></tr>"
+        for item in cargo_report.get("recent_ai_failed", [])
+    )
+    cargo_ai_table = (
+        '<h3>Recent Cargo AI Extraction Failures</h3>'
+        '<p class="muted">These messages never reached the Advertio API. Use the AI retry controls above.</p>'
+        '<div style="overflow-x:auto"><table><thead><tr><th>Telegram ID</th>'
+        '<th>Source</th><th>AI error</th></tr></thead><tbody>'
+        + cargo_ai_failures + '</tbody></table></div>'
+        if cargo_ai_failures else ""
     )
 
     groq_controls = action_form(
@@ -1637,8 +1723,35 @@ async def operations_page(request):
         <p>Housing pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
         Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
         {_operation_state_box("Advertio", states["advertio"])}
-        <p class="muted">When cargo ingest is enabled, this action also submits eligible passenger-cargo records and active historical backfill. Housing and cargo have separate delivery queues and statuses.</p>
+        <p class="muted">Housing API delivery only. Cargo website API delivery has its own controls below.</p>
         <div class="op-actions">{advertio_controls}</div></section>
+
+      <section class="op-card" style="grid-column:1 / -1"><h2>Advertio Cargo — Website API</h2>
+        <p class="muted">Separate from Telegram @advertio_cargo. Category: passenger-cargo. The last 30 processed cargo records are listed below.</p>
+        <p>Enabled: <strong>{'yes' if cargo_enabled else 'no'}</strong> · API key: <strong>{'configured' if cargo_key_ready else 'missing'}</strong> ·
+        Auto publish: <strong>{'yes' if cargo_report.get('auto_publish') else 'no (PendingReview)'}</strong></p>
+        <p>AI processed: <strong>{int(cargo_report.get('processed') or 0):,}</strong> ·
+        AI failed: <strong>{int(cargo_report.get('ai_failed') or 0):,}</strong> ·
+        Pending AI: <strong>{int(cargo_report.get('ai_pending') or 0):,}</strong></p>
+        <p>Waiting: <strong>{int(cargo_report.get('waiting') or 0):,}</strong> ·
+        Retry: <strong>{int(cargo_report.get('retry') or 0):,}</strong> ·
+        Sent to API: <strong>{int(cargo_report.get('sent') or 0):,}</strong> ·
+        Already existed: <strong>{int(cargo_report.get('already_existed') or 0):,}</strong> ·
+        Rejected: <strong>{int(cargo_report.get('rejected') or 0):,}</strong> ·
+        In-flight: <strong>{int(cargo_report.get('sending') or 0):,}</strong></p>
+        <p>Expired trips: <strong>{int(cargo_report.get('expired') or 0):,}</strong> ·
+        Old undated posts: <strong>{int(cargo_report.get('stale') or 0):,}</strong> ·
+        API requests today: <strong>{int(cargo_report.get('attempts_today') or 0):,}/{int(cargo_report.get('daily_limit') or config.ADVERTIO_CARGO_DAILY_LIMIT):,}</strong></p>
+        <p class="muted">Destination: {_escape(cargo_report.get('base_url') or config.ADVERTIO_BASE_URL)} · Historical undated backfill: last {int(cargo_report.get('backfill_days') or 30)} days. A successful API response may still require Advertio moderation.</p>
+        {cargo_alert_html}
+        {cargo_error_html}
+        {_operation_state_box("Advertio website cargo", cargo_state)}
+        {_operation_state_box("Advertio API health", probe_state)}
+        <div class="op-actions">{cargo_controls}</div>
+        <h3>Recent Cargo API records</h3>
+        {cargo_table}
+        {cargo_ai_table}
+      </section>
 
       <section class="op-card"><h2>Groq Connection Test</h2>
         {_operation_state_box("Groq diagnostic", states["groq"])}
@@ -1747,6 +1860,25 @@ async def operations_action(request):
                 requested_by=admin_id,
             )
             _operations_redirect(notice="Advertio delivery started.")
+
+        if action == "probe_advertio_api":
+            operations.start_advertio_probe(requested_by=admin_id)
+            _operations_redirect(notice="Advertio API health check started. No listing is sent.")
+        if action == "run_advertio_cargo":
+            operations.start_advertio_cargo(
+                limit=int(data.get("limit") or 10),
+                requested_by=admin_id,
+            )
+            _operations_redirect(notice="Cargo-only website API delivery started. Check the result below.")
+        if action == "stop_advertio_cargo":
+            if not operations.request_stop("advertio_cargo"):
+                raise ValueError("Cargo delivery is not running")
+            _operations_redirect(notice="Cargo delivery stop requested.")
+        if action == "requeue_advertio_cargo":
+            operations.requeue_rejected_cargo(
+                int(data.get("row_id") or 0), requested_by=admin_id,
+            )
+            _operations_redirect(notice="Rejected cargo requeued. Correct its source fields before sending.")
 
         if action == "run_groq":
             operations.start_groq_test(admin_id)

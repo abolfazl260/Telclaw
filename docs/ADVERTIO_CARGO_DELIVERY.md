@@ -107,6 +107,53 @@ Telegram reconciliation process must be added before broad backfill.
 Never call source-wide DELETE based only on a failed crawl or a missing
 message in an incomplete scan.
 
+## When a fresh crawl does not appear on Advertio
+
+Telclaw has four separate states; a completed crawl is **not** successful API
+publication:
+
+1. Collection and classification must identify a `transferlist` message.
+   Failed Cloudflare extraction remains in the **AI Extraction Queue** and
+   cannot reach Advertio; use "Retry Invalid AI Extraction" as appropriate.
+2. The post must pass the dedicated cargo eligibility window (future/current
+   departure or a recent undated source), source URL/contact, city catalog and
+   required origin/destination checks. Expired or stale records are excluded.
+3. `TELCLAW_ADVERTIO_INGEST_ENABLED`, the cargo switch and the ingest key
+   must all be configured, and the API must be reachable. Network errors,
+   invalid keys, rate limiting and schema errors are shown in the cargo queue.
+4. Successful API ingestion with `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=false`
+   creates a **PendingReview** listing. An Advertio moderator must approve
+   it before it appears on the public website.
+
+### From Telclaw Back Office (after deployment)
+
+- **Settings → Advertio**: configure the API base URL and ingest key. The
+  parent ingest switch also enables Housing; check Housing readiness first.
+  Restart Telclaw after changing settings marked *restart required*.
+- **Settings → Advertio Cargo**: set the dedicated cargo switch, backfill
+  freshness window, batch size and daily request budget. Keep auto-publish
+  disabled during pilot moderation.
+- **Operations → Advertio Cargo — Website API**: separate from
+  `@advertio_cargo`, shows AI processed/failed/pending, waiting/retry/rejected,
+  sent/already-existed, expired/stale, today's requests and last delivery error.
+  Recent rows include Telegram message ID, source, route, date, failure cause,
+  and next retry time. This report is read-only and does not call the API.
+- Click **Test Advertio API /health** first: it runs an unauthenticated HTTPS
+  GET without sending a listing or the ingest key and reports reachability
+  and HTTP status. A successful health response does not prove the ingest key
+  is valid, but failures reveal DNS, TLS or API availability problems.
+- Click **Send Cargo to Advertio website** with limit 10 for a small pilot.
+  Results appear in the independent job status box. No housing media or
+  Telegram message will be published by this action.
+- **Requeue** is available only on individually rejected records. First fix
+  invalid route/category/attribute data; blind retries of invalid data will
+  fail again.
+- **Stop Cargo Delivery** ends the current manual batch after any in-flight
+  request returns.
+
+Do not confuse a queued/failed Telegram publisher target with the website
+API integration. They are separate destinations and have separate metrics.
+
 ## Operator flows
 
 - Scheduled: `services/scheduler_service.py` runs the isolated cargo worker

@@ -32,7 +32,7 @@ from storage import database
 
 logger = logging.getLogger('telclaw.backoffice.operations')
 
-RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "advertio_cargo", "groq")
+RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "advertio_cargo", "advertio_probe", "groq")
 SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio", "advertio_cargo"}
 
 
@@ -455,6 +455,28 @@ class BackofficeOperations:
             {"limit": limit, "account": str(account_name or "")},
             operation,
         )
+
+    def start_advertio_probe(self, requested_by=None):
+        """Check HTTPS health without publishing a lead or sending ingest credentials."""
+        def probe():
+            import requests
+            from urllib.parse import urlparse
+            base_url = str(config.ADVERTIO_BASE_URL).rstrip("/")
+            endpoint = base_url + "/health"
+            if urlparse(base_url).scheme != "https":
+                raise ValueError("Advertio API health requires an HTTPS base URL")
+            try:
+                response = requests.get(endpoint, timeout=min(10, config.ADVERTIO_TIMEOUT_SECONDS))
+            except requests.RequestException as exc:
+                return {"reachable": False, "status": None,
+                        "error": f"{type(exc).__name__}: {exc}"[:500]}
+            return {"reachable": bool(response.ok), "status": response.status_code,
+                    "endpoint": endpoint}
+
+        async def operation(_stop_event):
+            return await asyncio.to_thread(probe)
+
+        return self._start_background("advertio_probe", requested_by, {}, operation)
 
     def start_advertio_cargo(self, limit=10, requested_by=None):
         """Manually deliver cargo only; never depend on Housing or Telegram."""

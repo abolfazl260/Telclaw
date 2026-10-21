@@ -134,6 +134,7 @@ class SchedulerService:
                 reason = "disabled" if classification_stats.get("disabled") else "stopped"
                 print(f"{Fore.YELLOW}⚠️ AI data extraction not started because classification stage is {reason}.")
 
+            skip_advertio = self.stage_control.is_skip_requested("advertio")
             advertio_stats = {"found": 0, "sent": 0, "already_existed": 0, "failed": 0}
             advertio_service = getattr(self.ai_processing, "advertio_service", None)
             if config.ADVERTIO_INGEST_ENABLED and advertio_service is not None:
@@ -164,6 +165,24 @@ class SchedulerService:
                     )
                     await self.monitor.report("advertio", advertio_stats)
                 self.stage_control.consume_skip("advertio")
+
+            # Independent destination: one failure cannot roll back Telegram
+            # publication or the housing Advertio pipeline.
+            if (config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_CARGO_ENABLED
+                    and config.ADVERTIO_INGEST_KEY and not skip_advertio):
+                from delivery.advertio_cargo import AdvertioCargoService
+                try:
+                    cargo_service = AdvertioCargoService()
+                    cargo_stats = await asyncio.to_thread(
+                        cargo_service.deliver_pending,
+                        limit=config.ADVERTIO_CARGO_BATCH_SIZE,
+                        before_datetime=advertio_cycle_cutoff,
+                        progress=True,
+                    )
+                    print(f"[ADVERTIO CARGO] {cargo_stats}")
+                    await self.monitor.report("advertio_cargo", cargo_stats)
+                except Exception as exc:
+                    logger.exception("Advertio cargo queue failed: %s", exc)
 
             return processing_stats, classification_stats, extraction_stats
 

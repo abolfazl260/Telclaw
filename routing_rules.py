@@ -661,11 +661,13 @@ def pending(limit=100):
     """Yield only unsent message-target pairs; disabled or unmatched rules publish nothing."""
     mark_incomplete_deliveries()
     initialize()
-    initialize_normalization()
     if is_rate_limited():
         return []
     conn = get_connection()
     try:
+        # Ensure the aliases table belongs to THIS connection, including
+        # standalone/test databases distinct from config.DB_NAME.
+        initialize_normalization(conn=conn)
         rules = [dict(row) for row in conn.execute("""SELECT r.*, t.chat_id,
             t.enabled AS target_enabled FROM publishing_rules r
             JOIN publishing_targets t ON t.id=r.target_id

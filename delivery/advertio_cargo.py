@@ -19,6 +19,29 @@ ITEMS = {"documents", "clothes", "electronics", "food", "other"}
 CURRENCIES = {"CAD", "USD", "EUR", "GBP"}
 
 
+def cargo_queue_eligibility_sql():
+    """SQL for records that may be sent, shared by worker and dashboard.
+
+    Requires aliases m (messages) and t (transferlist). Parameter order:
+    (undated_message_cutoff, earliest_departure_date). The platform's city
+    catalog is authoritative: this preliminary filter never guesses a city.
+    """
+    countries = ",".join("'" + country + "'" for country in sorted(COUNTRIES))
+    return f"""
+        t.origin_city IS NOT NULL AND TRIM(t.origin_city)<>''
+        AND t.destination_city IS NOT NULL AND TRIM(t.destination_city)<>''
+        AND UPPER(TRIM(COALESCE(t.origin_country,''))) IN ({countries})
+        AND UPPER(TRIM(COALESCE(t.destination_country,''))) IN ({countries})
+        AND (
+            ((t.departure_date IS NULL OR TRIM(t.departure_date)='')
+             AND substr(m.date,1,10)>=?)
+            OR
+            (t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
+             AND date(substr(t.departure_date,1,10))>=date(?))
+        )
+    """
+
+
 class CargoMappingError(ValueError):
     """A source post cannot be represented faithfully by the cargo API."""
 
@@ -187,7 +210,7 @@ class AdvertioCargoService:
                    AND m.ai_category='transferlist'
                    AND COALESCE(d.status,'waiting') IN ('waiting','retry')
                    AND (d.next_attempt_at IS NULL OR d.next_attempt_at<=?)
-                   AND (substr(m.date,1,10)>=? OR substr(t.departure_date,1,10)>=?)
+                   AND (""" + cargo_queue_eligibility_sql() + """)
             """
             values = [today.isoformat(), cutoff, today.date().isoformat()]
             if before_datetime:
@@ -196,7 +219,22 @@ class AdvertioCargoService:
             if channel_username:
                 sql += " AND m.channel_username=?"
                 values.append(channel_username)
-            sql += " ORDER BY m.id ASC LIMIT ?"
+            # Time-sensitive trips should be delivered first; undated ads
+            # follow newest-first. Do not let re-crawled expired trips or
+            # unsupported routes consume an entire small manual batch.
+            sql += """
+                ORDER BY
+                  CASE WHEN t.departure_date IS NOT NULL
+                             AND TRIM(t.departure_date)<>'' THEN 0 ELSE 1 END,
+                  CASE WHEN t.departure_date IS NOT NULL
+                             AND TRIM(t.departure_date)<>''
+                       THEN date(substr(t.departure_date,1,10)) END ASC,
+                  CASE WHEN t.departure_date IS NULL
+                             OR TRIM(t.departure_date)=''
+                       THEN m.date END DESC,
+                  m.id DESC
+                LIMIT ?
+            """
             values.append(int(limit))
             return [dict(row) for row in conn.execute(sql, values).fetchall()]
         finally:

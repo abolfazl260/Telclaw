@@ -1499,7 +1499,7 @@ async def operations_page(request):
     if cargo_report.get("sent", 0) and not cargo_report.get("auto_publish"):
         cargo_alerts.append("Successful API submission is not public publication: cargo autoPublish=false; approve PendingReview leads in Advertio.")
     cargo_alert_html = "".join('<p class="ops-error">' + _escape(item) + '</p>' for item in cargo_alerts)
-    cargo_error_html = ('<p class="ops-error">Last cargo error: ' + _escape(cargo_report["last_error"]) + '</p>'
+    cargo_error_html = ('<p class="ops-error">Last recorded cargo rejection (may be historical): ' + _escape(cargo_report["last_error"]) + '</p>'
         if cargo_report.get("last_error") else "")
     cargo_rows = []
     for item in cargo_report.get("recent", []):
@@ -1762,7 +1762,8 @@ async def operations_page(request):
         <p>AI processed: <strong>{int(cargo_report.get('processed') or 0):,}</strong> ·
         AI failed: <strong>{int(cargo_report.get('ai_failed') or 0):,}</strong> ·
         Pending AI: <strong>{int(cargo_report.get('ai_pending') or 0):,}</strong></p>
-        <p>Waiting: <strong>{int(cargo_report.get('waiting') or 0):,}</strong> ·
+        <p><strong>Ready to send now: {int(cargo_report.get('ready_to_send') or 0):,}</strong> ·
+        Waiting (date-window estimate): <strong>{int(cargo_report.get('waiting') or 0):,}</strong> ·
         Retry: <strong>{int(cargo_report.get('retry') or 0):,}</strong> ·
         Sent to API: <strong>{int(cargo_report.get('sent') or 0):,}</strong> ·
         Already existed: <strong>{int(cargo_report.get('already_existed') or 0):,}</strong> ·
@@ -1774,7 +1775,8 @@ async def operations_page(request):
         <p class="muted">Destination: {_escape(cargo_report.get('base_url') or config.ADVERTIO_BASE_URL)} · Historical undated backfill: last {int(cargo_report.get('backfill_days') or 30)} days. “Sent to API” means accepted by the API, not necessarily visible publicly.</p>
         <details class="ops-help"><summary>What do these cargo statuses mean?</summary>
           <ul><li><strong>AI processed / pending / failed:</strong> extraction status before delivery.</li>
-          <li><strong>Waiting:</strong> eligible for an API attempt. <strong>Retry:</strong> a temporary failure will be retried.</li>
+          <li><strong>Ready to send now:</strong> passes local date, route, supported-country and retry-window filters. The API still validates city names, content and duplicates.</li>
+          <li><strong>Waiting:</strong> records not yet sent, including some that may be filtered out. <strong>Retry:</strong> a temporary failure will be retried.</li>
           <li><strong>Sent to API:</strong> the API accepted the listing. This is not proof that it is publicly visible.</li>
           <li><strong>Already existed:</strong> Advertio reported the same listing already exists; Telclaw will not create it again.</li>
           <li><strong>Rejected:</strong> fix the source data before using Requeue.</li>

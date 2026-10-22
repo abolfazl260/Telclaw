@@ -192,3 +192,140 @@ def test_route_only_backfill_does_not_change_descriptions_or_status(city_db):
     assert msg["raw_text"] == "do not change this Telegram message"
     assert msg["advertio_status"] == "sent"
     assert cache["origin_city_canonical"] == "Guangzhou"
+
+
+@pytest.mark.parametrize("country,source,expected", [
+    ("RU", "Moscow/Naberezhnye Chelny", "Moscow"),
+    ("IR", "Tehran-Mashhad", "Tehran"),
+    ("IR", "Tehran/Karaj", "Tehran"),
+    ("ID", "Бали", "Bali"),
+    ("", "Бали", "Bali"),
+    ("IR", "Air Tour", None),
+    ("", "Air Tour", None),
+])
+def test_operator_reviewed_city_corrections_on_both_route_sides(city_db, country, source, expected):
+    record = {
+        "origin_country": country,
+        "origin_city": source,
+        "destination_country": country,
+        "destination_city": source,
+    }
+    result, changes = data_normalizer.normalize_category_data("transferlist", record)
+    assert result["origin_city"] == expected
+    assert result["destination_city"] == expected
+    assert changes["origin_city"] == (source, expected)
+    assert changes["destination_city"] == (source, expected)
+    # A non-city value or an island must not invent an administrative province.
+    if source in ("Бали", "Air Tour"):
+        assert not result.get("origin_province")
+        assert not result.get("destination_province")
+
+
+@pytest.mark.parametrize("country,source", [
+    ("IR", "Moscow/Naberezhnye Chelny"),
+    ("DE", "Tehran-Mashhad"),
+    ("CA", "Tehran/Karaj"),
+    ("", "Tehran-Mashhad"),
+])
+def test_primary_city_operator_overrides_require_correct_country(city_db, country, source):
+    record = {"origin_city": source, "origin_country": country}
+    normalized, changes = data_normalizer.normalize_category_data("transferlist", record)
+    assert normalized["origin_city"] == source
+    assert "origin_city" not in changes
+
+
+def test_operator_city_rules_seed_only_once_and_preserve_manual_override(city_db):
+    rules = data_normalizer.list_aliases()
+    expected = (
+        ("RU", "Moscow/Naberezhnye Chelny", "Moscow"),
+        ("IR", "Tehran-Mashhad", "Tehran"),
+        ("IR", "Tehran/Karaj", "Tehran"),
+        ("", "Бали", "Bali"),
+        ("", "Air Tour", None),
+    )
+    for country, alias, canonical in expected:
+        for field in ("origin_city", "destination_city"):
+            filtered = [
+                rule for rule in rules
+                if rule["category"] == "transferlist"
+                and rule["field_name"] == field
+                and rule["country_iso2"] == country
+                and data_normalizer._alias_key(rule["alias"]) == data_normalizer._alias_key(alias)
+            ]
+            assert len(filtered) == 1
+            assert filtered[0]["canonical_value"] == canonical
+
+    origin_rule = next(rule for rule in rules
+                       if rule["category"] == "transferlist"
+                       and rule["field_name"] == "origin_city"
+                       and rule["country_iso2"] == "IR"
+                       and rule["alias"] == "Tehran/Karaj")
+    data_normalizer.save_alias(
+        "transferlist", "origin_city", "Tehran/Karaj", "Karaj",
+        country_iso2="IR", alias_id=origin_rule["id"], admin_id=1485409432
+    )
+    data_normalizer.initialize()
+    changed, _ = data_normalizer.normalize_category_data(
+        "transferlist", {"origin_city": "Tehran/Karaj", "origin_country": "IR",
+                         "destination_city": "Tehran/Karaj", "destination_country": "IR"}
+    )
+    assert changed["origin_city"] == "Karaj"
+    assert changed["destination_city"] == "Tehran"
+
+
+def test_new_city_rules_update_historical_structured_rows_only(city_db):
+    for index, (country, city, expected) in enumerate((
+        ("RU", "Moscow/Naberezhnye Chelny", "Moscow"),
+        ("IR", "Tehran-Mashhad", "Tehran"),
+        ("IR", "Tehran/Karaj", "Tehran"),
+        ("ID", "Бали", "Bali"),
+        ("AE", "Air Tour", None),
+    ), start=400):
+        database.insert_message(
+            "source_for_corrections", index, "historical raw", "2026-10-22",
+            raw_text="historical raw original",
+        )
+        conn = database.get_connection()
+        try:
+            message_row_id = conn.execute(
+                "SELECT id FROM messages WHERE channel_username=? AND message_id=?",
+                ("source_for_corrections", index)
+            ).fetchone()[0]
+            conn.execute(
+                """INSERT INTO transferlist(
+                       processed_message_id,origin_city,origin_country,
+                       destination_city,destination_country,
+                       description,departure_date)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (message_row_id, city, country, city, country,
+                 "Original cleaned description", "2026-11-30"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    result = data_normalizer.renormalize_transfer_cities_only()
+    assert result["rows_changed"] == 5
+    assert result["cells_changed"] == 10
+    again = data_normalizer.renormalize_transfer_cities_only()
+    assert again["cells_changed"] == 0
+
+    conn = database.get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT m.message_id, m.raw_text, t.origin_city, t.destination_city, "
+            "t.description, t.departure_date "
+            "FROM messages m JOIN transferlist t ON t.processed_message_id=m.id "
+            "ORDER BY m.message_id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [row["origin_city"] for row in rows] == [
+        "Moscow", "Tehran", "Tehran", "Bali", None
+    ]
+    assert [row["destination_city"] for row in rows] == [
+        "Moscow", "Tehran", "Tehran", "Bali", None
+    ]
+    assert all(row["raw_text"] == "historical raw original" for row in rows)
+    assert all(row["description"] == "Original cleaned description" for row in rows)
+    assert all(row["departure_date"] == "2026-11-30" for row in rows)

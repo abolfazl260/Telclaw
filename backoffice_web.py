@@ -1016,7 +1016,7 @@ def _safe_csv_cell(value):
         return ""
     if not isinstance(value, str):
         return value
-    if re.match(r"^[\\s\\x00-\\x1f]*[=+@-]", value):
+    if re.match(r"^[\s\x00-\x1f]*[=+@-]", value):
         return "'" + value
     return value
 
@@ -1039,7 +1039,7 @@ async def data_export(request):
             buffer = io.StringIO(newline="")
             writer = csv.writer(buffer)
             # Excel recognises BOM and preserves Persian/Russian text.
-            buffer.write("\\ufeff")
+            buffer.write("\ufeff")
             writer.writerow(names)
             await response.write(buffer.getvalue().encode("utf-8"))
             buffer.seek(0)

@@ -920,6 +920,19 @@ def normalize_category_data(category, data, *, conn=None):
             if after != before:
                 result[field_name] = after
                 changes[field_name] = (before, after)
+        if category == "transferlist":
+            from storage.transfer_province_map import lookup_province
+            for side in ("origin", "destination"):
+                province_field = f"{side}_province"
+                before = result.get(province_field)
+                if before is not None and str(before).strip():
+                    continue  # Fill missing only: preserve explicit source values.
+                proposed = lookup_province(
+                    result.get(f"{side}_country"), result.get(f"{side}_city")
+                )
+                if proposed:
+                    result[province_field] = proposed
+                    changes[province_field] = (before, proposed)
         return result, changes
     finally:
         if owns_conn:
@@ -1055,6 +1068,92 @@ def renormalize_transfer_cities_only():
         raise
     finally:
         conn.close()
+
+
+def _province_fill_updates(row, rules):
+    """Look up province using normalized country/city without changing them."""
+    from storage.transfer_province_map import lookup_province
+    lookup_row = dict(row)
+    for side in ("origin", "destination"):
+        for suffix in ("country", "city"):
+            name = f"{side}_{suffix}"
+            value = normalize_builtin_field_value("transferlist", name, lookup_row.get(name))
+            lookup_row[name] = _normalize_with_rules(
+                "transferlist", name, value, lookup_row, rules
+            )
+    changes = {}
+    conflicts = 0
+    for side in ("origin", "destination"):
+        field = f"{side}_province"
+        inferred = lookup_province(
+            lookup_row.get(f"{side}_country"),
+            lookup_row.get(f"{side}_city"),
+        )
+        if not inferred:
+            continue
+        existing = row.get(field)
+        if existing is not None and str(existing).strip():
+            if _alias_key(existing) != _alias_key(inferred):
+                conflicts += 1
+            continue
+        changes[field] = inferred
+    return changes, conflicts
+
+
+def _transfer_province_fill(*, apply=False):
+    """Preview or fill empty transfer provinces. No other columns are touched."""
+    initialize()
+    conn = database.get_connection()
+    counts = {
+        "rows_scanned": 0, "rows_to_fill": 0, "fields_to_fill": 0,
+        "origin_to_fill": 0, "destination_to_fill": 0,
+        "existing_mismatches": 0, "rows_updated": 0,
+    }
+    try:
+        rules = _rules_for_category(conn, "transferlist")
+        cursor = conn.execute("""
+            SELECT id, origin_country, origin_city, origin_province,
+                   destination_country, destination_city, destination_province
+            FROM transferlist
+        """)
+        for sqlite_row in cursor:
+            row = dict(sqlite_row)
+            counts["rows_scanned"] += 1
+            updates, mismatches = _province_fill_updates(row, rules)
+            counts["existing_mismatches"] += mismatches
+            if not updates:
+                continue
+            counts["rows_to_fill"] += 1
+            counts["fields_to_fill"] += len(updates)
+            counts["origin_to_fill"] += int("origin_province" in updates)
+            counts["destination_to_fill"] += int("destination_province" in updates)
+            if not apply:
+                continue
+            for name, province in updates.items():
+                cursor_update = conn.execute(
+                    f'UPDATE transferlist SET "{name}"=? WHERE id=? AND '
+                    f'("{name}" IS NULL OR TRIM("{name}")=\'\')',
+                    (province, row["id"]),
+                )
+                counts["rows_updated"] += cursor_update.rowcount
+        if apply:
+            conn.commit()
+        return counts
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def preview_transfer_missing_provinces():
+    """No production changes; call only on explicit Back Office preview."""
+    return _transfer_province_fill(apply=False)
+
+
+def fill_transfer_missing_provinces():
+    """Fill missing origin/destination provinces with a single transaction."""
+    return _transfer_province_fill(apply=True)
 
 
 def count_current_matches(alias_id):

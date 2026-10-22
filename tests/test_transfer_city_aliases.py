@@ -132,7 +132,7 @@ def test_backfill_only_structured_data_and_transfer_locations(city_db):
 
     result = data_normalizer.renormalize_existing("transferlist")
     assert result["rows_changed"] == 1
-    assert result["cells_changed"] == 4
+    assert result["cells_changed"] == 6  # 4 route aliases + 2 provinces
 
     conn = database.get_connection()
     try:

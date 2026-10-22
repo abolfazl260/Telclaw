@@ -46,7 +46,10 @@ def test_builtin_transfer_city_aliases_are_canonicalized(norm_db):
 
     assert normalized["origin_city"] == "Düsseldorf"
     assert normalized["destination_city"] == "Frankfurt"
-    assert set(changes) == {"origin_city", "destination_city"}
+    assert set(changes) == {"origin_city", "destination_city",
+                            "origin_province", "destination_province"}
+    assert normalized["origin_province"] == "North Rhine-Westphalia"
+    assert normalized["destination_province"] == "Hesse"
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -143,7 +146,7 @@ def test_backfill_cleans_existing_structured_rows_but_not_raw_message(norm_db):
 
     result = data_normalizer.renormalize_existing("transferlist")
     assert result["rows_changed"] == 1
-    assert result["cells_changed"] == 2
+    assert result["cells_changed"] == 4  # cities + missing provinces
 
     conn = database.get_connection()
     try:

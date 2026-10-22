@@ -2157,8 +2157,31 @@ async def normalization_page(request):
              ('?view=cargo' if show_cargo else '') +
              '#existing-aliases">Hide rules</a>')
         )
+    province_preview = None
+    if request.query.get("province_preview") == "1":
+        # Only on explicit request; the default Normalization page remains fast.
+        province_preview = data_normalizer.preview_transfer_missing_provinces()
+    if province_preview is not None:
+        province_preview_html = (
+            '<p class="normalization-notice">Preview (no data changed): '
+            + str(province_preview["rows_to_fill"]) + ' cargo record(s) have '
+            + str(province_preview["fields_to_fill"]) + ' missing province field(s) with a verified city/country mapping. '
+            + 'Origin: ' + str(province_preview["origin_to_fill"])
+            + '; destination: ' + str(province_preview["destination_to_fill"])
+            + '. Existing nonempty province differences kept for review: '
+            + str(province_preview["existing_mismatches"]) + '.</p>'
+        )
+    else:
+        province_preview_html = ""
     notice = request.query.get("notice", "")
-    if notice == "applied":
+    if notice == "provinces_filled":
+        notice_html = (
+            '<p class="normalization-notice">Province fill completed: '
+            + _escape(request.query.get("rows", "0")) + ' record(s), '
+            + _escape(request.query.get("fields", "0")) + ' empty province field(s) filled. '
+            + 'Existing provinces and all other columns were unchanged.</p>'
+        )
+    elif notice == "applied":
         notice_html = (f'<p class="normalization-notice">Re-normalization complete: '
                        f'{_escape(request.query.get("rows", "0"))} row(s), '
                        f'{_escape(request.query.get("cells", "0"))} cell(s) changed. '
@@ -2200,6 +2223,22 @@ async def normalization_page(request):
       <form method="post" action="/normalization/apply-transfer-cities">
         <input type="hidden" name="csrf" value="{csrf}">
         <button data-confirm="Apply reviewed country-scoped cargo city/country rules to existing transferlist rows? Make sure SQLite is backed up.">Apply cargo city/country rules to existing transferlist</button>
+      </form>
+    </section>
+    <section id="province-fill"><h2>Fill missing cargo provinces / states</h2>
+      <p class="muted">Based on verified country + city mappings from the 3,655-row cargo CSV.
+      Province names use full English state/province/region names (e.g. Ontario,
+      North Rhine-Westphalia, Guangdong, Tehran). Existing province values
+      are never overwritten. Ambiguous routes and country-only city fields
+      remain empty. Only <code>transferlist.origin_province</code> and
+      <code>transferlist.destination_province</code> are updated.</p>
+      <p class="normalization-warning">Back up SQLite before applying.
+      Preview is read-only. Neither operation publishes or resends any ads.</p>
+      <p><a href="/normalization?province_preview=1#province-fill">Preview matching empty provinces</a></p>
+      {province_preview_html}
+      <form method="post" action="/normalization/fill-transfer-provinces">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <button data-confirm="Fill ONLY empty origin/destination province fields using exact country+city mappings? Verify the preview and back up SQLite first.">Fill missing cargo provinces</button>
       </form>
     </section>
     <section><h2>Existing database (all fields)</h2>
@@ -2284,6 +2323,16 @@ async def apply_transfer_city_normalization(request):
     result = data_normalizer.renormalize_transfer_cities_only()
     raise web.HTTPSeeOther(
         f"/normalization?view=cargo&notice=applied&rows={int(result['rows_changed'])}&cells={int(result['cells_changed'])}"
+    )
+
+
+async def fill_transfer_provinces(request):
+    result = data_normalizer.fill_transfer_missing_provinces()
+    raise web.HTTPSeeOther(
+        "/normalization?notice=provinces_filled"
+        f"&rows={int(result['rows_to_fill'])}"
+        f"&fields={int(result['fields_to_fill'])}"
+        "#province-fill"
     )
 
 
@@ -2552,6 +2601,7 @@ def create_app(console_ui=None):
                     web.post("/normalization/delete", delete_normalization_alias),
                     web.post("/normalization/apply", apply_normalization),
                     web.post("/normalization/apply-transfer-cities", apply_transfer_city_normalization),
+                    web.post("/normalization/fill-transfer-provinces", fill_transfer_provinces),
                     web.post("/settings/save", save_setting),
                     web.post("/settings/reset", reset_setting),
                     web.get("/data/cell", data_cell),

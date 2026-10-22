@@ -101,6 +101,36 @@ class AIProviderManager:
             retry_after=remaining,
         )
 
+    def _try_alternate_extraction_after_invalid_output(self, error, *args, **kwargs):
+        """Use another configured AI provider when the primary emits bad JSON.
+
+        Malformed output can be specific to a source text or a model. Do not
+        impose a global cooldown on the primary for a content-level failure,
+        and do not repair malformed JSON or accept partially validated data.
+        Only the extraction stage uses this fallback; classification rules
+        and their output contracts are unchanged.
+        """
+        if len(self.providers) < 2:
+            raise error
+
+        last_error = error
+        current = self.active_index
+        now = time.monotonic()
+        for offset in range(1, len(self.providers)):
+            index = (current + offset) % len(self.providers)
+            if self._unavailable_until[index] > now:
+                continue
+            candidate = self.providers[index]
+            try:
+                return candidate.extract(*args, **kwargs)
+            except AIExtractionError as alternate_error:
+                if getattr(alternate_error, "reason", None) != "invalid_provider_output":
+                    # Preserve real network/rate-limit/permission errors rather
+                    # than misreporting them as malformed JSON.
+                    raise
+                last_error = alternate_error
+        raise last_error
+
     def _call(self, method, *args, **kwargs):
         attempts = 0
         last_error = None
@@ -113,6 +143,10 @@ class AIProviderManager:
                 return result
             except AIExtractionError as exc:
                 last_error = exc
+                if method == "extract" and getattr(exc, "reason", None) == "invalid_provider_output":
+                    return self._try_alternate_extraction_after_invalid_output(
+                        exc, *args, **kwargs
+                    )
                 if not self._is_failover_error(exc):
                     raise
 

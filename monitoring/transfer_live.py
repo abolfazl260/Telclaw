@@ -162,6 +162,19 @@ def _fetch_active_rows():
         conn.close()
 
 
+def active_transferlive_message_ids() -> tuple[int, ...]:
+    """Same de-duplicated, valid-country cohort counted by /transferlive.
+
+    This is intentionally NOT the Advertio API eligibility set: routes from
+    any valid country may appear, and a departure date is mandatory.
+    """
+    return tuple(
+        int(row["message_row_id"])
+        for row in _fetch_active_rows()
+        if _country_code(row["origin_country"]) and _country_code(row["destination_country"])
+    )
+
+
 def _country_summary_rows(rows):
     """Aggregate active transfer requests by origin and destination country."""
     counts = {}

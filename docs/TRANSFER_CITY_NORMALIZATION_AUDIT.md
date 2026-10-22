@@ -33,6 +33,41 @@ Rules also cover other high-confidence examples, including `SPB` →
 `Montréal` → `Montreal` (CA), `Toronto North York` →
 `Toronto` (CA), and `Washington D.C.` → `Washington, D.C.` (US).
 
+## Four additional operator-requested rules
+
+The following five exact aliases implement the four corrections requested by
+the operator. They are applied to **both** `origin_city` and
+`destination_city` in the existing Normalization system, and affect new
+structured records immediately. Country-specific rules are scoped to the
+matching ISO country; the two text-only rules work regardless of country.
+
+| Country scope | Original city value | Canonical city value | Reason |
+|---|---|---|---|
+| RU | `Moscow/Naberezhnye Chelny` | `Moscow` | User chose Moscow as primary, drops secondary city from structured field |
+| IR | `Tehran-Mashhad` | `Tehran` | User chose Tehran as primary, drops Mashhad |
+| IR | `Tehran/Karaj` | `Tehran` | User chose Tehran as primary, drops Karaj |
+| Any | `Бали` | `Bali` | Russian-to-English spelling only; **Bali is an island/province, not a specified city** |
+| Any | `Air Tour` | SQL `NULL` | Airline/tour text is not a city |
+
+The primary-city exceptions intentionally discard alternative cities
+**only from structured city columns**. Raw source messages and cleaned
+descriptions stay intact; the system must not silently apply these choices
+to other composite city strings. Existing operator-managed aliases have
+precedence, and the defaults use `INSERT OR IGNORE`.
+
+Bali's English spelling does not make it a verified city, so do **not** infer
+a municipality, geolocation or province from the text alone. This rule
+does not enable Advertio API delivery for an unsupported or ambiguous
+location.
+
+To correct existing entries, first back up SQLite, deploy and restart
+Telclaw, review the new rules under **Normalization → Cargo city/country
+rules** (load a page as needed), then run **Apply cargo city/country rules
+to existing transferlist**. That route-only action updates structured
+origin/destination city and country values, not raw messages, dates,
+descriptions or prior delivery states. The existing province-fill action
+is separate and will not infer a city from `Bali`.
+
 ## Values excluded from automatic city mapping
 
 - **A country in a city field**: `Iran`, `China`, `Germany`,

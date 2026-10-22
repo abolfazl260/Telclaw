@@ -1,5 +1,8 @@
 """Private rule back office, served directly or behind a proxy."""
 import hashlib
+import csv
+import io
+import re
 import html
 import ipaddress
 import json
@@ -1007,6 +1010,52 @@ def _filter_header(name, data_type, active, table=None):
         placeholder="Value…" aria-label="Filter value for {escaped_name}"></div></th>'''
 
 
+def _safe_csv_cell(value):
+    """Keep Unicode and original newlines; prevent spreadsheet formulas."""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return value
+    if re.match(r"^[\s\x00-\x1f]*[=+@-]", value):
+        return "'" + value
+    return value
+
+
+async def data_export(request):
+    """Download all and only the currently filtered table rows as UTF-8 CSV."""
+    table = request.query.get("table", "messages")
+    requested_filters = _requested_data_filters(request.query)
+    try:
+        with backoffice_data.filtered_export_rows(table, requested_filters) as (names, cursor):
+            now = _now().strftime("%Y%m%d")
+            response = web.StreamResponse(
+                status=200,
+                headers={
+                    "Content-Type": "text/csv; charset=utf-8",
+                    "Content-Disposition": f'attachment; filename="telclaw-{table}-filtered-{now}.csv"',
+                },
+            )
+            await response.prepare(request)
+            buffer = io.StringIO(newline="")
+            writer = csv.writer(buffer)
+            # Excel recognises BOM and preserves Persian/Russian text.
+            buffer.write("\ufeff")
+            writer.writerow(names)
+            await response.write(buffer.getvalue().encode("utf-8"))
+            buffer.seek(0)
+            buffer.truncate(0)
+            while batch := cursor.fetchmany(200):
+                for row in batch:
+                    writer.writerow([_safe_csv_cell(row[name]) for name in names])
+                await response.write(buffer.getvalue().encode("utf-8"))
+                buffer.seek(0)
+                buffer.truncate(0)
+            await response.write_eof()
+            return response
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+
+
 async def data_page(request):
     table = request.query.get("table", "messages")
     requested_filters = _requested_data_filters(request.query)
@@ -1051,6 +1100,15 @@ async def data_page(request):
     headers = "".join(_filter_header(name, result["columns"][name], result["filters"].get(name), table)
                       for name in names)
     filter_count = len(result["filters"])
+    # Reuse only the active filter specs returned by the exact data query.
+    # Page number is intentionally absent: export includes every matched row.
+    export_link = (
+        '<a class="export-filtered" href="' +
+        _escape(_data_url(table, filters=result["filters"]).replace("/data?", "/data/export?", 1)) +
+        '">Download filtered CSV (' + str(result["total"]) + ' rows)</a>'
+        if filter_count else
+        '<span class="muted">Apply a filter to enable CSV download</span>'
+    )
     filter_summary = (f'<span class="filter-summary">{filter_count} active filter'
                       f'{"s" if filter_count != 1 else ""}</span>' if filter_count else "")
     csrf = _escape(request["session"]["csrf"])
@@ -1068,9 +1126,11 @@ async def data_page(request):
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
     <section data-table="{table}">{text_help}<p>{result['total']} rows · Page {result['page']} of {result['pages']}
     · {backoffice_data.PAGE_SIZE} per page. Click a blue cell to edit it.</p>
+    <p class="muted">CSV download includes all rows matching the applied filters across every page,
+    not the entire database. It is unavailable without an active filter.</p>
     <form method="get" action="/data" class="filter-form"><input type="hidden" name="table" value="{_escape(table)}">
     <div class="filter-actions"><button type="submit">Apply filters</button>
-    <a href="/data?table={_escape(table)}">Clear filters</a>{filter_summary}</div>
+    <a href="/data?table={_escape(table)}">Clear filters</a>{filter_summary}{export_link}</div>
     <div class="scroll"><table><thead><tr>{headers}</tr></thead>
     <tbody>{''.join(cells) or f'<tr><td colspan="{len(names)}">No rows match these filters.</td></tr>'}</tbody>
     </table></div></form><nav class="pagination">{''.join(pagination)}</nav></section>
@@ -2406,7 +2466,7 @@ def create_app(console_ui=None):
                     web.get("/operations", operations_page),
                     web.get("/cargo", cargo_page), web.post("/cargo/send", cargo_send),
                     web.post("/operations/action", operations_action),
-                    web.get("/data", data_page), web.get("/normalization", normalization_page),
+                    web.get("/data", data_page), web.get("/data/export", data_export), web.get("/normalization", normalization_page),
                     web.get("/health", health_page), web.get("/settings", settings_page),
                     web.post("/normalization/save", save_normalization_alias),
                     web.post("/normalization/delete", delete_normalization_alias),

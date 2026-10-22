@@ -850,3 +850,101 @@ def test_channel_status_counts_follow_current_original_state(rule_db):
     stats = routing_rules.delivery_status_counts()[1]
     assert stats["combined"] == {"sent": 1}
     assert stats["total_records"] == 1
+
+
+def test_delivery_recovery_does_not_write_when_all_sends_are_healthy(rule_db, monkeypatch):
+    # Trace only SQL issued by the recovery function (including its initialize
+    # call); healthy cycles must not issue UPDATEs on delivery tables.
+    seen = []
+    def tracing_connection():
+        conn = rule_db()
+        conn.set_trace_callback(lambda sql: seen.append(sql))
+        return conn
+    monkeypatch.setattr(routing_rules, "get_connection", tracing_connection)
+    assert routing_rules.mark_incomplete_deliveries() == 0
+    assert not any(
+        sql.strip().upper().startswith("UPDATE PUBLISHING_DELIVERIES")
+        or sql.strip().upper().startswith("UPDATE PUBLISHING_RESENDS")
+        for sql in seen
+    )
+
+
+def test_recovery_only_marks_stale_send_uncertain_never_retry(rule_db):
+    from datetime import datetime, timedelta, timezone
+
+    routing_rules.save_target("Auto", "@autochannel")
+    now = datetime.now(timezone.utc)
+    stale = (now - timedelta(minutes=12)).isoformat()
+    fresh = (now - timedelta(minutes=1)).isoformat()
+    conn = rule_db()
+    try:
+        conn.execute(
+            "INSERT INTO publishing_deliveries "
+            "(message_id,target_id,status,updated_at) VALUES(1,1,'sending',?)",
+            (stale,),
+        )
+        conn.execute(
+            "INSERT INTO publishing_resends "
+            "(message_id,target_id,status,created_at,updated_at) "
+            "VALUES(1,1,'sending',?,?)",
+            (stale, stale),
+        )
+        conn.execute(
+            "INSERT INTO publishing_resends "
+            "(message_id,target_id,status,created_at,updated_at) "
+            "VALUES(1,1,'sending',?,?)",
+            (fresh, fresh),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    routing_rules.mark_incomplete_deliveries()
+    conn = rule_db()
+    try:
+        delivered = conn.execute(
+            "SELECT status,error FROM publishing_deliveries WHERE message_id=1"
+        ).fetchone()
+        resends = conn.execute(
+            "SELECT status FROM publishing_resends ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert delivered["status"] == "uncertain"
+    assert "Check the channel" in delivered["error"]
+    assert [row["status"] for row in resends] == ["uncertain", "sending"]
+    assert routing_rules.claim_delivery(1, 1) is False  # no duplicate Telegram posts
+
+
+@pytest.mark.asyncio
+async def test_publisher_defers_locked_preflight_without_sending(rule_db, monkeypatch):
+    publisher = routed_publisher.RoutedPublisher(token="fake-token")
+    attempts = []
+    monkeypatch.setattr(routing_rules, "is_rate_limited", lambda: False)
+
+    def busy_pending(limit):
+        attempts.append(("pending", limit))
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(routing_rules, "pending", busy_pending)
+    monkeypatch.setattr(publisher, "_koolbar_pairs", lambda limit: attempts.append(
+        ("koolbar", limit)
+    ))
+    result = await publisher.publish_pending(limit=50)
+    assert result == {
+        "found": 0, "sent": 0, "failed": 0, "rejected": 0,
+        "db_busy": True,
+    }
+    assert attempts == [("pending", 50)]
+
+
+@pytest.mark.asyncio
+async def test_publisher_does_not_hide_other_database_errors(rule_db, monkeypatch):
+    publisher = routed_publisher.RoutedPublisher(token="fake-token")
+    monkeypatch.setattr(routing_rules, "is_rate_limited", lambda: False)
+    monkeypatch.setattr(
+        routing_rules, "pending",
+        lambda _: (_ for _ in ()).throw(sqlite3.OperationalError("no such table: messages"))
+    )
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        await publisher.publish_pending(limit=10)

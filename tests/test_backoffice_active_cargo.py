@@ -73,6 +73,9 @@ async def test_active_cargo_page_renders_safe_active_report(isolated_db):
     assert response.status == 200
     assert "Active Cargo · Advertio" in response.text
     assert "Active cargo overview" in response.text
+    assert "Telegram /transferlive (unique)" in response.text
+    assert 'name="view"' in response.text
+    assert "Match Telegram /transferlive (deduplicated)" in response.text
     assert "Toronto document transport" in response.text
     assert 'name="record_id"' in response.text
     assert "Send selected active cargo to Advertio" in response.text
@@ -89,6 +92,12 @@ async def test_active_cargo_page_applies_filters(isolated_db):
         FakeRequest(query={"status": "sent", "search": "nothing"})
     )
     assert "No cargo ads match" in response.text
+    telegram_view = await backoffice_cargo_page.cargo_page(
+        FakeRequest(query={"view": "telegram"})
+    )
+    assert telegram_view.status == 200
+    assert 'value="telegram" selected' in telegram_view.text
+    assert "Toronto document transport" in telegram_view.text
     with pytest.raises(Exception) as raised:
         await backoffice_cargo_page.cargo_page(
             FakeRequest(query={"status": "malicious OR 1=1"})

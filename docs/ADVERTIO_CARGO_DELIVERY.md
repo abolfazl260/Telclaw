@@ -134,6 +134,18 @@ publication:
    flagged Similar still require moderation. Existing PendingReview leads
    remain pending until a separate backend approval flow handles them safely.
 
+### Comparing the Telegram /transferlive numbers
+
+The Back Office's active-cargo count and Telegram `/transferlive` historically
+differed by design. The Telegram command requires a departure date of today
+or later, valid two-letter origin/destination country codes, and deduplicates
+by sender identity, route and departure date. The Advertio candidate report
+includes recent undated source posts, and counts each source record once.
+Use **Active Cargo → Report definition → Match Telegram /transferlive** to see
+exactly the same deduplicated source cohort and headline count. **Ready for API**
+is a separate, smaller subset and should not be expected to equal either
+"active" total.
+
 ### Active Cargo report (after deployment)
 
 - Open **Back Office → Active Cargo** (/cargo) for the date-active candidate

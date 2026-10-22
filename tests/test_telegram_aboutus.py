@@ -189,6 +189,8 @@ async def test_aboutus_command_is_registered(monkeypatch):
     for _, payload in registered:
         commands = [item["command"] for item in payload["commands"]]
         assert commands.count("aboutus") == 1
+        assert commands.count("transferlive") == 1
+        assert commands.count("transfercountry") == 1
         assert "database" in commands and "status" in commands
 
 @pytest.mark.asyncio
@@ -204,3 +206,26 @@ async def test_public_private_command_registration_survives_default_failure(monk
     monkeypatch.setattr(monitor, "_api", fake_api)
     await monitor._register_commands()
     assert scopes == ["default", "all_private_chats"]
+
+
+@pytest.mark.asyncio
+async def test_transferlive_installer_preserves_complete_scoped_command_menu(monkeypatch):
+    from monitoring.transfer_live import install_transfer_live_command
+
+    monitor = install_transfer_live_command(TelegramMonitor())
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    await monitor._register_commands()
+    assert len(calls) == 2  # no stale third default-only registration
+    assert [payload["scope"]["type"] for _, payload in calls] == [
+        "default", "all_private_chats",
+    ]
+    for method, payload in calls:
+        assert method == "setMyCommands"
+        names = {row["command"] for row in payload["commands"]}
+        assert {"aboutus", "transferlive", "transfercountry",
+                "database", "backoffice", "status"} <= names

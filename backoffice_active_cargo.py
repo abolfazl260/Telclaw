@@ -7,21 +7,23 @@ cannot be confirmed from SQLite. No crawl, AI or HTTP requests happen here.
 from datetime import datetime, timedelta, timezone
 from storage.database import get_connection
 from delivery.advertio_cargo import COUNTRIES, cargo_queue_eligibility_sql
+from monitoring.transfer_live import active_transferlive_message_ids
 import config
 
 PAGE_SIZE = 25
 STATUSES = ("all", "ready", "waiting", "retry", "sent", "already_existed", "rejected", "sending")
 TRIPS = ("all", "upcoming", "undated")
+VIEWS = ("advertio", "telegram")
 
 
-def active_cargo_report(*, page=1, status="all", trip="all", search=""):
+def active_cargo_report(*, page=1, status="all", trip="all", search="", view="advertio"):
     try:
         page = int(page)
     except (TypeError, ValueError) as exc:
         raise ValueError("Invalid page") from exc
     if page < 1 or page > 100000:
         raise ValueError("Invalid page")
-    if status not in STATUSES or trip not in TRIPS:
+    if status not in STATUSES or trip not in TRIPS or view not in VIEWS:
         raise ValueError("Invalid cargo filter")
     search = str(search or "").strip()
     if len(search) > 100:
@@ -39,7 +41,11 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
         ).fetchone() is not None
         if not has_messages or not has_transfer:
             return {"rows": [], "total": 0, "page": 1, "pages": 1,
-                    "summary": {}, "filters": {"status": status, "trip": trip, "search": search}}
+                    "summary": {"total": 0, "ready": 0, "transferlive": 0},
+                    "filters": {"status": status, "trip": trip, "search": search, "view": view}}
+        # Calculate parity directly from the SAME deduplicated /transferlive
+        # cohort, not a second approximation of sender/route uniqueness.
+        live_ids = active_transferlive_message_ids()
         has_delivery = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='advertio_cargo_deliveries'"
         ).fetchone() is not None
@@ -49,21 +55,37 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
         next_attempt = "d.next_attempt_at" if has_delivery else "NULL"
         error = "d.error" if has_delivery else "NULL"
         lead = "d.lead_id" if has_delivery else "NULL"
+        if view == "telegram":
+            # SQLite TEMP table is connection-private, not a mutation of
+            # the actual user database. Avoid a massive SQL IN parameter
+            # list, which fails on older SQLite builds above 999 IDs.
+            conn.execute("CREATE TEMP TABLE live_transfer_ids(message_row_id INTEGER PRIMARY KEY)")
+            conn.executemany(
+                "INSERT INTO live_transfer_ids(message_row_id) VALUES(?)",
+                ((value,) for value in live_ids),
+            )
         # Active is a date/freshness rule, NOT an assertion that a
         # Telegram post still exists. Unsupported routes remain visible in
-        # this report, but are not eligible to be selected for API sending.
+        # the Advertio candidate view, but are not eligible for API sending.
         active_sql = """(
             ((t.departure_date IS NULL OR TRIM(t.departure_date)='')
               AND substr(m.date,1,10)>=?)
             OR (t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
               AND date(substr(t.departure_date,1,10))>=date(?))
         )"""
-        expr = (
-            "m.processing_status='processed' AND m.ai_status='processed' "
-            "AND m.ai_category='transferlist' AND " + active_sql
-        )
-        base_values = [cutoff, today]
-        summary = {"total": 0, "ready": 0, "waiting": 0, "retry": 0,
+        if view == "telegram":
+            # This view is EXACTLY the same ID set used by the bot, including
+            # its sender/route/date deduplication and optional city fields.
+            expr = "m.id IN (SELECT message_row_id FROM live_transfer_ids)"
+            base_values = []
+        else:
+            expr = (
+                "m.processing_status='processed' AND m.ai_status='processed' "
+                "AND m.ai_category='transferlist' AND " + active_sql
+            )
+            base_values = [cutoff, today]
+        summary = {"total": 0, "ready": 0, "transferlive": len(live_ids),
+                   "waiting": 0, "retry": 0,
                    "sent": 0, "already_existed": 0, "rejected": 0, "sending": 0}
         summary_sql = f"""
             SELECT {state} status, COUNT(*) count FROM messages m
@@ -79,6 +101,8 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
             SELECT COUNT(*) FROM messages m
             JOIN transferlist t ON t.processed_message_id=m.id
             {join} WHERE {expr}
+            AND m.processing_status='processed'
+            AND m.ai_status='processed' AND m.ai_category='transferlist'
             AND ({cargo_queue_eligibility_sql()})
             AND {state} IN ('waiting','retry')
             AND ({next_attempt} IS NULL OR {next_attempt}<=?)
@@ -90,6 +114,8 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
         clauses = [expr]
         values = list(base_values)
         if status == "ready":
+            clauses.append("m.processing_status='processed'")
+            clauses.append("m.ai_status='processed' AND m.ai_category='transferlist'")
             clauses.append("(" + cargo_queue_eligibility_sql() + ")")
             values.extend([cutoff, today])
             clauses.append(f"{state} IN ('waiting','retry')")
@@ -120,7 +146,7 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
         pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(page, pages)
         sql = f"""
-            SELECT m.id AS row_id, m.message_id, m.channel_username,
+            SELECT m.id AS row_id, m.message_id, m.channel_username, m.processing_status,
                    m.message_link, m.date AS posted_at,
                    t.title, t.origin_city, t.origin_country,
                    t.destination_city, t.destination_country,
@@ -158,12 +184,13 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
             else:
                 row["blocked_reason"] = None
             row["sendable"] = (
-                country_ok and route_ok
+                row["processing_status"] == "processed"
+                and country_ok and route_ok
                 and row["status"] in ("waiting", "retry")
                 and (not row["next_attempt_at"] or row["next_attempt_at"] <= now.isoformat())
             )
         return {"rows": rows, "total": total, "page": page,
                 "pages": pages, "summary": summary,
-                "filters": {"status": status, "trip": trip, "search": search}}
+                "filters": {"status": status, "trip": trip, "search": search, "view": view}}
     finally:
         conn.close()

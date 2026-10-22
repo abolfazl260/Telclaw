@@ -36,6 +36,7 @@ async def cargo_page(request):
             status=q.get("status", "all"),
             trip=q.get("trip", "all"),
             search=q.get("search", ""),
+            view=q.get("view", "advertio"),
         )
     except ValueError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
@@ -149,13 +150,14 @@ async def cargo_page(request):
       <a href="/operations">Operations</a><a class="active" href="/cargo">Active Cargo</a>
       <a href="/data">Database</a><a href="/normalization">Normalization</a>
       <a href="/health">System Health</a><a href="/settings">Settings</a></nav>
-    <p class="hint">These are <strong>potentially active</strong> cargo posts, based on a future trip date or a recent undated source post (last {int(config.ADVERTIO_CARGO_BACKFILL_DAYS)} days).
-      This does not verify that the Telegram post still exists. The Ready count also checks route completeness and supported countries;
-      the Advertio API performs final city and duplicate validation. No existing ad or Telegram publication is changed.</p>
+    <p class="hint"><strong>Two different reports:</strong> the Advertio candidate pool includes future-dated trips and undated posts from the last {int(config.ADVERTIO_CARGO_BACKFILL_DAYS)} days, with no de-duplication.
+      Telegram <strong>/transferlive</strong> includes only dated trips departing today or later, requiring both country codes, and removes duplicates by sender, route and date.
+      Switch report views below to compare the exact same entries. Neither report verifies Telegram deletion.</p>
     {''.join(notices)}
     <section class="card"><h2>Active cargo overview</h2>
       <div class="stats">
-        <div>Total active candidates<strong>{report.get('total', 0):,}</strong></div>
+        <div>Rows in selected view<strong>{report.get('total', 0):,}</strong></div>
+        <div>Telegram /transferlive (unique)<strong>{report.get('transferlive', 0):,}</strong></div>
         <div>Ready for API<strong>{report.get('ready', 0):,}</strong></div>
         <div>Sent to API<strong>{report.get('sent', 0):,}</strong></div>
         <div>Already existed<strong>{report.get('already_existed', 0):,}</strong></div>
@@ -165,6 +167,7 @@ async def cargo_page(request):
     </section>
     <section class="card"><h2>Search and filter active cargo</h2>
       <form method="get" action="/cargo" class="filters">
+        <label>Report definition<select name="view">{options([("advertio","Advertio candidates (dated + recent undated)"),("telegram","Match Telegram /transferlive (deduplicated)")],filters['view'])}</select></label>
         <label>API status<select name="status">{options(option_status,filters['status'])}</select></label>
         <label>Trip<select name="trip">{options([("all","All active"),("upcoming","Dated upcoming"),("undated","Recent undated")],filters['trip'])}</select></label>
         <label>Channel, city, title, Telegram ID<input type="search" name="search" value="{_esc(filters['search'])}" maxlength="100" placeholder="e.g. Tehran"></label>

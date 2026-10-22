@@ -199,3 +199,78 @@ def test_permission_error_preserves_status_and_stop_queue_during_cooldown(monkey
         assert raised.value.status == 403
         assert raised.value.stop_queue is True
     assert first.calls == 1
+
+
+def test_invalid_extraction_json_recovers_through_alternate_provider():
+    primary = Provider("cloudflare", error=AIExtractionError(
+        "malformed json", reason="invalid_provider_output"
+    ))
+    alternate = Provider("groq", result={
+        "category": "transferlist", "data": {"transferlist": {"title": "Cargo"}}
+    })
+    service = manager(primary, alternate)
+    original_cooldowns = list(service._unavailable_until)
+
+    result = service.extract("Tehran to Toronto luggage", "transferlist")
+
+    assert result["category"] == "transferlist"
+    assert primary.calls == 1
+    assert alternate.calls == 1
+    # Malformed content is not evidence of a global provider outage.
+    assert service.active_index == 0
+    assert service._unavailable_until == original_cooldowns
+
+
+def test_all_invalid_extraction_providers_are_tried_once_not_repaired():
+    first = Provider("cloudflare", error=AIExtractionError(
+        "bad primary json", reason="invalid_provider_output"
+    ))
+    second = Provider("groq", error=AIExtractionError(
+        "bad alternate json", reason="invalid_provider_output"
+    ))
+    third = Provider("other", error=AIExtractionError(
+        "bad third json", reason="invalid_provider_output"
+    ))
+    service = manager(first, second, third)
+
+    with pytest.raises(AIExtractionError, match="bad third json"):
+        service.extract("unclear trip", "transferlist")
+    assert [p.calls for p in (first, second, third)] == [1, 1, 1]
+
+
+def test_invalid_extraction_skips_cooling_alternates(monkeypatch):
+    import time
+    first = Provider("cloudflare", error=AIExtractionError(
+        "invalid json", reason="invalid_provider_output"
+    ))
+    cooling = Provider("groq", result={"category": "transferlist"})
+    available = Provider("other", result={"category": "transferlist"})
+    service = manager(first, cooling, available)
+    service._unavailable_until[1] = time.monotonic() + 120
+
+    assert service.extract("some cargo ad", "transferlist") == {"category": "transferlist"}
+    assert first.calls == 1
+    assert cooling.calls == 0
+    assert available.calls == 1
+
+
+def test_invalid_extraction_does_not_mask_alternate_rate_limit():
+    first = Provider("cloudflare", error=AIExtractionError(
+        "bad json", reason="invalid_provider_output"
+    ))
+    alternate = Provider("groq", error=AIExtractionError(
+        "rate limited", reason="rate_limit", status=429, retry_after=10
+    ))
+    with pytest.raises(AIExtractionError) as raised:
+        manager(first, alternate).extract("some cargo ad", "transferlist")
+    assert raised.value.status == 429
+    assert raised.value.retry_after == 10
+
+
+def test_invalid_extraction_single_provider_keeps_original_failure():
+    only = Provider("cloudflare", error=AIExtractionError(
+        "bad json", reason="invalid_provider_output"
+    ))
+    with pytest.raises(AIExtractionError, match="bad json"):
+        manager(only).extract("some cargo ad", "transferlist")
+    assert only.calls == 1

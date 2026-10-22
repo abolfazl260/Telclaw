@@ -73,8 +73,13 @@ def ensure_initialized():
     This guard is per database file identity so standalone scripts, tests and
     database replacement still get correct first-use initialization.
     """
-    if _database_identity() != _INITIALIZED_DATABASE or _INITIALIZED_DATABASE is None:
-        initialize()
+    identity = _database_identity()
+    if identity == _INITIALIZED_DATABASE and identity[1] is not None:
+        return
+    with _INIT_LOCK:
+        identity = _database_identity()
+        if identity != _INITIALIZED_DATABASE or identity[1] is None:
+            initialize()
 
 
 def initialize():

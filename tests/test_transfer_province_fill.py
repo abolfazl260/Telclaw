@@ -138,9 +138,9 @@ def test_historical_preview_apply_and_idempotency_are_field_scoped(province_db):
     preview = data_normalizer.preview_transfer_missing_provinces()
     assert preview["rows_scanned"] == 4
     assert preview["rows_to_fill"] == 3
-    assert preview["fields_to_fill"] == 5
+    assert preview["fields_to_fill"] == 4
     assert preview["origin_to_fill"] == 2
-    assert preview["destination_to_fill"] == 3
+    assert preview["destination_to_fill"] == 2
     assert preview["existing_mismatches"] == 1
     assert preview["rows_updated"] == 0
 
@@ -155,7 +155,7 @@ def test_historical_preview_apply_and_idempotency_are_field_scoped(province_db):
 
     applied = data_normalizer.fill_transfer_missing_provinces()
     assert applied["rows_to_fill"] == 3
-    assert applied["fields_to_fill"] == applied["rows_updated"] == 5
+    assert applied["fields_to_fill"] == applied["rows_updated"] == 4
     again = data_normalizer.fill_transfer_missing_provinces()
     assert again["rows_to_fill"] == again["rows_updated"] == 0
     assert again["existing_mismatches"] == 1

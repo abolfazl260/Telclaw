@@ -1,6 +1,6 @@
 # Advertio passenger-cargo ingestion (Telclaw)
 
-Status: implemented on the `Stage` branch. This document describes the dedicated API
+Status: implemented in Telclaw. This document describes the dedicated API
 destination. It does **not** replace the established Telegram `@advertio_cargo`
 publisher or the housing ingestion adapter.
 
@@ -84,7 +84,16 @@ are considered under the following rules:
   of source-post age.
 - A record without an explicit date qualifies only when its Telegram
   message date is within the configured `BACKFILL_DAYS` window.
-- Past-dated trips are locally rejected; dates are never inferred.
+- Past-dated trips are excluded **before** batch selection (including older
+  trips captured again during a new crawl); their historical rows remain intact.
+- Records with incomplete cities or countries outside the platform's seven
+  supported country codes are also excluded from batch selection, without
+  deleting or marking the original source record as rejected.
+- The manual/scheduled worker first prioritizes the closest upcoming travel
+  dates, then the newest undated messages, so small batches can make progress.
+- The Back Office's **Ready to send now** count is the exact local queue
+  eligibility count; **Waiting** is a broader historical/date-window count.
+  Final city-catalog and content validity still require an API attempt.
 - Both countries and both cities must be known and present in Advertio's
   live location catalog. Missing/unsupported locations are not guessed.
 - `description` is the already-extracted, cleaned post text; no Telegram
@@ -134,8 +143,9 @@ publication:
   freshness window, batch size and daily request budget. Auto-publish is enabled
   by default for new unique cargo leads; disable it for untrusted sources.
 - **Operations → Advertio Cargo — Website API**: separate from
-  `@advertio_cargo`, shows AI processed/failed/pending, waiting/retry/rejected,
-  sent/already-existed, expired/stale, today's requests and last delivery error.
+  `@advertio_cargo`, shows AI processed/failed/pending, **ready to send now**,
+  broad waiting/retry/rejected counts, sent/already-existed, expired/stale,
+  today's requests and last recorded historical rejection.
   Recent rows include Telegram message ID, source, route, date, failure cause,
   and next retry time. This report is read-only and does not call the API.
 - Click **Test Advertio API /health** first: it runs an unauthenticated HTTPS

@@ -256,7 +256,8 @@ def test_backoffice_cargo_report_shows_unattempted_and_completed_posts(env):
     assert after["waiting"] == 1
     assert after["ready_to_send"] == 1
     assert after["attempts_today"] == 1
-    assert after["recent"][0]["status"] == "waiting"
+    # The worker now prioritizes the newest undated record, not the oldest ID.
+    assert after["recent"][0]["status"] == "sent"
     assert all("row_id" in row for row in after["recent"])
 
 

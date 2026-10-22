@@ -401,6 +401,22 @@ def _seed_defaults(conn):
         ("transferlist", "airline", "ÿß€åÿ±ÿ™ÿ±ÿßŸÜÿ≤€åÿ™", None, "", "Corrupted airline text; do not guess"),
         ("transferlist", "airline", "ÿß€åÿ± ÿ™ÿ±ÿßŸÜÿ≥€åÿ™", None, "", "Corrupted airline text; do not guess"),
     ])
+    # 2026-10-22 transferlist CSV audit: country-aware bilingual spelling
+    # mappings. Seed-only: existing source records are changed only when an
+    # operator runs Normalization > Apply to existing data. Custom aliases
+    # are never overwritten by these default INSERT OR IGNORE rules.
+    from storage.transfer_city_aliases import (
+        TRANSFER_CITY_ALIASES, TRANSFER_COUNTRY_ALIASES,
+    )
+    for field_name in ("origin_city", "destination_city"):
+        for country, alias, canonical, reason in TRANSFER_CITY_ALIASES:
+            defaults.append(("transferlist", field_name, alias, canonical,
+                             country, "CSV audit: " + reason))
+    for field_name in ("origin_country", "destination_country"):
+        for alias, canonical in TRANSFER_COUNTRY_ALIASES:
+            defaults.append(("transferlist", field_name, alias, canonical, "",
+                             "CSV audit: normalize country to ISO alpha-2"))
+
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(
             category,field_name,alias,alias_key,canonical_value,country_iso2,

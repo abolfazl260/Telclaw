@@ -67,12 +67,21 @@ def _database_identity():
         return (str(path), None, None)
 
 
-def ensure_initialized():
-    """Skip schema/default-alias writes on every ad; never cache alias values.
+def ensure_initialized(*, conn=None):
+    """Skip default seeding on every ad, while still handling independent DBs.
 
-    This guard is per database file identity so standalone scripts, tests and
-    database replacement still get correct first-use initialization.
+    If a caller supplies its already-open connection, verify the normalization
+    schema exists on *that* connection. This also supports stand-alone services
+    and test harnesses that intentionally substitute a different SQLite file.
     """
+    if conn is not None:
+        table_present = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='normalization_aliases'"
+        ).fetchone()
+        if table_present is None:
+            initialize()
+        return
     identity = _database_identity()
     if identity == _INITIALIZED_DATABASE and identity[1] is not None:
         return

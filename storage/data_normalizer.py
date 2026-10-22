@@ -929,9 +929,14 @@ def normalize_category_data(category, data, *, conn=None):
 
     owns_conn = conn is None
     if owns_conn:
-        ensure_initialized()
         conn = database.get_connection()
     try:
+        # Check the live connection, not only the configured path: Back Office
+        # and standalone services can use a different database connection.
+        # Normal operation does one inexpensive schema-exists read and never
+        # reseeds defaults for each ad.
+        if owns_conn:
+            ensure_initialized(conn=conn)
         rules = _rules_for_category(conn, category)
         result = dict(data)
         changes = {}

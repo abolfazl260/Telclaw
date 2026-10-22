@@ -59,6 +59,24 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## Match the Telegram /transferlive active-cargo count
+
+The **Active Cargo** page now displays two counts and has a **Report definition**
+selector. The Advertio candidate view includes future-dated transfers and recent
+undated ads (last configured backfill window) without trip deduplication. The
+**Match Telegram /transferlive** view uses the precise ID cohort underlying
+`/transferlive`: only today/future dated trips with valid origin/destination
+country codes, deduplicated by sender, route and departure date. Its total
+therefore matches the Telegram bot's active-trip count. The Ready-for-API
+counter is a narrower intersection with the API's supported countries, cities,
+processing state and delivery retry rules. Neither metric confirms original
+Telegram messages still exist.
+
+Telegram's command menu is registered from one authoritative command list for
+both default and all-private-chat scopes. `/transferlive`,
+`/transfercountry` and `/aboutus` remain available simultaneously after the
+Telclaw Telegram monitor restarts.
+
 ## Download only filtered database rows
 
 In **Database**, open one table (`messages`, `transferlist`, `housinglist`,

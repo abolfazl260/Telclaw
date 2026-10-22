@@ -148,3 +148,47 @@ def test_backfill_only_structured_data_and_transfer_locations(city_db):
     assert raw == "raw text preserved"
     assert cache["origin_city_canonical"] == "Tehran"
     assert cache["destination_city_canonical"] == "Cologne"
+
+
+def test_route_only_backfill_does_not_change_descriptions_or_status(city_db):
+    database.insert_message(
+        "cargo", 220, "travel ad", "2026-10-22",
+        raw_text="do not change this Telegram message",
+    )
+    conn = database.get_connection()
+    try:
+        row_id = conn.execute("SELECT id FROM messages WHERE message_id=220").fetchone()[0]
+        conn.execute("""INSERT INTO transferlist(
+            processed_message_id,title,description,origin_city,origin_country,
+            destination_city,destination_country,departure_date)
+            VALUES(?,?,?,?,?,?,?,?)""",
+            (row_id, "Original title", "Original cleaned description",
+             "Guanzhou", "China", "تهران", "Iran", "2026-11-07"))
+        conn.execute("UPDATE messages SET advertio_status='sent' WHERE id=?", (row_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    result = data_normalizer.renormalize_transfer_cities_only()
+    assert result == {"rows_scanned": 1, "rows_changed": 1, "cells_changed": 4}
+    again = data_normalizer.renormalize_transfer_cities_only()
+    assert again["rows_changed"] == again["cells_changed"] == 0
+
+    conn = database.get_connection()
+    try:
+        row = conn.execute("SELECT * FROM transferlist WHERE processed_message_id=?",
+                           (row_id,)).fetchone()
+        msg = conn.execute("SELECT * FROM messages WHERE id=?", (row_id,)).fetchone()
+        cache = conn.execute("SELECT * FROM transfer_locations WHERE processed_message_id=?",
+                             (row_id,)).fetchone()
+    finally:
+        conn.close()
+
+    assert (row["origin_city"], row["origin_country"]) == ("Guangzhou", "CN")
+    assert (row["destination_city"], row["destination_country"]) == ("Tehran", "IR")
+    assert row["description"] == "Original cleaned description"
+    assert row["title"] == "Original title"
+    assert row["departure_date"] == "2026-11-07"
+    assert msg["raw_text"] == "do not change this Telegram message"
+    assert msg["advertio_status"] == "sent"
+    assert cache["origin_city_canonical"] == "Guangzhou"

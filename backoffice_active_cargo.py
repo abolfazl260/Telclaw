@@ -6,7 +6,7 @@ cannot be confirmed from SQLite. No crawl, AI or HTTP requests happen here.
 """
 from datetime import datetime, timedelta, timezone
 from storage.database import get_connection
-from delivery.advertio_cargo import cargo_queue_eligibility_sql
+from delivery.advertio_cargo import COUNTRIES, cargo_queue_eligibility_sql
 import config
 
 PAGE_SIZE = 25
@@ -49,9 +49,18 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
         next_attempt = "d.next_attempt_at" if has_delivery else "NULL"
         error = "d.error" if has_delivery else "NULL"
         lead = "d.lead_id" if has_delivery else "NULL"
+        # Active is a date/freshness rule, NOT an assertion that a
+        # Telegram post still exists. Unsupported routes remain visible in
+        # this report, but are not eligible to be selected for API sending.
+        active_sql = """(
+            ((t.departure_date IS NULL OR TRIM(t.departure_date)='')
+              AND substr(m.date,1,10)>=?)
+            OR (t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
+              AND date(substr(t.departure_date,1,10))>=date(?))
+        )"""
         expr = (
             "m.processing_status='processed' AND m.ai_status='processed' "
-            "AND m.ai_category='transferlist' AND (" + cargo_queue_eligibility_sql() + ")"
+            "AND m.ai_category='transferlist' AND " + active_sql
         )
         base_values = [cutoff, today]
         summary = {"total": 0, "ready": 0, "waiting": 0, "retry": 0,
@@ -70,16 +79,19 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
             SELECT COUNT(*) FROM messages m
             JOIN transferlist t ON t.processed_message_id=m.id
             {join} WHERE {expr}
+            AND ({cargo_queue_eligibility_sql()})
             AND {state} IN ('waiting','retry')
             AND ({next_attempt} IS NULL OR {next_attempt}<=?)
         """
         summary["ready"] = int(conn.execute(
-            ready_sql, base_values + [now.isoformat()]
+            ready_sql, base_values + [cutoff, today, now.isoformat()]
         ).fetchone()[0])
 
         clauses = [expr]
         values = list(base_values)
         if status == "ready":
+            clauses.append("(" + cargo_queue_eligibility_sql() + ")")
+            values.extend([cutoff, today])
             clauses.append(f"{state} IN ('waiting','retry')")
             clauses.append(f"({next_attempt} IS NULL OR {next_attempt}<=?)")
             values.append(now.isoformat())
@@ -131,8 +143,23 @@ def active_cargo_report(*, page=1, status="all", trip="all", search=""):
             sql, values + [PAGE_SIZE, (page - 1) * PAGE_SIZE]
         )]
         for row in rows:
+            country_ok = (
+                str(row.get("origin_country") or "").strip().upper() in COUNTRIES
+                and str(row.get("destination_country") or "").strip().upper() in COUNTRIES
+            )
+            route_ok = bool(
+                str(row.get("origin_city") or "").strip()
+                and str(row.get("destination_city") or "").strip()
+            )
+            if not country_ok:
+                row["blocked_reason"] = "Country outside Advertio catalog"
+            elif not route_ok:
+                row["blocked_reason"] = "Incomplete origin/destination"
+            else:
+                row["blocked_reason"] = None
             row["sendable"] = (
-                row["status"] in ("waiting", "retry")
+                country_ok and route_ok
+                and row["status"] in ("waiting", "retry")
                 and (not row["next_attempt_at"] or row["next_attempt_at"] <= now.isoformat())
             )
         return {"rows": rows, "total": total, "page": page,

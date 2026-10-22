@@ -94,7 +94,8 @@ async def test_only_direct_human_and_forwarded_human_reach_persistence(monkeypat
                 channel_username TEXT,
                 message_id INTEGER,
                 text TEXT,
-                sender_id INTEGER
+                sender_id INTEGER,
+                content_hash TEXT
             )"""
         )
         return conn

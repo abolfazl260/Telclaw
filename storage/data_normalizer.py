@@ -9,7 +9,10 @@ import math
 import re
 import unicodedata
 from datetime import datetime, timezone
+from pathlib import Path
+from threading import RLock
 
+import config
 from storage import database
 from storage.location_normalizer import normalize_location
 
@@ -51,10 +54,49 @@ def _country_field(category, field_name):
     return None
 
 
-def initialize():
-    conn = database.get_connection()
+_INIT_LOCK = RLock()
+_INITIALIZED_DATABASE = None
+
+
+def _database_identity():
+    path = Path(config.DB_NAME).resolve()
     try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS normalization_aliases (
+        stat = path.stat()
+        return (str(path), stat.st_dev, stat.st_ino)
+    except FileNotFoundError:
+        return (str(path), None, None)
+
+
+def ensure_initialized(*, conn=None):
+    """Skip default seeding on every ad, while still handling independent DBs.
+
+    If a caller supplies its already-open connection, verify the normalization
+    schema exists on *that* connection. This also supports stand-alone services
+    and test harnesses that intentionally substitute a different SQLite file.
+    """
+    if conn is not None:
+        table_present = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' "
+            "AND name='normalization_aliases'"
+        ).fetchone()
+        if table_present is None:
+            initialize()
+        return
+    identity = _database_identity()
+    if identity == _INITIALIZED_DATABASE and identity[1] is not None:
+        return
+    with _INIT_LOCK:
+        identity = _database_identity()
+        if identity != _INITIALIZED_DATABASE or identity[1] is None:
+            initialize()
+
+
+def initialize():
+    global _INITIALIZED_DATABASE
+    with _INIT_LOCK:
+        conn = database.get_connection()
+        try:
+            conn.execute("""CREATE TABLE IF NOT EXISTS normalization_aliases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT NOT NULL,
             field_name TEXT NOT NULL,
@@ -69,12 +111,13 @@ def initialize():
             updated_at TEXT NOT NULL,
             UNIQUE(category, field_name, alias_key, country_iso2)
         )""")
-        conn.execute("""CREATE INDEX IF NOT EXISTS idx_normalization_alias_lookup
+            conn.execute("""CREATE INDEX IF NOT EXISTS idx_normalization_alias_lookup
             ON normalization_aliases(category, field_name, alias_key, country_iso2, enabled)""")
-        _seed_defaults(conn)
-        conn.commit()
-    finally:
-        conn.close()
+            _seed_defaults(conn)
+            conn.commit()
+            _INITIALIZED_DATABASE = _database_identity()
+        finally:
+            conn.close()
 
 
 def _seed_defaults(conn):
@@ -886,9 +929,14 @@ def normalize_category_data(category, data, *, conn=None):
 
     owns_conn = conn is None
     if owns_conn:
-        initialize()
         conn = database.get_connection()
     try:
+        # Check the live connection, not only the configured path: Back Office
+        # and standalone services can use a different database connection.
+        # Normal operation does one inexpensive schema-exists read and never
+        # reseeds defaults for each ad.
+        if owns_conn:
+            ensure_initialized(conn=conn)
         rules = _rules_for_category(conn, category)
         result = dict(data)
         changes = {}

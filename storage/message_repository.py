@@ -2,20 +2,59 @@
 
 from storage import database
 import config
+from pathlib import Path
+from threading import Lock
+from storage.content_duplicate import ensure_duplicate_schema
 from storage.location_normalizer import normalize_location
 from storage.data_normalizer import initialize as initialize_normalization, normalize_category_data
+
+
+_BOOTSTRAP_LOCK = Lock()
+_READY_DATABASE = None
+
+
+def _database_identity():
+    """Identify the active SQLite file, including recreation at the same path."""
+    path = Path(config.DB_NAME).resolve()
+    try:
+        stat = path.stat()
+        return (str(path), stat.st_dev, stat.st_ino)
+    except FileNotFoundError:
+        return (str(path), None, None)
 
 
 class MessageRepository:
     """Repository boundary used by collection, processing, and AI workers."""
 
     def initialize(self):
-        database.initialize_db()
-        initialize_normalization()
-        self._initialize_transfer_locations()
+        """Initialize this database once per process, not once per channel.
+
+        New batches continue querying the latest normalization aliases; this
+        guard only skips schema setup, default seeding and legacy hash backfill.
+        """
+        global _READY_DATABASE
+        identity = _database_identity()
+        if identity == _READY_DATABASE and identity[1] is not None:
+            return
+        with _BOOTSTRAP_LOCK:
+            identity = _database_identity()
+            if identity == _READY_DATABASE and identity[1] is not None:
+                return
+            database.initialize_db()
+            initialize_normalization()
+            conn = database.get_connection()
+            try:
+                # Existing content fingerprints are recovered once per process,
+                # not repeatedly for each of the crawler's channels.
+                ensure_duplicate_schema(conn)
+            finally:
+                conn.close()
+            self._initialize_transfer_locations()
+            _READY_DATABASE = _database_identity()
 
     @staticmethod
     def _initialize_transfer_locations():
+        """Create the cache schema; NEVER rewrite historical transfer rows."""
         conn = database.get_connection()
         try:
             conn.execute("""CREATE TABLE IF NOT EXISTS transfer_locations (
@@ -32,11 +71,6 @@ class MessageRepository:
             )""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_locations_origin ON transfer_locations(origin_country_iso2, origin_city_key)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_transfer_locations_destination ON transfer_locations(destination_country_iso2, destination_city_key)")
-            rows = conn.execute("""SELECT t.processed_message_id, t.origin_city, t.origin_country,
-                                      t.destination_city, t.destination_country
-                                 FROM transferlist t""").fetchall()
-            for row in rows:
-                MessageRepository._save_transfer_location_conn(conn, dict(row))
             conn.commit()
         finally:
             conn.close()
@@ -56,7 +90,13 @@ class MessageRepository:
             origin_country_iso2=excluded.origin_country_iso2,
             destination_city_canonical=excluded.destination_city_canonical,
             destination_city_key=excluded.destination_city_key,
-            destination_country_iso2=excluded.destination_country_iso2""", (
+            destination_country_iso2=excluded.destination_country_iso2
+        WHERE transfer_locations.origin_city_canonical IS NOT excluded.origin_city_canonical
+           OR transfer_locations.origin_city_key IS NOT excluded.origin_city_key
+           OR transfer_locations.origin_country_iso2 IS NOT excluded.origin_country_iso2
+           OR transfer_locations.destination_city_canonical IS NOT excluded.destination_city_canonical
+           OR transfer_locations.destination_city_key IS NOT excluded.destination_city_key
+           OR transfer_locations.destination_country_iso2 IS NOT excluded.destination_country_iso2""", (
             data.get("processed_message_id"),
             origin["city"], origin["city_key"], origin["country_iso2"],
             destination["city"], destination["city_key"], destination["country_iso2"],

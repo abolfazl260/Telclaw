@@ -5,7 +5,7 @@ import math
 import re
 
 from storage.database import CATEGORY_TABLES, get_connection
-from storage.data_normalizer import initialize as initialize_normalization, normalize_category_data
+from storage.data_normalizer import ensure_initialized as initialize_normalization, normalize_category_data
 
 # Categories follow the structured category tables used by the extraction pipeline.
 # Rule fields themselves are discovered from SQLite so adding a column does not
@@ -661,11 +661,13 @@ def pending(limit=100):
     """Yield only unsent message-target pairs; disabled or unmatched rules publish nothing."""
     mark_incomplete_deliveries()
     initialize()
-    initialize_normalization()
     if is_rate_limited():
         return []
     conn = get_connection()
     try:
+        # Ensure the aliases table belongs to THIS connection, including
+        # standalone/test databases distinct from config.DB_NAME.
+        initialize_normalization(conn=conn)
         rules = [dict(row) for row in conn.execute("""SELECT r.*, t.chat_id,
             t.enabled AS target_enabled FROM publishing_rules r
             JOIN publishing_targets t ON t.id=r.target_id

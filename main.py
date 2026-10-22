@@ -28,7 +28,10 @@ async def _transfer_publisher_loop(publisher):
 
 
 async def _run():
-    database.initialize_db()
+    # Prepare schema, default aliases and legacy content fingerprints once.
+    # The crawler's per-channel initialize() calls are now no-ops for this DB.
+    from storage.message_repository import MessageRepository
+    MessageRepository().initialize()
     # .env/config.py provides defaults; Back Office values persist as overrides.
     # Apply them before importing services that may snapshot config at import/init time.
     backoffice_settings.apply_persisted_overrides()

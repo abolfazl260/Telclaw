@@ -437,7 +437,8 @@ def _cargo_delivery_report(conn, limit=30):
         "daily_limit": config.ADVERTIO_CARGO_DAILY_LIMIT,
         "backfill_days": config.ADVERTIO_CARGO_BACKFILL_DAYS,
         "processed": 0, "ai_failed": 0, "ai_pending": 0,
-        "eligible": 0, "waiting": 0, "retry": 0, "rejected": 0,
+        "eligible": 0, "ready_to_send": 0,
+        "waiting": 0, "retry": 0, "rejected": 0,
         "sending": 0, "sent": 0, "already_existed": 0,
         "expired": 0, "stale": 0, "attempts_today": 0,
         "paused_until": None, "last_error": None,
@@ -487,6 +488,17 @@ def _cargo_delivery_report(conn, limit=30):
             report[key] = int(row["n"])
     report["eligible"] = sum(report[key] for key in
         ("waiting","retry","sending","sent","already_existed","rejected"))
+    # Unlike the broad 'waiting' total, this is the same local eligibility
+    # filter and retry window used by the actual cargo worker.
+    from delivery.advertio_cargo import cargo_queue_eligibility_sql
+    report["ready_to_send"] = conn.execute(f"""
+        SELECT COUNT(*) FROM messages m
+        JOIN transferlist t ON t.processed_message_id=m.id {join}
+        WHERE {expr}
+          AND {status} IN ('waiting','retry')
+          AND ({next_attempt} IS NULL OR {next_attempt}<=?)
+          AND ({cargo_queue_eligibility_sql()})
+    """, (now.isoformat(), recent, today)).fetchone()[0]
     report["expired"] = conn.execute(f"""SELECT COUNT(*) FROM messages m
         JOIN transferlist t ON t.processed_message_id=m.id WHERE {expr}
         AND t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''

@@ -440,19 +440,46 @@ def is_rate_limited():
 
 
 def mark_incomplete_deliveries():
-    """Surface interrupted sends for human review; Telegram has no send idempotency key."""
+    """Recover stale sends without taking a write lock on healthy cycles.
+
+    A publisher cycle runs frequently. Previously two unconditional UPDATEs
+    acquired a SQLite RESERVED write lock even when no sends were stale.
+    Read-first minimizes contention with crawler, AI and Normalization.
+    Only sends older than five minutes transition to UNCERTAIN, never RETRY:
+    Telegram lacks a safe send idempotency key.
+    """
     initialize()
     conn = get_connection()
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        stale_delivery = conn.execute(
+            "SELECT 1 FROM publishing_deliveries "
+            "WHERE status='sending' AND updated_at<? LIMIT 1",
+            (cutoff,),
+        ).fetchone() is not None
+        stale_resend = conn.execute(
+            "SELECT 1 FROM publishing_resends "
+            "WHERE status='sending' AND updated_at<? LIMIT 1",
+            (cutoff,),
+        ).fetchone() is not None
+        if not (stale_delivery or stale_resend):
+            return 0  # normal case: no writes, no commit, no writer lock
         now = _now_iso()
-        conn.execute("""UPDATE publishing_deliveries SET status='uncertain',
-            error='Send interrupted. Check the channel before retrying; it may have been delivered.',
-            updated_at=? WHERE status='sending' AND updated_at<?""", (now, cutoff))
-        conn.execute("""UPDATE publishing_resends SET status='uncertain',
-            error='Manual resend interrupted. Check the channel before sending another copy.',
-            updated_at=? WHERE status='sending' AND updated_at<?""", (now, cutoff))
+        # Predicates are re-evaluated atomically by SQLite, even if another
+        # process completed a send after the read-only probe.
+        if stale_delivery:
+            conn.execute("""UPDATE publishing_deliveries SET status='uncertain',
+                error='Send interrupted. Check the channel before retrying; it may have been delivered.',
+                updated_at=? WHERE status='sending' AND updated_at<?""", (now, cutoff))
+        if stale_resend:
+            conn.execute("""UPDATE publishing_resends SET status='uncertain',
+                error='Manual resend interrupted. Check the channel before sending another copy.',
+                updated_at=? WHERE status='sending' AND updated_at<?""", (now, cutoff))
         conn.commit()
+        return int(stale_delivery) + int(stale_resend)
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

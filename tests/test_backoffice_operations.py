@@ -375,8 +375,15 @@ async def test_operations_page_exposes_separate_cargo_status_and_controls(monkey
         "csp_nonce": "nonce",
     }))
     assert response.status == 200
+    assert "How to use Operations" in response.text
+    assert 'href="#pipeline"' in response.text
+    assert 'id="advertio-delivery"' in response.text
     assert "Advertio Cargo — Website API" in response.text
     assert "Send Cargo to Advertio website" in response.text
+    assert "Auto-publish for new ads:" in response.text
+    assert "does not activate existing PendingReview listings" in response.text
+    assert "What do these cargo statuses mean?" in response.text
+    assert "4. Unsent Transfer Ads" in response.text
     assert "air_cargo070" in response.text
     assert "5592" in response.text
     assert "Requeue" in response.text

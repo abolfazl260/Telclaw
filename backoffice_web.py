@@ -1474,7 +1474,7 @@ async def operations_page(request):
         "Send Cargo to Advertio website",
         extra='<label>Max cargo ads<input type="number" name="limit" min="1" max="100" value="10"></label>',
         disabled=pipeline_busy or not cargo_enabled or not cargo_key_ready,
-        confirm="Send up to this many eligible cargo listings to the Advertio website for review?",
+        confirm="Send up to this many eligible cargo listings to the Advertio API? Only new validated unique listings can auto-publish; this does not activate existing PendingReview ads.",
     )
     if cargo_running:
         cargo_controls += action_form("stop_advertio_cargo", "Stop Cargo Delivery", danger=True)
@@ -1680,7 +1680,14 @@ async def operations_page(request):
     content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Operations</title>
     <style>{_DATA_CSS}
-    body{{max-width:1500px}}.ops-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:1rem}}
+    body{{max-width:1500px}}.ops-intro{{margin:1rem 0;padding:1rem 1.1rem;border:1px solid #cdddf3;border-radius:12px;background:#f5f8ff}}
+    .ops-intro h2{{margin:.1rem 0 .45rem}}.ops-jump-nav{{display:flex;gap:.45rem;flex-wrap:wrap;margin-top:.8rem}}
+    .ops-jump-nav a{{display:inline-block;padding:.45rem .65rem;border-radius:7px;background:#e5edfb;color:#174f9c;text-decoration:none;font-weight:600;font-size:.9rem}}
+    .ops-section{{margin:1.1rem 0;padding:1rem;border:1px solid #dce4ef;border-radius:14px;background:#f8fafc;scroll-margin-top:1rem}}
+    .ops-section>h2{{margin:.1rem 0 .35rem}}.ops-section>.muted{{margin:.35rem 0 .9rem}}
+    .ops-help{{margin:.8rem 0;padding:.7rem .85rem;border:1px solid #dce4ef;border-radius:9px;background:#f8faff}}
+    .ops-help summary{{cursor:pointer;font-weight:600}}.ops-help li{{margin:.3rem 0}}
+    .ops-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:1rem}}
     .op-card{{border:1px solid #dce4ef;border-radius:12px;background:#fff;padding:1rem}}
     .op-card h2{{margin-top:0}}.op-actions{{display:flex;gap:.5rem;align-items:end;flex-wrap:wrap}}
     .op-action{{display:flex;gap:.45rem;align-items:end;flex-wrap:wrap;border:0;padding:0;margin:.45rem 0}}
@@ -1701,7 +1708,21 @@ async def operations_page(request):
     Long-running queue commands execute in the background; this page refreshes automatically while one is running.</p>
     {banner}
 
-    <div class="ops-grid">
+    <section class="ops-intro" aria-labelledby="ops-guide-title">
+      <h2 id="ops-guide-title">How to use Operations</h2>
+      <p>Run the stages from top to bottom: process records, classify them, extract structured fields, then send eligible ads to Advertio. Each button starts a manual run; it does not change the scheduled crawler.</p>
+      <nav class="ops-jump-nav" aria-label="Operations shortcuts">
+        <a href="#pipeline">1. Processing</a><a href="#advertio-delivery">2. Advertio delivery</a>
+        <a href="#diagnostics">3. Diagnostics</a><a href="#unsent-transfer-ads">4. Transfer queue</a>
+        <a href="#crawler">5. Crawler</a><a href="#accounts">6. Accounts</a>
+        <a href="#channels">7. Channels</a><a href="#settings">8. Settings</a><a href="#activity">9. Activity log</a>
+      </nav>
+    </section>
+
+    <section class="ops-section" id="pipeline">
+      <h2>1. Process incoming ads</h2>
+      <p class="muted">These queues prepare records before delivery. Use Processing first, then Classification, then AI Extraction. Review failed counts before retrying.</p>
+      <div class="ops-grid">
       <section class="op-card"><h2>Information Processing Queue</h2>
         <p>Pending: <strong>{int(pipeline['processing_pending']):,}</strong> · Failed: <strong>{int(pipeline['processing_failed']):,}</strong></p>
         {_operation_state_box("Processing", states["processing"])}
@@ -1719,6 +1740,13 @@ async def operations_page(request):
         {_operation_state_box("AI extraction", states["ai"])}
         <div class="op-actions">{ai_controls}</div></section>
 
+      </div>
+    </section>
+
+    <section class="ops-section" id="advertio-delivery">
+      <h2>2. Send eligible ads to Advertio</h2>
+      <p class="muted">Housing listings and passenger-cargo use separate delivery queues. Sending a cargo record to the API is not the same as publishing an older PendingReview listing.</p>
+      <div class="ops-grid">
       <section class="op-card"><h2>Advertio Delivery</h2>
         <p>Housing pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
         Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
@@ -1728,8 +1756,9 @@ async def operations_page(request):
 
       <section class="op-card" style="grid-column:1 / -1"><h2>Advertio Cargo — Website API</h2>
         <p class="muted">Separate from Telegram @advertio_cargo. Category: passenger-cargo. The last 30 processed cargo records are listed below.</p>
-        <p>Enabled: <strong>{'yes' if cargo_enabled else 'no'}</strong> · API key: <strong>{'configured' if cargo_key_ready else 'missing'}</strong> ·
-        Auto publish: <strong>{'yes' if cargo_report.get('auto_publish') else 'no (PendingReview)'}</strong></p>
+        <p>Website API: <strong>{'enabled' if cargo_enabled else 'disabled'}</strong> · API key: <strong>{'configured' if cargo_key_ready else 'missing'}</strong> ·
+        Auto-publish for new ads: <strong>{'enabled' if cargo_report.get('auto_publish') else 'disabled'}</strong></p>
+        <p class="muted">Auto-publish applies only to newly submitted listings that pass API validation and duplicate checks. It does not activate existing PendingReview listings.</p>
         <p>AI processed: <strong>{int(cargo_report.get('processed') or 0):,}</strong> ·
         AI failed: <strong>{int(cargo_report.get('ai_failed') or 0):,}</strong> ·
         Pending AI: <strong>{int(cargo_report.get('ai_pending') or 0):,}</strong></p>
@@ -1742,7 +1771,16 @@ async def operations_page(request):
         <p>Expired trips: <strong>{int(cargo_report.get('expired') or 0):,}</strong> ·
         Old undated posts: <strong>{int(cargo_report.get('stale') or 0):,}</strong> ·
         API requests today: <strong>{int(cargo_report.get('attempts_today') or 0):,}/{int(cargo_report.get('daily_limit') or config.ADVERTIO_CARGO_DAILY_LIMIT):,}</strong></p>
-        <p class="muted">Destination: {_escape(cargo_report.get('base_url') or config.ADVERTIO_BASE_URL)} · Historical undated backfill: last {int(cargo_report.get('backfill_days') or 30)} days. A successful API response may still require Advertio moderation.</p>
+        <p class="muted">Destination: {_escape(cargo_report.get('base_url') or config.ADVERTIO_BASE_URL)} · Historical undated backfill: last {int(cargo_report.get('backfill_days') or 30)} days. “Sent to API” means accepted by the API, not necessarily visible publicly.</p>
+        <details class="ops-help"><summary>What do these cargo statuses mean?</summary>
+          <ul><li><strong>AI processed / pending / failed:</strong> extraction status before delivery.</li>
+          <li><strong>Waiting:</strong> eligible for an API attempt. <strong>Retry:</strong> a temporary failure will be retried.</li>
+          <li><strong>Sent to API:</strong> the API accepted the listing. This is not proof that it is publicly visible.</li>
+          <li><strong>Already existed:</strong> Advertio reported the same listing already exists; Telclaw will not create it again.</li>
+          <li><strong>Rejected:</strong> fix the source data before using Requeue.</li>
+          <li><strong>PendingReview:</strong> an existing listing awaiting moderation is not activated by turning auto-publish on.</li></ul>
+          <p><a href="/settings">Open settings to review cargo auto-publish</a>.</p>
+        </details>
         {cargo_alert_html}
         {cargo_error_html}
         {_operation_state_box("Advertio website cargo", cargo_state)}
@@ -1753,6 +1791,13 @@ async def operations_page(request):
         {cargo_ai_table}
       </section>
 
+      </div>
+    </section>
+
+    <section class="ops-section" id="diagnostics">
+      <h2>3. Diagnostics and queue status</h2>
+      <p class="muted">Use diagnostics to test connectivity. The legacy Transfer Ads queue is separate from the Advertio website cargo API.</p>
+      <div class="ops-grid">
       <section class="op-card"><h2>Groq Connection Test</h2>
         {_operation_state_box("Groq diagnostic", states["groq"])}
         <div class="op-actions">{groq_controls}</div></section>
@@ -1762,9 +1807,10 @@ async def operations_page(request):
         {f'<p class="ops-error">{_escape(transfer_error)}</p>' if transfer_error else ''}
         <p class="muted">With Back Office enabled, terminal direct-send is intentionally replaced by rule-based publishing.</p>
         <div class="ops-links"><a href="/">Open Publishing</a></div></section>
-    </div>
+      </div>
+    </section>
 
-    <section><h2>Unsent Transfer Ads</h2>
+    <section class="ops-section" id="unsent-transfer-ads"><h2>4. Unsent Transfer Ads</h2>
       <p class="muted">Same 20-at-a-time unsent queue browser as the terminal Transfer Ads menu.
       Page {transfer_page}/{transfer_pages} · {transfer_total:,} unsent record(s).</p>
       {f'<p class="ops-error">{_escape(transfer_browser_error)}</p>' if transfer_browser_error else ''}
@@ -1773,12 +1819,12 @@ async def operations_page(request):
       <tbody>{transfer_rows or '<tr><td colspan="7">No unsent transfer ads.</td></tr>'}</tbody></table></div>
       <p>{transfer_nav_html}</p></section>
 
-    <section><h2>Scheduled Crawler</h2>
+    <section class="ops-section" id="crawler"><h2>5. Scheduled Crawler</h2>
       <p>Active jobs: <strong>{int(crawler_status.get('active_jobs') or 0):,}</strong> · Connected account:
       <strong>{_escape(connected_account or 'none')}</strong></p>
       {crawl_form}<div class="op-actions">{stop_crawler}</div></section>
 
-    <section><h2>Telegram Accounts</h2>
+    <section class="ops-section" id="accounts"><h2>6. Telegram Accounts</h2>
       {f'<p class="ops-error">{_escape(account_error)}</p>' if account_error else ''}
       <p>Connected account: <strong>{_escape(connected_account or 'none')}</strong></p>
       <div class="op-actions">{connect_controls}</div>
@@ -1786,16 +1832,16 @@ async def operations_page(request):
       <tbody>{account_rows or '<tr><td colspan="3">No authorized Telegram sessions.</td></tr>'}</tbody></table></div>
       <h3>Add a new Telegram account</h3>{registration_html}</section>
 
-    <section><h2>Crawler Channels</h2>
+    <section class="ops-section" id="channels"><h2>7. Crawler Channels</h2>
       {f'<p class="ops-error">{_escape(channel_error)}</p>' if channel_error else ''}
       <p class="muted">This is the same read-only channel inventory shown by the terminal Channel Management screen.</p>
       {''.join(channel_groups) or '<p>No channel groups configured.</p>'}</section>
 
-    <section><h2>Settings</h2>
+    <section class="ops-section" id="settings"><h2>8. Settings &amp; System Health</h2>
       <p class="muted">Terminal settings are represented by the full Back Office settings editor.</p>
       <div class="ops-links"><a href="/settings">Open Settings</a><a href="/health">Open System Health</a></div></section>
 
-    <section><h2>Back Office operation activity</h2>
+    <section class="ops-section" id="activity"><h2>9. Operation history</h2>
       <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Operation</th><th>Level</th><th>Message</th><th>Details</th></tr></thead>
       <tbody>{activity_rows or '<tr><td colspan="5">No Back Office operations have run yet.</td></tr>'}</tbody></table></div></section>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}">

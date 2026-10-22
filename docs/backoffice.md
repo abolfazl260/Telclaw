@@ -67,6 +67,18 @@ state. Long-running queue commands are started as background jobs so the HTTP re
 returns immediately; while a manual job is active the page refreshes automatically and
 shows the current queue counts plus the last result/error.
 
+The page is grouped into numbered sections with shortcut links: processing pipeline,
+Advertio delivery, diagnostics, unsent legacy transfer ads, scheduled crawler, Telegram
+accounts, channel inventory, settings, and operation history. Use the sections in order
+when processing new data. Manual queue buttons start a one-off run; they do not change
+the scheduled crawler configuration.
+
+The **Advertio Cargo — Website API** card is separate from the Telegram @advertio_cargo
+publisher and the housing delivery queue. Its auto-publish setting applies to newly
+submitted cargo listings only after API validation and duplicate checks. **Sent to API**
+means the API accepted the request; it does not prove that a listing is publicly visible.
+Turning auto-publish on does not activate existing PendingReview listings.
+
 Available controls include:
 
 - start/stop the information-processing queue;

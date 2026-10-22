@@ -1024,6 +1024,116 @@ def renormalize_existing(category=None):
         conn.close()
 
 
+_CARGO_LOCATION_FIELDS = (
+    "origin_country", "destination_country",
+    "origin_city", "destination_city",
+)
+_CARGO_PROVINCE_FIELDS = ("origin_province", "destination_province")
+
+
+def _unified_cargo_location_changes(row, rules):
+    """Normalize country then city, and fill missing provinces on the result.
+
+    Only six location fields can change; explicit province data is immutable.
+    Returns a copy, six-field diff and counts of existing province conflicts.
+    """
+    from storage.transfer_province_map import lookup_province
+
+    normalized = dict(row)
+    changes = {}
+    for field in _CARGO_LOCATION_FIELDS:
+        before = normalized.get(field)
+        builtin = normalize_builtin_field_value("transferlist", field, before)
+        after = _normalize_with_rules("transferlist", field, builtin, normalized, rules)
+        if before != after:
+            normalized[field] = after
+            changes[field] = after
+
+    conflicts = 0
+    for side in ("origin", "destination"):
+        field = f"{side}_province"
+        inferred = lookup_province(
+            normalized.get(f"{side}_country"), normalized.get(f"{side}_city")
+        )
+        if not inferred:
+            continue
+        existing = row.get(field)
+        if existing is not None and str(existing).strip():
+            if _alias_key(existing) != _alias_key(inferred):
+                conflicts += 1
+        else:
+            normalized[field] = inferred
+            changes[field] = inferred
+    return normalized, changes, conflicts
+
+
+def _run_unified_cargo_location_normalization(*, apply=False):
+    """Preview or atomically update city/country/province together.
+
+    Avoids running two independent backfills that could only partially
+    succeed. Preview never mutates data and is not invoked on page load.
+    """
+    initialize()
+    conn = database.get_connection()
+    totals = {
+        "rows_scanned": 0, "rows_to_change": 0, "fields_to_change": 0,
+        "country_changes": 0, "city_changes": 0, "provinces_to_fill": 0,
+        "existing_province_mismatches": 0,
+    }
+    try:
+        if apply:
+            conn.execute("BEGIN IMMEDIATE")
+        rules = _rules_for_category(conn, "transferlist")
+        fields = ("id", "processed_message_id", *_CARGO_LOCATION_FIELDS,
+                  *_CARGO_PROVINCE_FIELDS)
+        selected = ", ".join(f'"{field}"' for field in fields)
+        # Cursor iteration prevents materializing all historical transfer rows.
+        for sqlite_row in conn.execute(f"SELECT {selected} FROM transferlist"):
+            row = dict(sqlite_row)
+            totals["rows_scanned"] += 1
+            normalized, changes, conflicts = _unified_cargo_location_changes(row, rules)
+            totals["existing_province_mismatches"] += conflicts
+            if not changes:
+                continue
+            totals["rows_to_change"] += 1
+            totals["fields_to_change"] += len(changes)
+            totals["country_changes"] += sum(
+                field.endswith("_country") for field in changes
+            )
+            totals["city_changes"] += sum(
+                field.endswith("_city") for field in changes
+            )
+            totals["provinces_to_fill"] += sum(
+                field in _CARGO_PROVINCE_FIELDS for field in changes
+            )
+            if apply:
+                assignments = ", ".join(f'"{field}"=?' for field in changes)
+                conn.execute(
+                    f"UPDATE transferlist SET {assignments} WHERE id=?",
+                    [*changes.values(), row["id"]],
+                )
+                if any(field in _CARGO_LOCATION_FIELDS for field in changes):
+                    _sync_transfer_location(conn, normalized)
+        if apply:
+            conn.commit()
+        return totals
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def preview_cargo_location_normalization():
+    """Estimate all six-field changes without modifying stored data."""
+    return _run_unified_cargo_location_normalization(apply=False)
+
+
+def apply_cargo_location_normalization():
+    """Apply all six-field cargo location changes in one SQLite transaction."""
+    return _run_unified_cargo_location_normalization(apply=True)
+
+
 def renormalize_transfer_cities_only():
     """Backfill only the origin/destination city+country fields.
 

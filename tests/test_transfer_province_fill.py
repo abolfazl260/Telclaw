@@ -196,12 +196,12 @@ async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_
     finally:
         conn.close()
 
-    real_preview = data_normalizer.preview_transfer_missing_provinces
+    real_preview = data_normalizer.preview_cargo_location_normalization
     calls = []
     def track_preview():
         calls.append(True)
         return real_preview()
-    monkeypatch.setattr(data_normalizer, "preview_transfer_missing_provinces", track_preview)
+    monkeypatch.setattr(data_normalizer, "preview_cargo_location_normalization", track_preview)
 
     await client.start_server()
     try:
@@ -209,26 +209,27 @@ async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_
         response = await client.get("/normalization", headers=headers)
         assert response.status == 200
         html = await response.text()
-        assert "Fill missing cargo provinces" in html
-        assert "Preview matching empty provinces" in html
-        assert "Apply cargo city and country rules" in html
+        assert "Cargo Location Normalization" in html
+        assert "Preview Changes" in html
+        assert "Apply Normalization" in html
+        assert "<details id=\"advanced-normalization\">" in html
         assert calls == []
 
-        response = await client.get("/normalization?province_preview=1", headers=headers)
+        response = await client.get("/normalization?cargo_preview=1", headers=headers)
         assert response.status == 200
         body = await response.text()
-        assert "2 missing province field(s)" in body
+        assert "missing provinces: 2" in body
         assert calls == [True]
 
-        bad = await client.post("/normalization/fill-transfer-provinces",
+        bad = await client.post("/normalization/apply-cargo-locations",
                                 data={"csrf": "incorrect"}, headers=headers)
         assert bad.status == 403
         response = await client.post(
-            "/normalization/fill-transfer-provinces",
+            "/normalization/apply-cargo-locations",
             data={"csrf": "csrf-for-province"}, headers=headers, allow_redirects=False,
         )
         assert response.status == 303
-        assert "provinces_filled" in response.headers["Location"]
+        assert "cargo_applied" in response.headers["Location"]
         conn = database.get_connection()
         try:
             row = conn.execute("SELECT origin_province,destination_province FROM transferlist WHERE processed_message_id=?",
@@ -236,5 +237,185 @@ async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_
         finally:
             conn.close()
         assert tuple(row) == ("Tehran", "Ontario")
+    finally:
+        await client.close()
+
+
+def test_unified_cargo_preview_atomic_apply_and_idempotency(province_db):
+    conn = database.get_connection()
+    try:
+        first = _add_cargo(
+            conn, 8001, country="ایران", city="Teheran",
+            dest_country="Canada", dest_city="تورنتو",
+        )
+        second = _add_cargo(
+            conn, 8002, country="RU", city="Moscow/Naberezhnye Chelny",
+            dest_country="AE", dest_city="Air Tour",
+        )
+        third = _add_cargo(
+            conn, 8003, country="IR", city="Tehran/Karaj",
+            origin_province="Alborz", dest_country="CN", dest_city="China",
+        )
+        fourth = _add_cargo(
+            conn, 8004, country="CA", city="Toronto",
+            origin_province="Ontario", dest_country="DE", dest_city="Munich",
+            destination_province="Hesse",
+        )
+        fifth = _add_cargo(
+            conn, 8005, country="IR", city="Tehran/Mashhad",
+            dest_country="CN", dest_city="China",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    preview = data_normalizer.preview_cargo_location_normalization()
+    assert preview == {
+        "rows_scanned": 5,
+        "rows_to_change": 3,
+        "fields_to_change": 10,
+        "country_changes": 2,
+        "city_changes": 5,
+        "provinces_to_fill": 3,
+        "existing_province_mismatches": 2,
+    }
+    conn = database.get_connection()
+    try:
+        before = conn.execute(
+            "SELECT origin_country,origin_city,origin_province "
+            "FROM transferlist WHERE processed_message_id=?", (first,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert tuple(before) == ("ایران", "Teheran", None)
+
+    applied = data_normalizer.apply_cargo_location_normalization()
+    assert applied == preview
+    again = data_normalizer.apply_cargo_location_normalization()
+    assert again["rows_to_change"] == again["fields_to_change"] == 0
+    assert again["existing_province_mismatches"] == 2
+
+    conn = database.get_connection()
+    try:
+        rows = {
+            row["processed_message_id"]: row for row in
+            conn.execute("SELECT * FROM transferlist")
+        }
+        messages = list(conn.execute("SELECT raw_text,advertio_status FROM messages"))
+        cache = conn.execute(
+            "SELECT origin_city_canonical,origin_country_iso2,destination_city_canonical "
+            "FROM transfer_locations WHERE processed_message_id=?", (first,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert (rows[first]["origin_country"], rows[first]["origin_city"],
+            rows[first]["origin_province"]) == ("IR", "Tehran", "Tehran")
+    assert (rows[first]["destination_country"], rows[first]["destination_city"],
+            rows[first]["destination_province"]) == ("CA", "Toronto", "Ontario")
+    assert (rows[second]["origin_city"], rows[second]["origin_province"]) == ("Moscow", "Moscow")
+    assert rows[second]["destination_city"] is None
+    assert rows[second]["destination_province"] is None
+    assert rows[third]["origin_city"] == "Tehran"
+    assert rows[third]["origin_province"] == "Alborz"  # never replace an explicit value
+    assert rows[fourth]["destination_province"] == "Hesse"
+    assert rows[fifth]["origin_city"] == "Tehran/Mashhad"
+    assert all(row["description"] == "Original cleaned cargo description"
+               and row["departure_date"] == "2026-11-25" for row in rows.values())
+    assert all(row["raw_text"] == "raw source do not modify"
+               and row["advertio_status"] == "sent" for row in messages)
+    assert tuple(cache) == ("Tehran", "IR", "Toronto")
+
+
+def test_unified_cargo_apply_rolls_back_every_field_on_cache_sync_failure(province_db, monkeypatch):
+    conn = database.get_connection()
+    try:
+        row_id = _add_cargo(
+            conn, 8101, country="ایران", city="Teheran",
+            dest_country="Canada", dest_city="تورنتو",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def fail_cache_sync(*args):
+        raise RuntimeError("simulated transfer cache failure")
+
+    monkeypatch.setattr(data_normalizer, "_sync_transfer_location", fail_cache_sync)
+    with pytest.raises(RuntimeError, match="simulated"):
+        data_normalizer.apply_cargo_location_normalization()
+
+    conn = database.get_connection()
+    try:
+        row = conn.execute(
+            "SELECT origin_country,origin_city,origin_province,destination_country,"
+            "destination_city,destination_province FROM transferlist "
+            "WHERE processed_message_id=?", (row_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert tuple(row) == ("ایران", "Teheran", None, "Canada", "تورنتو", None)
+
+
+@pytest.mark.asyncio
+async def test_unified_location_preview_only_on_demand_with_same_admin_auth(province_db, monkeypatch):
+    client = TestClient(TestServer(backoffice_web.create_app()))
+    conn = database.get_connection()
+    try:
+        _add_cargo(conn, 8201, country="ایران", city="Teheran",
+                   dest_country="Canada", dest_city="تورنتو")
+        conn.execute("INSERT INTO backoffice_sessions VALUES(?,?,?,?)",
+                     (backoffice_web._digest("unified-test-session"), 1485409432,
+                      "unified-csrf", (backoffice_web._now() +
+                       timedelta(hours=1)).isoformat()))
+        conn.commit()
+    finally:
+        conn.close()
+
+    actual_preview = data_normalizer.preview_cargo_location_normalization
+    calls = []
+    def measured_preview():
+        calls.append("preview")
+        return actual_preview()
+    monkeypatch.setattr(data_normalizer, "preview_cargo_location_normalization",
+                        measured_preview)
+    await client.start_server()
+    try:
+        headers = {"Cookie": "telclaw_admin=unified-test-session"}
+        unauthed = await client.get("/normalization?cargo_preview=1")
+        assert unauthed.status == 401
+
+        page = await client.get("/normalization", headers=headers)
+        assert page.status == 200
+        html = await page.text()
+        assert "Cargo Location Normalization" in html
+        assert 'action="/normalization/apply-cargo-locations"' in html
+        assert '<details id="advanced-normalization">' in html
+        assert "Preview Changes" in html
+        assert "Apply Normalization" in html
+        assert 'action="/normalization/apply-transfer-cities"' not in html
+        assert 'action="/normalization/fill-transfer-provinces"' not in html
+        assert calls == []
+
+        preview = await client.get("/normalization?cargo_preview=1", headers=headers)
+        assert preview.status == 200
+        rendered = await preview.text()
+        assert "Read-only preview" in rendered
+        assert "Countries: 2" in rendered
+        assert "cities: 2" in rendered
+        assert "missing provinces: 2" in rendered
+        assert calls == ["preview"]
+
+        invalid = await client.post(
+            "/normalization/apply-cargo-locations",
+            data={"csrf": "incorrect"}, headers=headers,
+        )
+        assert invalid.status == 403
+        applied = await client.post(
+            "/normalization/apply-cargo-locations",
+            data={"csrf": "unified-csrf"}, headers=headers,
+            allow_redirects=False,
+        )
+        assert applied.status == 303
+        assert "cargo_applied" in applied.headers["Location"]
     finally:
         await client.close()

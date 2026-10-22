@@ -138,10 +138,15 @@ async def test_cargo_city_rules_are_visible_and_can_be_applied_independently(web
         assert response.status == 200
         page = await response.text()
         assert "Cargo city/country rules" in page
-        assert 'action="/normalization/apply-transfer-cities"' in page
+        assert 'action="/normalization/apply-cargo-locations"' in page
+        assert "Cargo Location Normalization" in page
+        assert "<details id=\"advanced-normalization\">" in page
+        assert page.count('action="/normalization/apply-cargo-locations"') == 1
+        assert 'action="/normalization/fill-transfer-provinces"' not in page
+        assert 'action="/normalization/apply-transfer-cities"' not in page
         assert "Load first 20 rules" in page
         assert 'id="alias-' not in page  # do not render hundreds of forms initially
-        assert page.index("Apply cargo city and country rules") < page.index("Existing aliases")
+        assert page.index("Cargo Location Normalization") < page.index("Existing aliases")
 
         response = await client.get("/normalization?view=cargo&rules=1", headers=headers)
         assert response.status == 200
@@ -149,14 +154,14 @@ async def test_cargo_city_rules_are_visible_and_can_be_applied_independently(web
         assert "Showing page 1" in page
         assert 'id="alias-' in page
 
-        no_csrf = await client.post("/normalization/apply-transfer-cities",
+        no_csrf = await client.post("/normalization/apply-cargo-locations",
                                     headers=headers, data={"csrf": "wrong"})
         assert no_csrf.status == 403
-        response = await client.post("/normalization/apply-transfer-cities",
+        response = await client.post("/normalization/apply-cargo-locations",
                                      headers=headers, data={"csrf": csrf},
                                      allow_redirects=False)
         assert response.status == 303
-        assert "view=cargo" in response.headers["Location"]
+        assert "notice=cargo_applied" in response.headers["Location"]
 
         conn = database.get_connection()
         try:

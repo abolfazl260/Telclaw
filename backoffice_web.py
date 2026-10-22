@@ -2157,24 +2157,36 @@ async def normalization_page(request):
              ('?view=cargo' if show_cargo else '') +
              '#existing-aliases">Hide rules</a>')
         )
-    province_preview = None
-    if request.query.get("province_preview") == "1":
-        # Only on explicit request; the default Normalization page remains fast.
-        province_preview = data_normalizer.preview_transfer_missing_provinces()
-    if province_preview is not None:
-        province_preview_html = (
-            '<p class="normalization-notice">Preview (no data changed): '
-            + str(province_preview["rows_to_fill"]) + ' cargo record(s) have '
-            + str(province_preview["fields_to_fill"]) + ' missing province field(s) with a verified city/country mapping. '
-            + 'Origin: ' + str(province_preview["origin_to_fill"])
-            + '; destination: ' + str(province_preview["destination_to_fill"])
-            + '. Existing nonempty province differences kept for review: '
-            + str(province_preview["existing_mismatches"]) + '.</p>'
-        )
+    # An explicit preview click only; the initial page remains cheap.
+    cargo_preview = (
+        data_normalizer.preview_cargo_location_normalization()
+        if request.query.get("cargo_preview") == "1" else None
+    )
+    if cargo_preview is None:
+        cargo_preview_html = ""
     else:
-        province_preview_html = ""
+        cargo_preview_html = (
+            '<p class="normalization-notice">Read-only preview: '
+            + str(cargo_preview["rows_to_change"]) + ' record(s), '
+            + str(cargo_preview["fields_to_change"]) + ' field(s) would change. '
+            + 'Countries: ' + str(cargo_preview["country_changes"])
+            + '; cities: ' + str(cargo_preview["city_changes"])
+            + '; missing provinces: ' + str(cargo_preview["provinces_to_fill"])
+            + '. Existing province mismatches left untouched: '
+            + str(cargo_preview["existing_province_mismatches"]) + '.</p>'
+        )
     notice = request.query.get("notice", "")
-    if notice == "provinces_filled":
+    if notice == "cargo_applied":
+        notice_html = (
+            '<p class="normalization-notice">Cargo locations normalized: '
+            + _escape(request.query.get("rows", "0")) + ' record(s), '
+            + _escape(request.query.get("fields", "0")) + ' location field(s). '
+            + 'Countries: ' + _escape(request.query.get("countries", "0"))
+            + '; cities: ' + _escape(request.query.get("cities", "0"))
+            + '; missing provinces: ' + _escape(request.query.get("provinces", "0"))
+            + '. Other structured fields and published ads were not changed.</p>'
+        )
+    elif notice == "provinces_filled":
         notice_html = (
             '<p class="normalization-notice">Province fill completed: '
             + _escape(request.query.get("rows", "0")) + ' record(s), '
@@ -2216,42 +2228,44 @@ async def normalization_page(request):
     <code>messages.raw_text</code> is never modified. Matching ignores case and accents, so one Dusseldorf rule also
     catches Düsseldorf. Optional country scope limits a rule when the related country field contains that ISO2 code.</p>
     {notice_html}
-    <section><h2>Apply cargo city and country rules to existing data</h2>
-      <p class="normalization-warning">Back up SQLite before applying. This updates ONLY four transferlist route
-      fields and refreshes cached route locations, not raw messages, dates, descriptions,
-      prices or delivery statuses. Ambiguous/multiple locations are preserved.</p>
-      <form method="post" action="/normalization/apply-transfer-cities">
-        <input type="hidden" name="csrf" value="{csrf}">
-        <button data-confirm="Apply reviewed country-scoped cargo city/country rules to existing transferlist rows? Make sure SQLite is backed up.">Apply cargo city/country rules to existing transferlist</button>
-      </form>
+    <section id="cargo-location-normalization"><h2>Cargo Location Normalization</h2>
+      <p class="muted">One operation to standardize transfer cargo locations. Changes are applied
+      in order: country → city → missing province/state, for both origin and destination.</p>
+      <ul>
+        <li>Normalize country names to ISO2 codes.</li>
+        <li>Normalize origin and destination city names using existing aliases.</li>
+        <li>Fill missing province/state names from confirmed city + country mappings.</li>
+        <li>Preserve existing province values, unresolved multi-city locations and original messages.</li>
+      </ul>
+      <p class="normalization-warning">Back up the SQLite database before applying.
+      Preview is read-only. Applying changes updates only the six cargo location fields
+      in one database transaction. Dates, descriptions, prices, other categories,
+      Telegram posts and Advertio delivery states are not modified.</p>
+      {cargo_preview_html}
+      <div class="alias-actions">
+        <form method="get" action="/normalization#cargo-location-normalization">
+          <input type="hidden" name="cargo_preview" value="1">
+          <button type="submit">Preview Changes</button>
+        </form>
+        <form method="post" action="/normalization/apply-cargo-locations">
+          <input type="hidden" name="csrf" value="{csrf}">
+          <button data-confirm="Apply all cargo country, city and missing province changes in ONE transaction? Back up SQLite before proceeding.">Apply Normalization</button>
+        </form>
+      </div>
     </section>
-    <section id="province-fill"><h2>Fill missing cargo provinces / states</h2>
-      <p class="muted">Based on verified country + city mappings from the 3,655-row cargo CSV.
-      Province names use full English state/province/region names (e.g. Ontario,
-      North Rhine-Westphalia, Guangdong, Tehran). Existing province values
-      are never overwritten. Ambiguous routes and country-only city fields
-      remain empty. Only <code>transferlist.origin_province</code> and
-      <code>transferlist.destination_province</code> are updated.</p>
-      <p class="normalization-warning">Back up SQLite before applying.
-      Preview is read-only. Neither operation publishes or resends any ads.</p>
-      <p><a href="/normalization?province_preview=1#province-fill">Preview matching empty provinces</a></p>
-      {province_preview_html}
-      <form method="post" action="/normalization/fill-transfer-provinces">
-        <input type="hidden" name="csrf" value="{csrf}">
-        <button data-confirm="Fill ONLY empty origin/destination province fields using exact country+city mappings? Verify the preview and back up SQLite first.">Fill missing cargo provinces</button>
-      </form>
-    </section>
-    <section><h2>Existing database (all fields)</h2>
-      <p class="normalization-warning">This updates structured category rows only. It does not edit Telegram messages that
-      were already published. Review alias rules and affected counts first.</p>
-      <form method="post" action="/normalization/apply">
-        <input type="hidden" name="csrf" value="{csrf}">
-        <label>Scope <select name="category"><option value="">All categories</option>
-        {''.join(f'<option value="{_escape(c)}">{_escape(c)}</option>' for c in data_normalizer.aliasable_fields())}
-        </select></label>
-        <button data-confirm="Apply the current normalization rules to existing structured database rows?">Re-normalize existing data</button>
-      </form>
-    </section>
+    <details id="advanced-normalization"><summary><strong>Advanced Normalization</strong> (all categories and fields)</summary>
+      <section><h2>Re-normalize existing data</h2>
+        <p class="muted">Advanced operation: apply all enabled normalization aliases and built-in
+        rules for the selected category or the entire database. Use only when needed.</p>
+        <form method="post" action="/normalization/apply">
+          <input type="hidden" name="csrf" value="{csrf}">
+          <label>Scope <select name="category"><option value="">All categories</option>
+          {''.join(f'<option value="{_escape(c)}">{_escape(c)}</option>' for c in data_normalizer.aliasable_fields())}
+          </select></label>
+          <button data-confirm="Apply all normalization rules to existing structured data for the selected category?">Re-normalize existing data</button>
+        </form>
+      </section>
+    </details>
     <section><h2>Add normalization alias</h2><form method="post" action="/normalization/save" class="new-alias">
       <input type="hidden" name="csrf" value="{csrf}">
       <label>Field<select name="target" required>{_normalization_target_options()}</select></label>
@@ -2317,6 +2331,19 @@ async def delete_normalization_alias(request):
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     raise web.HTTPSeeOther("/normalization?notice=deleted")
+
+
+async def apply_unified_cargo_location_normalization(request):
+    result = data_normalizer.apply_cargo_location_normalization()
+    raise web.HTTPSeeOther(
+        "/normalization?notice=cargo_applied"
+        f"&rows={int(result['rows_to_change'])}"
+        f"&fields={int(result['fields_to_change'])}"
+        f"&countries={int(result['country_changes'])}"
+        f"&cities={int(result['city_changes'])}"
+        f"&provinces={int(result['provinces_to_fill'])}"
+        "#cargo-location-normalization"
+    )
 
 
 async def apply_transfer_city_normalization(request):
@@ -2600,6 +2627,7 @@ def create_app(console_ui=None):
                     web.post("/normalization/save", save_normalization_alias),
                     web.post("/normalization/delete", delete_normalization_alias),
                     web.post("/normalization/apply", apply_normalization),
+                    web.post("/normalization/apply-cargo-locations", apply_unified_cargo_location_normalization),
                     web.post("/normalization/apply-transfer-cities", apply_transfer_city_normalization),
                     web.post("/normalization/fill-transfer-provinces", fill_transfer_provinces),
                     web.post("/settings/save", save_setting),

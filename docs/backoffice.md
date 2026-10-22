@@ -61,11 +61,18 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
 
 ## Fast Normalization page
 
-The **Normalization** page deliberately keeps the two existing backfill
-operations at the top: **Apply cargo city/country rules to existing
-transferlist** (four route fields only), and **Re-normalize existing data**
-(selected category or all categories). Both still require explicit confirmation,
-and neither is executed merely by opening the page.
+The **Normalization** page offers one primary **Cargo Location
+Normalization** operation. Use **Preview Changes** to calculate affected
+origin/destination country, city and missing province fields (read-only and
+only on demand). Then use **Apply Normalization** to update those six cargo
+location fields in a single SQLite transaction. Countries are standardized
+first, then cities, then *missing* provinces. Explicit province values,
+other ad fields, source messages and delivery statuses remain unchanged.
+
+The older **Re-normalize existing data** action is preserved inside a
+collapsed **Advanced Normalization** section for any category or all fields.
+Legacy route-only and province-only endpoints remain available for backwards
+compatibility but are no longer separate primary page actions.
 
 Below these actions, **Add normalization alias** is available immediately.
 Previously saved rules are hidden by default: the initial page counts rules

@@ -65,25 +65,32 @@ review; repairing pre-existing wrong values is explicitly out of scope.
 
 ## New data and historical records
 
-- **New AI-processed transferlist records:** normalizer fills
-  `origin_province` and/or `destination_province` only after country/city
-  normalization, only when empty and only when a safe exact mapping exists.
-- **Historical transferlist records:** on **Normalization**, click
-  **Preview matching empty provinces** first. This is a read-only scan
-  started only by request, not on normal page load.
-- Back up production SQLite, then click **Fill missing cargo provinces**.
-  This uses a transaction, updates **only** the two province fields, and
-  leaves cities, countries, raw Telegram posts, cleaned descriptions,
-  prices, travel dates, API delivery states and published Telegram content
-  untouched. It is idempotent; a second run will not change the same rows.
-- Route-only normalization and general Re-normalize buttons remain
-  available independently. No production data is automatically backfilled
-  when the code is deployed.
+- **New AI-processed transferlist records:** Normalization automatically
+  fills blank origin/destination provinces from confirmed country + city
+  mappings, after city and country aliases are applied. Explicit existing
+  province values remain unchanged.
+- **Historical records:** in **Back Office → Normalization → Cargo Location
+  Normalization**, click **Preview Changes** to see a read-only breakdown of
+  country, city and missing-province corrections (and existing nonempty
+  province mismatches). No scan is performed on the ordinary page load.
+- Back up production SQLite and click **Apply Normalization**. One SQLite
+  transaction normalizes the four origin/destination country and city fields
+  **and** fills missing origin/destination provinces using the newly
+  canonicalized route values. All six location fields are handled together;
+  the process rolls back if any database write or transfer-location cache
+  refresh fails.
+- Other structured fields, raw source text, dates, prices, published posts
+  and Advertio API delivery states remain unchanged. Re-running the operation
+  is safe and idempotent. Existing nonempty province mismatches are counted
+  for review but not overwritten.
+- **Advanced Normalization** (collapsed by default) retains the broader
+  all-categories operation. The previous route-only and province-only
+  endpoints remain for backwards compatibility but no longer appear as
+  separate primary controls.
 
-The preview reports `rows_to_fill`, `fields_to_fill`, the breakdown by
-origin/destination and existing mismatches. The map is maintained as code,
-not a hardcoded guess inside the admin HTML; extend it only after
-verifying the city/country administrative relationship.
+The city/region reference map remains maintained in Python code, not guessed
+by the Back Office UI. Extend it only after confirming the country+city
+administrative relationship.
 
 ## Related material
 

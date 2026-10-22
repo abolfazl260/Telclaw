@@ -60,13 +60,13 @@ a municipality, geolocation or province from the text alone. This rule
 does not enable Advertio API delivery for an unsupported or ambiguous
 location.
 
-To correct existing entries, first back up SQLite, deploy and restart
-Telclaw, review the new rules under **Normalization → Cargo city/country
-rules** (load a page as needed), then run **Apply cargo city/country rules
-to existing transferlist**. That route-only action updates structured
-origin/destination city and country values, not raw messages, dates,
-descriptions or prior delivery states. The existing province-fill action
-is separate and will not infer a city from `Bali`.
+To correct existing entries, back up SQLite, deploy and restart
+Telclaw, review aliases under **Normalization → Cargo city/country rules**
+(load a page as needed), then use **Cargo Location Normalization →
+Preview Changes → Apply Normalization**. This unified operation updates
+origin/destination cities and countries, and fills missing provinces
+atomically, not raw messages, dates, descriptions or prior delivery
+states. The rule for `Bali` never infers a more specific municipality.
 
 ## Values excluded from automatic city mapping
 
@@ -94,16 +94,17 @@ records to the country's capital by default.
 1. Back up the live SQLite database.
 2. Deploy and restart Telclaw, then open **Back Office → Normalization →
    Cargo city/country rules**. Review country-scoped aliases before applying.
-3. To update existing data, click **Apply cargo city/country rules to existing
-   transferlist**. This uses `renormalize_transfer_cities_only()` and
-   only updates the four country/city route fields and
-   `transfer_locations` cache, in one transaction.
+3. Use **Preview Changes** first, then **Apply Normalization** in the
+   unified Cargo Location Normalization section. Country and city aliases
+   plus missing-province inference update the six location fields in one
+   SQLite transaction; transfer location cache remains synchronized.
 4. Future structured extractions automatically use the seeded rules. Existing
    custom aliases remain untouched on re-seeding (`INSERT OR IGNORE`).
 5. This does **not** edit source messages, already-posted Telegram content,
    remote Advertio leads or ingestion status. Replaying already successful
    API deliveries is not part of normalization.
 
-Re-running the cargo route-only backfill is idempotent. Full
-`Re-normalize existing data` applies **all** existing alias categories/fields
-and is a different, broader operation; use the route-only action for this audit.
+Re-running unified cargo location normalization is idempotent.
+Full `Re-normalize existing data` remains under **Advanced Normalization**;
+it applies other categories/fields as well and should not be used for this
+cargo-specific operation.

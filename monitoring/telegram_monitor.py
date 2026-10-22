@@ -78,7 +78,23 @@ class TelegramMonitor:
         return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
                 "offset":int(self._offset or 0)}
     async def _register_commands(self):
-        commands=[{"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},{"command":"aboutus","description":"آشنایی با مجموعه ادورتیو و لینک‌ها"},{"command":"stop","description":"توقف دریافت گزارش‌ها"},{"command":"status","description":"نمایش وضعیت فعلی سیستم"},{"command":"health","description":"بررسی سلامت فعلی سیستم"},{"command":"today","description":"نمایش آمار امروز"},{"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},{"command":"down_errors","description":"Download crawler error log"},{"command":"database","description":"Download full SQLite database"},{"command":"backoffice","description":"Open private publishing back office"}]
+        # Register the COMPLETE command menu in every supported scope.
+        # Previously transfer_live.py updated only the default scope, so
+        # all_private_chats still showed a stale menu without /transferlive.
+        commands=[
+            {"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},
+            {"command":"aboutus","description":"آشنایی با مجموعه ادورتیو و لینک‌ها"},
+            {"command":"stop","description":"توقف دریافت گزارش‌ها"},
+            {"command":"status","description":"نمایش وضعیت فعلی سیستم"},
+            {"command":"health","description":"بررسی سلامت فعلی سیستم"},
+            {"command":"today","description":"نمایش آمار امروز"},
+            {"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},
+            {"command":"transferlive","description":"نمایش آگهی‌های فعال حمل‌ونقل"},
+            {"command":"transfercountry","description":"خلاصه مسیرها بر اساس کشور"},
+            {"command":"down_errors","description":"Download crawler error log"},
+            {"command":"database","description":"Download full SQLite database"},
+            {"command":"backoffice","description":"Open private publishing back office"},
+        ]
         for scope in ({"type":"default"},{"type":"all_private_chats"}):
             try:
                 await self._api("setMyCommands",{"commands":commands,"scope":scope})

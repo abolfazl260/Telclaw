@@ -196,12 +196,12 @@ async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_
     finally:
         conn.close()
 
-    real_preview = data_normalizer.preview_transfer_missing_provinces
+    real_preview = data_normalizer.preview_cargo_location_normalization
     calls = []
     def track_preview():
         calls.append(True)
         return real_preview()
-    monkeypatch.setattr(data_normalizer, "preview_transfer_missing_provinces", track_preview)
+    monkeypatch.setattr(data_normalizer, "preview_cargo_location_normalization", track_preview)
 
     await client.start_server()
     try:
@@ -209,26 +209,27 @@ async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_
         response = await client.get("/normalization", headers=headers)
         assert response.status == 200
         html = await response.text()
-        assert "Fill missing cargo provinces" in html
-        assert "Preview matching empty provinces" in html
-        assert "Apply cargo city and country rules" in html
+        assert "Cargo Location Normalization" in html
+        assert "Preview Changes" in html
+        assert "Apply Normalization" in html
+        assert "<details id=\"advanced-normalization\">" in html
         assert calls == []
 
-        response = await client.get("/normalization?province_preview=1", headers=headers)
+        response = await client.get("/normalization?cargo_preview=1", headers=headers)
         assert response.status == 200
         body = await response.text()
-        assert "2 missing province field(s)" in body
+        assert "missing provinces: 2" in body
         assert calls == [True]
 
-        bad = await client.post("/normalization/fill-transfer-provinces",
+        bad = await client.post("/normalization/apply-cargo-locations",
                                 data={"csrf": "incorrect"}, headers=headers)
         assert bad.status == 403
         response = await client.post(
-            "/normalization/fill-transfer-provinces",
+            "/normalization/apply-cargo-locations",
             data={"csrf": "csrf-for-province"}, headers=headers, allow_redirects=False,
         )
         assert response.status == 303
-        assert "provinces_filled" in response.headers["Location"]
+        assert "cargo_applied" in response.headers["Location"]
         conn = database.get_connection()
         try:
             row = conn.execute("SELECT origin_province,destination_province FROM transferlist WHERE processed_message_id=?",

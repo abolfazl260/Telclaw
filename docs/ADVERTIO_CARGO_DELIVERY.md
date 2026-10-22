@@ -134,6 +134,20 @@ publication:
    flagged Similar still require moderation. Existing PendingReview leads
    remain pending until a separate backend approval flow handles them safely.
 
+### Active Cargo report (after deployment)
+
+- Open **Back Office → Active Cargo** (/cargo) for the date-active candidate
+  pool. Use source/city/Telegram ID search, API status and trip-date filters,
+  and pagination to inspect historic and recently crawled cargo records.
+- The report distinguishes **Active candidates** (date/freshness only) from
+  **Ready for API** (local country, city completeness, waiting/retry state and
+  backoff window). It cannot verify Telegram deletion or Advertio visibility.
+- Mark checkboxes beside ready ads and choose **Send selected active cargo to
+  Advertio** to submit precisely those internal IDs through the normal
+  idempotent queue, or **Send next 25 ready ads** to drain the highest-priority
+  part of the queue automatically. Batch and daily limits still apply.
+- Source messages and Housing/Telegram delivery states remain unchanged.
+
 ### From Telclaw Back Office (after deployment)
 
 - **Settings → Advertio**: configure the API base URL and ingest key. The

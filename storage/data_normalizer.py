@@ -437,6 +437,38 @@ def list_aliases():
         conn.close()
 
 
+def paged_aliases(*, cargo_only=False, limit=0, offset=0):
+    """Count rules cheaply, loading only the requested page of rule metadata.
+
+    A zero limit returns just the count so Normalization's default view
+    never materializes the hundreds of edit forms.
+    """
+    initialize()
+    limit = int(limit)
+    offset = int(offset)
+    if limit < 0 or limit > 50 or offset < 0:
+        raise ValueError("Invalid alias page")
+    where = ""
+    if cargo_only:
+        where = (" WHERE category='transferlist' AND field_name IN "
+                 "('origin_city','destination_city','origin_country','destination_country')")
+    conn = database.get_connection()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM normalization_aliases" + where
+        ).fetchone()[0]
+        rows = []
+        if limit:
+            rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM normalization_aliases" + where +
+                " ORDER BY category, field_name, alias COLLATE NOCASE, id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()]
+        return total, rows
+    finally:
+        conn.close()
+
+
 def get_alias(alias_id):
     initialize()
     conn = database.get_connection()

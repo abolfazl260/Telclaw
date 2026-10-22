@@ -59,6 +59,24 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## Fast Normalization page
+
+The **Normalization** page deliberately keeps the two existing backfill
+operations at the top: **Apply cargo city/country rules to existing
+transferlist** (four route fields only), and **Re-normalize existing data**
+(selected category or all categories). Both still require explicit confirmation,
+and neither is executed merely by opening the page.
+
+Below these actions, **Add normalization alias** is available immediately.
+Previously saved rules are hidden by default: the initial page counts rules
+with a single SQL aggregate without rendering rule forms or scanning category
+rows per rule. Choose **Load first 20 rules** to inspect/edit a page of up to
+20 rules, then **Load next 20** or **Previous 20** to browse. The **Cargo
+city/country rules** filter applies before pagination. **Check affected rows**
+on an individual rule calculates its potentially changed-row count only on
+demand. No existing aliases, save/delete actions, or country scopes were
+removed; the change is presentation/query loading only.
+
 ## Match the Telegram /transferlive active-cargo count
 
 The **Active Cargo** page now displays two counts and has a **Report definition**

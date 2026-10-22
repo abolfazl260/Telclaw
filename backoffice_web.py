@@ -2063,15 +2063,19 @@ def _normalization_target_options(selected=""):
     return "".join(options)
 
 
-def _normalization_rule_card(rule, csrf):
+def _normalization_rule_card(rule, csrf, *, show_matches=False, count_link=""):
     target = f"{rule['category']}.{rule['field_name']}"
-    try:
-        matches = data_normalizer.count_current_matches(rule["id"])
-    except (ValueError, TypeError):
-        matches = 0
+    if show_matches:
+        try:
+            matches = data_normalizer.count_current_matches(rule["id"])
+        except (ValueError, TypeError):
+            matches = 0
+        matches_html = f'<span class="match-count">{matches} existing value(s) would change</span>'
+    else:
+        matches_html = f'<a href="{_escape(count_link)}">Check affected rows</a>'
     null_checked = rule.get("canonical_value") is None
     source = "Built-in seed" if rule.get("created_by") is None else f"Admin {rule.get('created_by')}"
-    return f'''<article class="alias-card"><form method="post" action="/normalization/save">
+    return f'''<article class="alias-card" id="alias-{int(rule['id'])}"><form method="post" action="/normalization/save">
         <input type="hidden" name="csrf" value="{csrf}">
         <input type="hidden" name="id" value="{int(rule['id'])}">
         <label>Field<select name="target" required>{_normalization_target_options(target)}</select></label>
@@ -2086,7 +2090,7 @@ def _normalization_rule_card(rule, csrf):
         <label class="check"><input type="checkbox" name="enabled" value="1"
             {"checked" if rule.get('enabled') else ""}> Enabled</label>
         <div class="alias-actions"><button>Save</button>
-        <span class="match-count">{matches} existing value(s) would change</span>
+        {matches_html}
         <span class="muted">{_escape(source)}</span></div></form>
         <form method="post" action="/normalization/delete" class="inline delete-alias">
         <input type="hidden" name="csrf" value="{csrf}">
@@ -2097,18 +2101,62 @@ def _normalization_rule_card(rule, csrf):
 
 async def normalization_page(request):
     csrf = _escape(request["session"]["csrf"])
-    rules = data_normalizer.list_aliases()
+    # Listing every alias previously scanned the whole category table for
+    # each rule and rendered hundreds of forms, even when never viewed.
+    # Only count aliases on initial load; fetch 20 editable rules on demand.
     show_cargo = request.query.get("view") == "cargo"
-    if show_cargo:
-        rules = [
-            rule for rule in rules
-            if rule["category"] == "transferlist"
-            and rule["field_name"] in {
-                "origin_city", "destination_city",
-                "origin_country", "destination_country",
-            }
-        ]
-    cards = "".join(_normalization_rule_card(rule, csrf) for rule in rules)
+    load_rules = request.query.get("rules") == "1"
+    page_size = 20
+    try:
+        page_number = int(request.query.get("page", "1"))
+        selected_count = int(request.query.get("count", "0"))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text="Invalid normalization rule page") from exc
+    if page_number < 1 or page_number > 100000 or selected_count < 0:
+        raise web.HTTPBadRequest(text="Invalid normalization rule page")
+    total, rules = data_normalizer.paged_aliases(
+        cargo_only=show_cargo, limit=page_size if load_rules else 0,
+        offset=(page_number - 1) * page_size if load_rules else 0,
+    )
+    pages = max(1, (total + page_size - 1) // page_size)
+    if load_rules and page_number > pages:
+        raise web.HTTPBadRequest(text="Normalization rule page out of range")
+
+    view_params = {"view": "cargo"} if show_cargo else {}
+    def rule_url(*, next_page=1, count_id=0):
+        params = {**view_params, "rules": "1", "page": next_page}
+        if count_id:
+            params["count"] = count_id
+        return "/normalization?" + urlencode(params)
+
+    cards = "".join(
+        _normalization_rule_card(
+            rule, csrf, show_matches=(selected_count == int(rule["id"])),
+            count_link=rule_url(next_page=page_number, count_id=int(rule["id"])) +
+                       "#alias-" + str(int(rule["id"])),
+        ) for rule in rules
+    )
+    if not load_rules:
+        paging_html = ('<p class="muted">Alias details stay unloaded until requested. '
+                       'This avoids scanning existing records for every rule.</p>'
+                       '<a class="button" href="' + _escape(rule_url()) +
+                       '#existing-aliases">Load first 20 rules</a>')
+    else:
+        links = []
+        if page_number > 1:
+            links.append('<a href="' + _escape(rule_url(next_page=page_number - 1)) +
+                         '#existing-aliases">Previous 20</a>')
+        if page_number < pages:
+            links.append('<a href="' + _escape(rule_url(next_page=page_number + 1)) +
+                         '#existing-aliases">Load next 20</a>')
+        paging_html = (
+            f'<p class="muted">Showing page {page_number:,} of {pages:,}; '
+            f'{len(rules):,} rule(s) loaded on this page.</p>' +
+            ' · '.join(links) +
+            (' <a href="/normalization' +
+             ('?view=cargo' if show_cargo else '') +
+             '#existing-aliases">Hide rules</a>')
+        )
     notice = request.query.get("notice", "")
     if notice == "applied":
         notice_html = (f'<p class="normalization-notice">Re-normalization complete: '
@@ -2145,23 +2193,6 @@ async def normalization_page(request):
     <code>messages.raw_text</code> is never modified. Matching ignores case and accents, so one Dusseldorf rule also
     catches Düsseldorf. Optional country scope limits a rule when the related country field contains that ISO2 code.</p>
     {notice_html}
-    <section><h2>Add normalization alias</h2><form method="post" action="/normalization/save" class="new-alias">
-      <input type="hidden" name="csrf" value="{csrf}">
-      <label>Field<select name="target" required>{_normalization_target_options()}</select></label>
-      <label>Alias<input name="alias" required placeholder="Frankfurt (Main)"></label>
-      <label>Canonical<input name="canonical" placeholder="Frankfurt"></label>
-      <label class="check"><input type="checkbox" name="map_to_null" value="1"> Map to NULL / ambiguous</label>
-      <label>Country scope (optional ISO2)<input name="country_iso2" maxlength="2" placeholder="DE"></label>
-      <label>Notes<input name="notes" maxlength="1000" placeholder="Why this alias exists"></label>
-      <label class="check"><input type="checkbox" name="enabled" value="1" checked> Enabled</label>
-      <div class="alias-actions"><button>Add alias</button></div>
-    </form></section>
-    <section><h2>Existing aliases ({len(rules):,})</h2>
-      <p><a href="/normalization?view=cargo">Cargo city/country rules</a> ·
-      <a href="/normalization">Show all normalization rules</a></p>
-      <p class="muted">Country-scoped city aliases cover both route directions. Country names
-      recorded in city fields and multiple-city strings are intentionally left for manual review.</p>
-      <div class="alias-grid">{cards or '<p>No aliases configured.</p>'}</div></section>
     <section><h2>Apply cargo city and country rules to existing data</h2>
       <p class="normalization-warning">Back up SQLite before applying. This updates ONLY four transferlist route
       fields and refreshes cached route locations, not raw messages, dates, descriptions,
@@ -2182,6 +2213,24 @@ async def normalization_page(request):
         <button data-confirm="Apply the current normalization rules to existing structured database rows?">Re-normalize existing data</button>
       </form>
     </section>
+    <section><h2>Add normalization alias</h2><form method="post" action="/normalization/save" class="new-alias">
+      <input type="hidden" name="csrf" value="{csrf}">
+      <label>Field<select name="target" required>{_normalization_target_options()}</select></label>
+      <label>Alias<input name="alias" required placeholder="Frankfurt (Main)"></label>
+      <label>Canonical<input name="canonical" placeholder="Frankfurt"></label>
+      <label class="check"><input type="checkbox" name="map_to_null" value="1"> Map to NULL / ambiguous</label>
+      <label>Country scope (optional ISO2)<input name="country_iso2" maxlength="2" placeholder="DE"></label>
+      <label>Notes<input name="notes" maxlength="1000" placeholder="Why this alias exists"></label>
+      <label class="check"><input type="checkbox" name="enabled" value="1" checked> Enabled</label>
+      <div class="alias-actions"><button>Add alias</button></div>
+    </form></section>
+    <section id="existing-aliases"><h2>Existing aliases ({total:,})</h2>
+      <p><a href="/normalization?view=cargo">Cargo city/country rules</a> ·
+      <a href="/normalization">Show all normalization rules</a></p>
+      <p class="muted">Country-scoped city aliases cover both route directions. Country names
+      recorded in city fields and multiple-city strings are intentionally left for manual review.</p>
+      {paging_html}
+      <div class="alias-grid">{cards}</div></section>
     <script nonce="{request['csp_nonce']}">
     document.querySelectorAll('[name="map_to_null"]').forEach(box=>{{
       const form=box.closest('form'); const canonical=form.querySelector('[name="canonical"]');

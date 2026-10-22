@@ -20,6 +20,14 @@ TRANSFER_CITY_ALIASES = (
      "Operator-selected primary city; composite also mentions Mashhad"),
     ("IR", "Tehran/Karaj", "Tehran",
      "Operator-selected primary city; composite also mentions Karaj"),
+    ("IR", "Tehran(Karaj)", "Tehran",
+     "Operator-selected Tehran for parenthetical Karaj"),
+    ("IR", "Karaj/Tehran", "Tehran",
+     "Operator-selected Tehran even when Karaj appears first"),
+    ("IR", "Tehran-Karaj", "Tehran",
+     "Operator-selected Tehran for this hyphenated route"),
+    ("IR", "Tehran -   Mashhad", "Mashhad",
+     "Operator-selected Mashhad for the spaced composite spelling"),
     ("CN", "Guanzhou", "Guangzhou", "Misspelling"),
     ("CN", "گوانژوو", "Guangzhou", "Persian transliteration"),
     ("CN", "Peking", "Beijing", "Historical English name"),
@@ -82,6 +90,12 @@ TRANSFER_COUNTRY_ALIASES = (
     ("United States", "US"), ("USA", "US"), ("America", "US"),
     ("United Kingdom", "GB"), ("UK", "GB"),
     ("UAE", "AE"), ("United Arab Emirates", "AE"),
+)
+
+# Special destination-only country correction: source field was "IR or TR"
+# and the operator chose IR. Do not rewrite origin_country automatically.
+TRANSFER_DESTINATION_COUNTRY_ALIASES = (
+    ("IR or TR", "IR"),
 )
 
 # Other multi-city values such as "Tehran/Mashhad", "Turin/Milan",

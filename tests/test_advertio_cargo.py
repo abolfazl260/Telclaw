@@ -428,3 +428,44 @@ async def test_selected_cargo_delivery_controller_is_audited_and_independent(env
         ops.start_selected_advertio_cargo([])
     with pytest.raises(ValueError, match="Select between"):
         ops.start_selected_advertio_cargo(range(1, 30))
+
+
+def test_telegram_transferlive_view_uses_exact_same_deduplicated_cohort(env):
+    from backoffice_active_cargo import active_cargo_report
+    from monitoring import transfer_live
+
+    tomorrow = (date.today() + timedelta(days=10)).isoformat()
+    add_post(7101, departure=tomorrow)
+    add_post(7102, departure=tomorrow)  # same sender, route and date
+    add_post(7103, departure=tomorrow, overrides={"destination_city": "Ottawa"})
+    add_post(7104, departure=tomorrow, overrides={"origin_country": "ZZ"})
+    add_post(7105, departure=tomorrow, overrides={"destination_city": None})
+    add_post(7106)  # fresh undated: Advertio candidate, NOT /transferlive
+    add_post(7107, departure=(date.today() - timedelta(days=2)).isoformat())
+    add_post(7108, departure=tomorrow,
+             overrides={"destination_country": "RU", "destination_city": "Moscow"})
+
+    telegram_ids = transfer_live.active_transferlive_message_ids()
+    telegram_report = active_cargo_report(view="telegram")
+    advertio_report = active_cargo_report()
+    assert len(telegram_ids) == 4
+    assert telegram_report["total"] == len(telegram_ids)
+    assert telegram_report["summary"]["transferlive"] == len(telegram_ids)
+    assert advertio_report["summary"]["transferlive"] == len(telegram_ids)
+    assert advertio_report["total"] == 7
+    assert {row["row_id"] for row in telegram_report["rows"]} == set(telegram_ids)
+    assert telegram_report["summary"]["ready"] == 2
+    assert telegram_report["filters"]["view"] == "telegram"
+    assert {row["message_id"] for row in telegram_report["rows"]} == {7101, 7103, 7105, 7108}
+    assert active_cargo_report(view="telegram", trip="undated")["total"] == 0
+    with pytest.raises(ValueError, match="filter"):
+        active_cargo_report(view="invalid")
+
+
+def test_telegram_transferlive_view_empty_is_safe(env):
+    from backoffice_active_cargo import active_cargo_report
+    add_post(7110)  # undated: no Telegram /transferlive record
+    report = active_cargo_report(view="telegram")
+    assert report["summary"]["transferlive"] == 0
+    assert report["total"] == 0
+    assert report["rows"] == []

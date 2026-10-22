@@ -110,8 +110,11 @@ def test_backfill_is_fresh_or_future_dated_only(env):
     add_post(3, age_days=90, departure=(date.today() + timedelta(days=5)).isoformat())
     add_post(4, age_days=4, departure=(date.today() - timedelta(days=1)).isoformat())
     stats = service.deliver_pending()
+    assert stats["found"] == 2
     assert stats["sent"] == 2
-    assert stats["rejected"] == 1
+    # Already-expired trips are never selected and therefore do not produce
+    # synthetic rejection rows or API attempts during historical backfill.
+    assert stats["rejected"] == 0
     assert {x["externalId"] for x in client.sent} == {"1", "3"}
 
 
@@ -240,6 +243,7 @@ def test_backoffice_cargo_report_shows_unattempted_and_completed_posts(env):
         conn.close()
     assert before["processed"] == 2
     assert before["waiting"] == 2
+    assert before["ready_to_send"] == 2
     assert before["attempts_today"] == 0
     assert before["recent"][0]["message_id"] == 802
     service.deliver_pending(limit=1)
@@ -250,6 +254,7 @@ def test_backoffice_cargo_report_shows_unattempted_and_completed_posts(env):
         conn.close()
     assert after["sent"] == 1
     assert after["waiting"] == 1
+    assert after["ready_to_send"] == 1
     assert after["attempts_today"] == 1
     assert after["recent"][0]["status"] == "waiting"
     assert all("row_id" in row for row in after["recent"])
@@ -299,3 +304,50 @@ def test_new_unique_cargo_is_submitted_for_auto_publish(env, monkeypatch):
     assert stats["sent"] == 1
     assert client.sent[0]["autoPublish"] is True
     assert client.sent[0]["categorySlug"] == "passenger-cargo"
+
+
+def test_queue_skips_recently_recrawled_expired_and_unsupported_routes(env):
+    service, client = env
+    add_post(5001, age_days=1, departure=(date.today() - timedelta(days=20)).isoformat())
+    add_post(5002, age_days=1, overrides={"origin_country": "CN"})
+    add_post(5003, age_days=1, overrides={"destination_city": None})
+    add_post(5004, age_days=1, departure=(date.today() + timedelta(days=2)).isoformat())
+
+    records = service.pending(limit=10)
+    assert [record["message_id"] for record in records] == [5004]
+    stats = service.deliver_pending(limit=10)
+    assert stats["found"] == 1
+    assert stats["sent"] == 1
+    assert stats["rejected"] == 0
+    assert [item["externalId"] for item in client.sent] == ["5004"]
+
+
+def test_nearest_departures_are_prioritized_before_undated_posts(env):
+    service, client = env
+    add_post(5101, departure=(date.today() + timedelta(days=30)).isoformat())
+    add_post(5102, departure=(date.today() + timedelta(days=2)).isoformat())
+    add_post(5103)
+    add_post(5104, departure=(date.today() + timedelta(days=7)).isoformat())
+
+    ordered = [record["message_id"] for record in service.pending(limit=4)]
+    assert ordered == [5102, 5104, 5101, 5103]
+    stats = service.deliver_pending(limit=2)
+    assert stats["sent"] == 2
+    assert [item["externalId"] for item in client.sent] == ["5102", "5104"]
+
+
+def test_dashboard_ready_count_matches_queue_not_broad_waiting(env):
+    from backoffice_health import _cargo_delivery_report
+    service, client = env
+    add_post(5201, departure=(date.today() + timedelta(days=3)).isoformat())
+    add_post(5202, departure=(date.today() - timedelta(days=2)).isoformat())
+    add_post(5203, overrides={"origin_country": "CN"})
+    add_post(5204, overrides={"origin_city": ""})
+    conn = database.get_connection()
+    try:
+        report = _cargo_delivery_report(conn)
+    finally:
+        conn.close()
+    assert report["ready_to_send"] == 1
+    assert report["waiting"] >= 1
+    assert len(service.pending(limit=50)) == report["ready_to_send"]

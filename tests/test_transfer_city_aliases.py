@@ -329,3 +329,95 @@ def test_new_city_rules_update_historical_structured_rows_only(city_db):
     assert all(row["raw_text"] == "historical raw original" for row in rows)
     assert all(row["description"] == "Original cleaned description" for row in rows)
     assert all(row["departure_date"] == "2026-11-30" for row in rows)
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("Tehran(Karaj)", "Tehran"),
+    ("Karaj/Tehran", "Tehran"),
+    ("Tehran-Karaj", "Tehran"),
+    ("Tehran -   Mashhad", "Mashhad"),
+])
+def test_new_operator_city_choices_and_province_are_consistent(city_db, source, expected):
+    row = {
+        "origin_country": "IR", "origin_city": source,
+        "destination_country": "IR", "destination_city": source,
+    }
+    normalized, changes = data_normalizer.normalize_category_data("transferlist", row)
+    assert normalized["origin_city"] == normalized["destination_city"] == expected
+    province = "Tehran" if expected == "Tehran" else "Razavi Khorasan"
+    assert normalized["origin_province"] == normalized["destination_province"] == province
+    assert changes["origin_city"] == (source, expected)
+    assert changes["destination_city"] == (source, expected)
+
+
+def test_new_country_rule_affects_destination_country_only(city_db):
+    record = {
+        "origin_country": "IR or TR", "origin_city": "Tehran",
+        "destination_country": "IR or TR", "destination_city": "Tehran(Karaj)",
+    }
+    updated, changes = data_normalizer.normalize_category_data("transferlist", record)
+    assert updated["origin_country"] == "IR or TR"
+    assert updated["destination_country"] == "IR"
+    assert updated["destination_city"] == "Tehran"
+    assert updated["destination_province"] == "Tehran"
+    assert "origin_country" not in changes
+    country_rules = [
+        rule for rule in data_normalizer.list_aliases()
+        if rule["category"] == "transferlist" and rule["alias"] == "IR or TR"
+    ]
+    assert len(country_rules) == 1
+    assert country_rules[0]["field_name"] == "destination_country"
+    assert country_rules[0]["canonical_value"] == "IR"
+
+
+def test_new_cargo_location_aliases_backfill_without_editing_source(city_db):
+    for i, (city, expected) in enumerate((
+        ("Tehran(Karaj)", "Tehran"),
+        ("Karaj/Tehran", "Tehran"),
+        ("Tehran-Karaj", "Tehran"),
+        ("Tehran -   Mashhad", "Mashhad"),
+    ), 9500):
+        assert database.insert_message(
+            "cargo_alias_test", i, "unchanged source", "2026-10-22",
+            raw_text="unchanged source",
+        )
+        conn = database.get_connection()
+        try:
+            mid = conn.execute(
+                "SELECT id FROM messages WHERE channel_username='cargo_alias_test' "
+                "AND message_id=?", (i,),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO transferlist (processed_message_id,origin_country,origin_city,"
+                "destination_country,destination_city,description) VALUES(?,?,?,?,?,?)",
+                (mid, "IR", city, "IR or TR", city, "preserve cleaned description"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    preview = data_normalizer.preview_cargo_location_normalization()
+    assert preview["rows_to_change"] == 4
+    assert preview["country_changes"] == 4
+    assert preview["city_changes"] == 8
+    assert preview["provinces_to_fill"] == 8
+    result = data_normalizer.apply_cargo_location_normalization()
+    assert result == preview
+    conn = database.get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT t.origin_city,t.destination_city,t.destination_country,"
+            "t.origin_province,t.destination_province,t.description,m.raw_text "
+            "FROM transferlist t JOIN messages m ON m.id=t.processed_message_id "
+            "ORDER BY m.message_id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [row["origin_city"] for row in rows] == [
+        "Tehran", "Tehran", "Tehran", "Mashhad"
+    ]
+    for row in rows:
+        assert row["destination_country"] == "IR"
+        assert row["destination_city"] == row["origin_city"]
+        assert row["description"] == "preserve cleaned description"
+        assert row["raw_text"] == "unchanged source"
+    assert rows[-1]["destination_province"] == "Razavi Khorasan"

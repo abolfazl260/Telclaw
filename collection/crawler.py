@@ -14,7 +14,7 @@ from telethon.tl.types import PeerChannel, PeerUser
 
 from processing.normalizer import normalize_channel_username, normalize_date
 from services.message_service import MessageService
-from storage.content_duplicate import ensure_duplicate_schema, find_duplicate, store_content_hash
+from storage.content_duplicate import find_duplicate, store_content_hash
 from storage.database import get_connection
 
 init(autoreset=True)
@@ -272,7 +272,6 @@ async def crawl_channel(
     try:
         repository.initialize()
         duplicate_conn = get_connection()
-        ensure_duplicate_schema(duplicate_conn)
 
         entity = await _get_input_entity_with_reconnect(client, channel_username)
         await asyncio.sleep(random.randint(30, 60))

@@ -182,6 +182,8 @@ def test_historical_preview_apply_and_idempotency_are_field_scoped(province_db):
 
 @pytest.mark.asyncio
 async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_db, monkeypatch):
+    # create_app initializes the private session table before adding a session.
+    client = TestClient(TestServer(backoffice_web.create_app()))
     conn = database.get_connection()
     try:
         row_id = _add_cargo(conn, 4001)
@@ -201,7 +203,6 @@ async def test_backoffice_preview_is_opt_in_and_backfill_requires_csrf(province_
         return real_preview()
     monkeypatch.setattr(data_normalizer, "preview_transfer_missing_provinces", track_preview)
 
-    client = TestClient(TestServer(backoffice_web.create_app()))
     await client.start_server()
     try:
         headers = {"Cookie": "telclaw_admin=province-test-session"}

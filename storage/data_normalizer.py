@@ -407,6 +407,7 @@ def _seed_defaults(conn):
     # are never overwritten by these default INSERT OR IGNORE rules.
     from storage.transfer_city_aliases import (
         TRANSFER_CITY_ALIASES, TRANSFER_COUNTRY_ALIASES,
+        TRANSFER_DESTINATION_COUNTRY_ALIASES,
     )
     for field_name in ("origin_city", "destination_city"):
         for country, alias, canonical, reason in TRANSFER_CITY_ALIASES:
@@ -416,6 +417,12 @@ def _seed_defaults(conn):
         for alias, canonical in TRANSFER_COUNTRY_ALIASES:
             defaults.append(("transferlist", field_name, alias, canonical, "",
                              "CSV audit: normalize country to ISO alpha-2"))
+
+    # Explicit operator choice for destination only. The expression
+    # "IR or TR" remains untouched in origin_country.
+    for alias, canonical in TRANSFER_DESTINATION_COUNTRY_ALIASES:
+        defaults.append(("transferlist", "destination_country", alias, canonical,
+                         "", "Operator-selected destination country from alternatives"))
 
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(

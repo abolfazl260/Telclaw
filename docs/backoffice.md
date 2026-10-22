@@ -59,6 +59,22 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## SQLite concurrency in the Telegram publisher
+
+The Telegram publisher's stale-delivery recovery probes for old `sending`
+rows using read-only queries before attempting to update any delivery state.
+On normal healthy cycles (no stale send/resend), it does not take an unnecessary
+SQLite write lock. Sends that truly exceed the five-minute recovery window
+remain `uncertain`, never silently retried, because Telegram has no
+delivery idempotency key.
+
+If a concurrent crawler, AI or administrative backfill transaction holds the
+SQLite write lock during **queue preflight**, the current publisher cycle
+defers its entire queue without attempting any Telegram sends. This is logged
+as a warning rather than a cycle failure. The next normal scheduled cycle
+checks again; this is not an automatic retransmission of any uncertain send.
+Real database errors other than SQLite busy/locked still propagate for alerting.
+
 ## Fast Normalization page
 
 The **Normalization** page offers one primary **Cargo Location

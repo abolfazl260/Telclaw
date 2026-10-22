@@ -83,15 +83,21 @@ async def cargo_page(request):
             row.get("message_link"),
             "@" + str(row.get("channel_username") or "?") + " #" + str(row["message_id"])
         )
+        title = row.get("title") or "Cargo transfer"
+        excerpt = str(row.get("description") or "").strip().replace("\\n", " ")
+        detail = '<strong>' + _esc(title) + '</strong>'
+        if excerpt:
+            detail += '<div class="muted">' + _esc(excerpt[:120]) + '</div>'
         rows_html.append(
             '<tr><td>' + checkbox + '</td><td>' + source + '</td>' +
+            '<td>' + detail + '</td>' +
             '<td>' + _esc(route) + '</td>' +
             '<td>' + _esc(row.get("departure_date") or "Undated") + '</td>' +
             '<td>' + _esc(row.get("posted_at") or "") + '</td>' +
             '<td><strong>' + _esc(row["status"]) + '</strong></td>' +
             '<td>' + _esc(details) + '</td></tr>'
         )
-    tbody = "".join(rows_html) or '<tr><td colspan="7">No cargo ads match the selected filters.</td></tr>'
+    tbody = "".join(rows_html) or '<tr><td colspan="8">No cargo ads match the selected filters.</td></tr>'
     params = {key: value for key, value in filters.items() if value not in ("all", "")}
     links = []
     if data["page"] > 1:
@@ -172,12 +178,21 @@ async def cargo_page(request):
       <form method="post" action="/cargo/send">
         <input type="hidden" name="csrf" value="{csrf}">
         <div class="table-wrap"><table><thead><tr>
-          <th>Select</th><th>Telegram source</th><th>Route</th><th>Trip date</th>
+          <th>Select</th><th>Telegram source</th><th>Ad / description</th><th>Route</th><th>Trip date</th>
           <th>Post date</th><th>Advertio status</th><th>Reason / next retry</th>
         </tr></thead><tbody>{tbody}</tbody></table></div>
         <p class="pagination">Page {data['page']:,} of {data['pages']:,} · {links_html}</p>
         <div class="actions"><button type="submit"{submit_disabled}>Send selected active cargo to Advertio</button>
         <a href="/operations#advertio-delivery">Open full cargo operations</a></div>
+      </form>
+      <hr>
+      <h3>Send next batch automatically</h3>
+      <p class="muted">Send up to 25 ready ads in trip-date priority order (no manual selection).
+      The cargo worker applies the configured per-batch and daily limits and never resends an already-delivered record.</p>
+      <form method="post" action="/cargo/send" class="actions">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <input type="hidden" name="mode" value="next">
+        <button type="submit"{" disabled" if busy or not enabled or report.get('ready',0)==0 else ""}>Send next 25 ready ads</button>
       </form>
     </section>
     {running_script}
@@ -189,6 +204,11 @@ async def cargo_send(request):
     form = await request.post()
     values = form.getall("record_id", [])
     try:
+        if form.get("mode") == "next":
+            request.app["operations"].start_advertio_cargo(
+                limit=25, requested_by=request["session"]["admin_id"]
+            )
+            _redirect(notice="Queued up to 25 ready cargo ads. Check results below.")
         request.app["operations"].start_selected_advertio_cargo(
             values, requested_by=request["session"]["admin_id"]
         )

@@ -139,8 +139,15 @@ async def test_cargo_city_rules_are_visible_and_can_be_applied_independently(web
         page = await response.text()
         assert "Cargo city/country rules" in page
         assert 'action="/normalization/apply-transfer-cities"' in page
-        assert "Teheran" in page
-        assert "تورنتو" in page
+        assert "Load first 20 rules" in page
+        assert 'id="alias-' not in page  # do not render hundreds of forms initially
+        assert page.index("Apply cargo city and country rules") < page.index("Existing aliases")
+
+        response = await client.get("/normalization?view=cargo&rules=1", headers=headers)
+        assert response.status == 200
+        page = await response.text()
+        assert "Showing page 1" in page
+        assert 'id="alias-' in page
 
         no_csrf = await client.post("/normalization/apply-transfer-cities",
                                     headers=headers, data={"csrf": "wrong"})
@@ -165,5 +172,94 @@ async def test_cargo_city_rules_are_visible_and_can_be_applied_independently(web
         assert row["destination_country"] == "CA"
         assert row["description"] == "cleaned text unchanged"
         assert raw == "source text must remain"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_normalization_defers_rule_cards_and_match_scans_until_requested(web_db, monkeypatch):
+    client = TestClient(TestServer(backoffice_web.create_app()))
+    await client.start_server()
+    try:
+        token, _ = _session()
+        headers = {"Cookie": f"telclaw_admin={token}"}
+        real_count = data_normalizer.count_current_matches
+        calls = []
+        def count(rule_id):
+            calls.append(rule_id)
+            return real_count(rule_id)
+        monkeypatch.setattr(data_normalizer, "count_current_matches", count)
+
+        response = await client.get("/normalization", headers=headers)
+        assert response.status == 200
+        initial = await response.text()
+        assert "Load first 20 rules" in initial
+        assert "Check affected rows" not in initial
+        assert 'id="alias-' not in initial
+        assert len(calls) == 0
+        assert initial.index("Re-normalize existing data") < initial.index("Existing aliases")
+
+        response = await client.get("/normalization?rules=1", headers=headers)
+        page1 = await response.text()
+        assert response.status == 200
+        assert page1.count('class="alias-card"') == 20
+        assert "Load next 20" in page1
+        assert "Check affected rows" in page1
+        assert len(calls) == 0
+
+        response = await client.get("/normalization?rules=1&page=2", headers=headers)
+        page2 = await response.text()
+        assert response.status == 200
+        assert page2.count('class="alias-card"') == 20
+        assert "Previous 20" in page2
+        assert len(calls) == 0
+
+        # A single Check affected rows action counts only that alias, and
+        # doesn't recompute match counts for the other 19 displayed rules.
+        total, rows = data_normalizer.paged_aliases(limit=20, offset=0)
+        assert total > 20
+        rule_id = rows[0]["id"]
+        response = await client.get(
+            f"/normalization?rules=1&count={rule_id}", headers=headers
+        )
+        assert response.status == 200
+        assert "existing value(s) would change" in (await response.text())
+        assert calls == [rule_id]
+
+        # Cargo-only list applies filtering in SQLite before pagination.
+        total_cargo, cargo_page = data_normalizer.paged_aliases(
+            cargo_only=True, limit=20, offset=0
+        )
+        assert total_cargo > 20
+        assert len(cargo_page) == 20
+        assert all(
+            rule["category"] == "transferlist"
+            and rule["field_name"] in {
+                "origin_city", "destination_city",
+                "origin_country", "destination_country",
+            }
+            for rule in cargo_page
+        )
+        response = await client.get(
+            "/normalization?view=cargo&rules=1", headers=headers
+        )
+        assert response.status == 200
+        assert (await response.text()).count('class="alias-card"') == 20
+        assert calls == [rule_id]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_normalization_rejects_invalid_rule_pages_without_db_scans(web_db):
+    client = TestClient(TestServer(backoffice_web.create_app()))
+    await client.start_server()
+    try:
+        token, _ = _session()
+        headers = {"Cookie": f"telclaw_admin={token}"}
+        for params in ("?rules=1&page=0", "?rules=1&page=abc",
+                       "?rules=1&page=99999", "?rules=1&count=-1"):
+            response = await client.get("/normalization" + params, headers=headers)
+            assert response.status == 400, params
     finally:
         await client.close()

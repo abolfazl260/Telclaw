@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import math
 import re
 import sqlite3
@@ -90,6 +91,37 @@ def page(table, page_number=1, filters=None):
                 "editable": [name for name in columns if _editable(table, name, columns)],
                 "rows": rows, "total": total, "page": page_number, "pages": pages,
                 "filters": active_filters}
+    finally:
+        conn.close()
+
+
+@contextmanager
+def filtered_export_rows(table, filters):
+    """Stream exactly the current filtered table, across all pagination.
+
+    The export uses the same whitelist, operators, value validation, and
+    parameterized SQL as page(). A filter must actually be active: an empty
+    value beside a selected operator is NOT a filter. No unfiltered export.
+    """
+    table = _table(table)
+    conn = get_connection()
+    try:
+        columns = _columns(conn, table)
+        if "id" not in columns:
+            raise ValueError("Data table unavailable")
+        clauses, params, active = _filter_query(columns, filters)
+        if not active:
+            raise ValueError("Apply at least one filter before downloading data")
+        where = " WHERE " + " AND ".join(clauses)
+        # Identifiers originate only from PRAGMA table_info on a whitelisted
+        # table, never from unchecked query-string input.
+        names = tuple(columns)
+        selection = ", ".join('"' + name.replace('"', '""') + '"' for name in names)
+        cursor = conn.execute(
+            f'SELECT {selection} FROM "{table}"{where} ORDER BY "id" DESC',
+            params,
+        )
+        yield names, cursor
     finally:
         conn.close()
 

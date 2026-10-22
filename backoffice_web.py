@@ -2098,6 +2098,16 @@ def _normalization_rule_card(rule, csrf):
 async def normalization_page(request):
     csrf = _escape(request["session"]["csrf"])
     rules = data_normalizer.list_aliases()
+    show_cargo = request.query.get("view") == "cargo"
+    if show_cargo:
+        rules = [
+            rule for rule in rules
+            if rule["category"] == "transferlist"
+            and rule["field_name"] in {
+                "origin_city", "destination_city",
+                "origin_country", "destination_country",
+            }
+        ]
     cards = "".join(_normalization_rule_card(rule, csrf) for rule in rules)
     notice = request.query.get("notice", "")
     if notice == "applied":
@@ -2146,8 +2156,22 @@ async def normalization_page(request):
       <label class="check"><input type="checkbox" name="enabled" value="1" checked> Enabled</label>
       <div class="alias-actions"><button>Add alias</button></div>
     </form></section>
-    <section><h2>Existing aliases</h2><div class="alias-grid">{cards or '<p>No aliases configured.</p>'}</div></section>
-    <section><h2>Existing database</h2>
+    <section><h2>Existing aliases ({len(rules):,})</h2>
+      <p><a href="/normalization?view=cargo">Cargo city/country rules</a> ·
+      <a href="/normalization">Show all normalization rules</a></p>
+      <p class="muted">Country-scoped city aliases cover both route directions. Country names
+      recorded in city fields and multiple-city strings are intentionally left for manual review.</p>
+      <div class="alias-grid">{cards or '<p>No aliases configured.</p>'}</div></section>
+    <section><h2>Apply cargo city and country rules to existing data</h2>
+      <p class="normalization-warning">Back up SQLite before applying. This updates ONLY four transferlist route
+      fields and refreshes cached route locations, not raw messages, dates, descriptions,
+      prices or delivery statuses. Ambiguous/multiple locations are preserved.</p>
+      <form method="post" action="/normalization/apply-transfer-cities">
+        <input type="hidden" name="csrf" value="{csrf}">
+        <button data-confirm="Apply reviewed country-scoped cargo city/country rules to existing transferlist rows? Make sure SQLite is backed up.">Apply cargo city/country rules to existing transferlist</button>
+      </form>
+    </section>
+    <section><h2>Existing database (all fields)</h2>
       <p class="normalization-warning">This updates structured category rows only. It does not edit Telegram messages that
       were already published. Review alias rules and affected counts first.</p>
       <form method="post" action="/normalization/apply">
@@ -2205,6 +2229,13 @@ async def delete_normalization_alias(request):
     except (ValueError, TypeError) as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
     raise web.HTTPSeeOther("/normalization?notice=deleted")
+
+
+async def apply_transfer_city_normalization(request):
+    result = data_normalizer.renormalize_transfer_cities_only()
+    raise web.HTTPSeeOther(
+        f"/normalization?view=cargo&notice=applied&rows={int(result['rows_changed'])}&cells={int(result['cells_changed'])}"
+    )
 
 
 async def apply_normalization(request):
@@ -2471,6 +2502,7 @@ def create_app(console_ui=None):
                     web.post("/normalization/save", save_normalization_alias),
                     web.post("/normalization/delete", delete_normalization_alias),
                     web.post("/normalization/apply", apply_normalization),
+                    web.post("/normalization/apply-transfer-cities", apply_transfer_city_normalization),
                     web.post("/settings/save", save_setting),
                     web.post("/settings/reset", reset_setting),
                     web.get("/data/cell", data_cell),

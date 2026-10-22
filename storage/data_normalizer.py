@@ -401,6 +401,22 @@ def _seed_defaults(conn):
         ("transferlist", "airline", "ÿß€åÿ±ÿ™ÿ±ÿßŸÜÿ≤€åÿ™", None, "", "Corrupted airline text; do not guess"),
         ("transferlist", "airline", "ÿß€åÿ± ÿ™ÿ±ÿßŸÜÿ≥€åÿ™", None, "", "Corrupted airline text; do not guess"),
     ])
+    # 2026-10-22 transferlist CSV audit: country-aware bilingual spelling
+    # mappings. Seed-only: existing source records are changed only when an
+    # operator runs Normalization > Apply to existing data. Custom aliases
+    # are never overwritten by these default INSERT OR IGNORE rules.
+    from storage.transfer_city_aliases import (
+        TRANSFER_CITY_ALIASES, TRANSFER_COUNTRY_ALIASES,
+    )
+    for field_name in ("origin_city", "destination_city"):
+        for country, alias, canonical, reason in TRANSFER_CITY_ALIASES:
+            defaults.append(("transferlist", field_name, alias, canonical,
+                             country, "CSV audit: " + reason))
+    for field_name in ("origin_country", "destination_country"):
+        for alias, canonical in TRANSFER_COUNTRY_ALIASES:
+            defaults.append(("transferlist", field_name, alias, canonical, "",
+                             "CSV audit: normalize country to ISO alpha-2"))
+
     for category, field_name, alias, canonical, country, notes in defaults:
         conn.execute("""INSERT OR IGNORE INTO normalization_aliases(
             category,field_name,alias,alias_key,canonical_value,country_iso2,
@@ -956,6 +972,52 @@ def renormalize_existing(category=None):
                     _sync_transfer_location(conn, synced)
         conn.commit()
         return totals
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def renormalize_transfer_cities_only():
+    """Backfill only the origin/destination city+country fields.
+
+    This is deliberately narrower than renormalize_existing('transferlist'):
+    no descriptions, dates, prices, delivery statuses or raw Telegram
+    messages can change. The transfer_locations cache is kept in sync.
+    """
+    initialize()
+    conn = database.get_connection()
+    result = {"rows_scanned": 0, "rows_changed": 0, "cells_changed": 0}
+    fields = ("origin_country", "destination_country",
+              "origin_city", "destination_city")
+    try:
+        rules = _rules_for_category(conn, "transferlist")
+        for sqlite_row in conn.execute("SELECT * FROM transferlist").fetchall():
+            row = dict(sqlite_row)
+            normalized = dict(row)
+            changes = {}
+            result["rows_scanned"] += 1
+            for field in fields:
+                before = normalized.get(field)
+                builtin = normalize_builtin_field_value("transferlist", field, before)
+                after = _normalize_with_rules("transferlist", field, builtin,
+                                              normalized, rules)
+                if after != before:
+                    normalized[field] = after
+                    changes[field] = after
+            if not changes:
+                continue
+            assignments = ", ".join(f'"{field}"=?' for field in changes)
+            conn.execute(
+                f"UPDATE transferlist SET {assignments} WHERE id=?",
+                [*changes.values(), row["id"]],
+            )
+            _sync_transfer_location(conn, normalized)
+            result["rows_changed"] += 1
+            result["cells_changed"] += len(changes)
+        conn.commit()
+        return result
     except Exception:
         conn.rollback()
         raise

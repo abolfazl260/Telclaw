@@ -109,3 +109,61 @@ async def test_normalization_mutations_require_csrf(web_db):
         assert response.status == 403
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_cargo_city_rules_are_visible_and_can_be_applied_independently(web_db):
+    conn = database.get_connection()
+    try:
+        conn.execute("""INSERT INTO messages(channel_username,message_id,date,raw_text)
+            VALUES('cargo_source',42,'2026-10-22','source text must remain')""")
+        message_id = conn.execute(
+            "SELECT id FROM messages WHERE message_id=42"
+        ).fetchone()["id"]
+        conn.execute("""INSERT INTO transferlist(
+            processed_message_id,origin_city,origin_country,destination_city,
+            destination_country,description)
+            VALUES(?,?,?,?,?,?)""",
+            (message_id, "Teheran", "Iran", "تورنتو", "Canada", "cleaned text unchanged"))
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = TestClient(TestServer(backoffice_web.create_app()))
+    await client.start_server()
+    try:
+        token, csrf = _session()
+        headers = {"Cookie": f"telclaw_admin={token}"}
+        response = await client.get("/normalization?view=cargo", headers=headers)
+        assert response.status == 200
+        page = await response.text()
+        assert "Cargo city/country rules" in page
+        assert 'action="/normalization/apply-transfer-cities"' in page
+        assert "Teheran" in page
+        assert "تورنتو" in page
+
+        no_csrf = await client.post("/normalization/apply-transfer-cities",
+                                    headers=headers, data={"csrf": "wrong"})
+        assert no_csrf.status == 403
+        response = await client.post("/normalization/apply-transfer-cities",
+                                     headers=headers, data={"csrf": csrf},
+                                     allow_redirects=False)
+        assert response.status == 303
+        assert "view=cargo" in response.headers["Location"]
+
+        conn = database.get_connection()
+        try:
+            row = conn.execute("SELECT * FROM transferlist WHERE processed_message_id=?",
+                               (message_id,)).fetchone()
+            raw = conn.execute("SELECT raw_text FROM messages WHERE id=?",
+                               (message_id,)).fetchone()[0]
+        finally:
+            conn.close()
+        assert row["origin_city"] == "Tehran"
+        assert row["origin_country"] == "IR"
+        assert row["destination_city"] == "Toronto"
+        assert row["destination_country"] == "CA"
+        assert row["description"] == "cleaned text unchanged"
+        assert raw == "source text must remain"
+    finally:
+        await client.close()

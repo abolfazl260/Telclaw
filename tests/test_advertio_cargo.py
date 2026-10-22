@@ -352,3 +352,79 @@ def test_dashboard_ready_count_matches_queue_not_broad_waiting(env):
     assert report["ready_to_send"] == 1
     assert report["waiting"] >= 1
     assert len(service.pending(limit=50)) == report["ready_to_send"]
+
+
+def test_active_cargo_report_shows_all_potentially_active_but_blocks_unsupported(env):
+    from backoffice_active_cargo import active_cargo_report
+    service, client = env
+    add_post(6001, departure=(date.today() + timedelta(days=3)).isoformat())
+    add_post(6002, departure=(date.today() - timedelta(days=2)).isoformat())
+    add_post(6003, overrides={"origin_country": "CN"})
+    add_post(6004, age_days=90)
+    add_post(6005)
+    report = active_cargo_report()
+    assert report["summary"]["total"] == 3
+    assert report["summary"]["ready"] == 2
+    assert report["total"] == 3
+    assert {row["message_id"] for row in report["rows"]} == {6001, 6003, 6005}
+    assert not next(row for row in report["rows"] if row["message_id"] == 6003)["sendable"]
+    assert next(row for row in report["rows"] if row["message_id"] == 6003)["blocked_reason"]
+    assert [row["message_id"] for row in report["rows"] if row["sendable"]] == [6001, 6005]
+
+
+def test_active_cargo_report_search_trip_and_api_status_filters(env):
+    from backoffice_active_cargo import active_cargo_report
+    service, client = env
+    add_post(6101, channel="different", departure=(date.today()+timedelta(days=1)).isoformat())
+    add_post(6102, channel="another")
+    assert active_cargo_report(trip="upcoming")["total"] == 1
+    assert active_cargo_report(trip="undated")["total"] == 1
+    assert active_cargo_report(search="different")["total"] == 1
+    assert active_cargo_report(search="6102")["total"] == 1
+    assert active_cargo_report(status="ready")["total"] == 2
+    with pytest.raises(ValueError, match="filter"):
+        active_cargo_report(status="sent' OR 1=1")
+    with pytest.raises(ValueError, match="Search"):
+        active_cargo_report(search="x"*101)
+
+
+def test_selection_sends_only_chosen_ready_message_without_resend(env):
+    service, client = env
+    selected_row_id = add_post(6201, departure=(date.today()+timedelta(days=2)).isoformat())
+    add_post(6202, departure=(date.today()+timedelta(days=3)).isoformat())
+    expired_id = add_post(6203, departure=(date.today()-timedelta(days=1)).isoformat())
+    stats = service.deliver_pending(row_ids=[selected_row_id, expired_id], limit=2)
+    assert stats["found"] == 1
+    assert stats["sent"] == 1
+    assert [item["externalId"] for item in client.sent] == ["6201"]
+    stats = service.deliver_pending(row_ids=[selected_row_id], limit=1)
+    assert stats["found"] == 0
+    assert len(client.sent) == 1
+    with pytest.raises(ValueError):
+        service.pending(row_ids=[-10])
+
+
+@pytest.mark.asyncio
+async def test_selected_cargo_delivery_controller_is_audited_and_independent(env, monkeypatch):
+    from backoffice_operations import BackofficeOperations
+    import asyncio
+    from types import SimpleNamespace
+    service, client = env
+    row_id = add_post(6301)
+    add_post(6302)
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_ENABLED", True)
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_ENABLED", True)
+    monkeypatch.setattr(config, "ADVERTIO_INGEST_KEY", "test-key")
+    monkeypatch.setattr("delivery.advertio_cargo.AdvertioCargoService", lambda: service)
+    monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *a, **kw: None)
+    ops = BackofficeOperations(console_ui=None)
+    ops._crawler = SimpleNamespace(scheduler=None)
+    ops.start_selected_advertio_cargo([row_id], requested_by=7)
+    await ops._tasks["advertio_cargo"]
+    assert ops.state("advertio_cargo")["status"] == "completed"
+    assert ops.state("advertio_cargo")["result"]["sent"] == 1
+    assert [x["externalId"] for x in client.sent] == ["6301"]
+    with pytest.raises(ValueError, match="Select between"):
+        ops.start_selected_advertio_cargo([])
+    with pytest.raises(ValueError, match="Select between"):
+        ops.start_selected_advertio_cargo(range(1, 30))

@@ -186,7 +186,7 @@ class AdvertioCargoService:
         finally:
             conn.close()
 
-    def pending(self, limit=50, channel_username=None, before_datetime=None):
+    def pending(self, limit=50, channel_username=None, before_datetime=None, row_ids=None):
         # Backfill is automatic: all historically processed transferlist rows are
         # eligible unless delivered/rejected, expired, or older than the freshness
         # window without a future travel date.
@@ -219,6 +219,14 @@ class AdvertioCargoService:
             if channel_username:
                 sql += " AND m.channel_username=?"
                 values.append(channel_username)
+            if row_ids is not None:
+                # Operator selections are constrained by the same live
+                # eligibility/status/retry-window predicate as normal sends.
+                ids = tuple(dict.fromkeys(int(item) for item in row_ids))
+                if not ids or len(ids) > 100 or any(item <= 0 for item in ids):
+                    raise ValueError("Choose 1 to 100 valid cargo record IDs")
+                sql += " AND m.id IN (" + ",".join("?" for _ in ids) + ")"
+                values.extend(ids)
             # Time-sensitive trips should be delivered first; undated ads
             # follow newest-first. Do not let re-crawled expired trips or
             # unsupported routes consume an entire small manual batch.
@@ -427,7 +435,7 @@ class AdvertioCargoService:
         return payload
 
     def deliver_pending(self, limit=None, channel_username=None, before_datetime=None,
-                        should_stop=None, progress=False):
+                        should_stop=None, progress=False, row_ids=None):
         limit = min(int(limit or config.ADVERTIO_CARGO_BATCH_SIZE), self._remaining_budget())
         result = {"found": 0, "sent": 0, "already_existed": 0,
                   "rejected": 0, "retry": 0, "budget_remaining": self._remaining_budget()}
@@ -438,7 +446,7 @@ class AdvertioCargoService:
         if limit <= 0:
             return result
         records = self.pending(limit=limit, channel_username=channel_username,
-                               before_datetime=before_datetime)
+                               before_datetime=before_datetime, row_ids=row_ids)
         result["found"] = len(records)
         for record in records:
             if should_stop and should_stop():

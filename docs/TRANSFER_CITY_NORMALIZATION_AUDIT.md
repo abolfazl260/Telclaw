@@ -68,6 +68,29 @@ origin/destination cities and countries, and fills missing provinces
 atomically, not raw messages, dates, descriptions or prior delivery
 states. The rule for `Bali` never infers a more specific municipality.
 
+## Additional operator-reviewed mappings (October 22)
+
+The following exact aliases are applied to both cargo city fields, except
+the country rule which applies only to the **destination country**:
+
+| Scope | Existing value | Canonical value |
+|---|---|---|
+| IR city | `Tehran(Karaj)` | `Tehran` |
+| IR city | `Karaj/Tehran` | `Tehran` |
+| IR city | `Tehran-Karaj` | `Tehran` |
+| IR city | `Tehran -   Mashhad` | `Mashhad` |
+| destination_country only | `IR or TR` | `IR` |
+
+The spaced `Tehran -   Mashhad` expression is intentionally different from
+the existing `Tehran-Mashhad` alias, which continues to map to **Tehran**.
+This is an explicit operator decision, not a generic policy for multiple-city
+routes. The country rule does **not** rewrite `origin_country`.
+
+After deploying and backing up the SQLite database, use **Normalization →
+Cargo Location Normalization → Preview Changes → Apply Normalization**.
+The operation updates only country/city fields and missing provinces, keeping
+original messages and delivery states unchanged.
+
 ## Values excluded from automatic city mapping
 
 - **A country in a city field**: `Iran`, `China`, `Germany`,

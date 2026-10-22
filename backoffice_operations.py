@@ -504,6 +504,43 @@ class BackofficeOperations:
             "advertio_cargo", requested_by, {"limit": limit}, operation,
         )
 
+    def start_selected_advertio_cargo(self, row_ids, requested_by=None):
+        """Send only explicitly selected active cargo rows through the normal queue.
+
+        Never requeue a sent/rejected record, bypass the supported-country
+        rules or modify Telegram/Housing delivery state.
+        """
+        if not config.ADVERTIO_INGEST_ENABLED or not config.ADVERTIO_CARGO_ENABLED:
+            raise RuntimeError("Advertio cargo ingest is disabled in the server configuration")
+        if not config.ADVERTIO_INGEST_KEY:
+            raise RuntimeError("TELCLAW_ADVERTIO_INGEST_KEY is missing")
+        try:
+            ids = tuple(dict.fromkeys(int(value) for value in row_ids))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid selected cargo record") from exc
+        if not ids or len(ids) > 25 or any(value < 1 for value in ids):
+            raise ValueError("Select between 1 and 25 active cargo ads")
+        if len(ids) > config.ADVERTIO_CARGO_BATCH_SIZE:
+            raise ValueError("Selection exceeds the configured cargo batch size")
+
+        async def operation(stop_event):
+            from delivery.advertio_cargo import AdvertioCargoService
+            async with self.pipeline_lock:
+                if self._advertio_cargo is None:
+                    self._advertio_cargo = await asyncio.to_thread(AdvertioCargoService)
+                return await asyncio.to_thread(
+                    self._advertio_cargo.deliver_pending,
+                    limit=len(ids),
+                    row_ids=ids,
+                    should_stop=stop_event.is_set,
+                    progress=True,
+                )
+
+        return self._start_background(
+            "advertio_cargo", requested_by,
+            {"selected_count": len(ids)}, operation,
+        )
+
     def requeue_rejected_cargo(self, message_row_id, requested_by=None):
         """Explicit per-row retry after correcting a rejected source mapping."""
         message_row_id = int(message_row_id)

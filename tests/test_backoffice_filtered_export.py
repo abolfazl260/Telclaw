@@ -73,7 +73,7 @@ async def test_filtered_csv_exports_all_matching_rows_not_page_or_whole_database
         rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
         assert len(rows) == 29  # not 25, not all 34
         assert {row["origin_city"] for row in rows} == {"Tehran"}
-        assert all(int(row["price"]) == 12 for row in rows)
+        assert all(float(row["price"]) == 12 for row in rows)
         assert any("ارسال مدارک به Москва" == row["description"] for row in rows)
         assert next(row for row in rows if row["processed_message_id"] == "1")["description"].startswith("'=HYPERLINK")
         assert {row["processed_message_id"] for row in rows} == {str(i) for i in range(1, 30)}

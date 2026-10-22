@@ -59,6 +59,22 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## Download only filtered database rows
+
+In **Database**, open one table (`messages`, `transferlist`, `housinglist`,
+or `joblist`), choose column filters and click **Apply filters**. The
+**Download filtered CSV (N rows)** link then downloads **all N matching rows**
+from that selected table across every pagination page. It does not export
+other tables, unfiltered rows, or the full SQLite database. The export endpoint
+refuses requests without at least one effective filter (a blank text filter
+is not effective). All operators, typed values and NULL rules use the exact
+same validated query builder as the on-screen list.
+
+The download is streaming UTF-8 CSV with an Excel-friendly BOM. Multilingual
+text is preserved; strings that spreadsheet programs could evaluate as
+formulas receive a safe leading apostrophe. Downloads use the existing
+authenticated Back Office session and are never exposed via a public link.
+
 ## Operations tab
 
 The **Operations** tab mirrors the operational controls from the terminal UI while

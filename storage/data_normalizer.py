@@ -9,7 +9,10 @@ import math
 import re
 import unicodedata
 from datetime import datetime, timezone
+from pathlib import Path
+from threading import RLock
 
+import config
 from storage import database
 from storage.location_normalizer import normalize_location
 
@@ -51,10 +54,35 @@ def _country_field(category, field_name):
     return None
 
 
-def initialize():
-    conn = database.get_connection()
+_INIT_LOCK = RLock()
+_INITIALIZED_DATABASE = None
+
+
+def _database_identity():
+    path = Path(config.DB_NAME).resolve()
     try:
-        conn.execute("""CREATE TABLE IF NOT EXISTS normalization_aliases (
+        stat = path.stat()
+        return (str(path), stat.st_dev, stat.st_ino)
+    except FileNotFoundError:
+        return (str(path), None, None)
+
+
+def ensure_initialized():
+    """Skip schema/default-alias writes on every ad; never cache alias values.
+
+    This guard is per database file identity so standalone scripts, tests and
+    database replacement still get correct first-use initialization.
+    """
+    if _database_identity() != _INITIALIZED_DATABASE or _INITIALIZED_DATABASE is None:
+        initialize()
+
+
+def initialize():
+    global _INITIALIZED_DATABASE
+    with _INIT_LOCK:
+        conn = database.get_connection()
+        try:
+            conn.execute("""CREATE TABLE IF NOT EXISTS normalization_aliases (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT NOT NULL,
             field_name TEXT NOT NULL,
@@ -69,12 +97,13 @@ def initialize():
             updated_at TEXT NOT NULL,
             UNIQUE(category, field_name, alias_key, country_iso2)
         )""")
-        conn.execute("""CREATE INDEX IF NOT EXISTS idx_normalization_alias_lookup
+            conn.execute("""CREATE INDEX IF NOT EXISTS idx_normalization_alias_lookup
             ON normalization_aliases(category, field_name, alias_key, country_iso2, enabled)""")
-        _seed_defaults(conn)
-        conn.commit()
-    finally:
-        conn.close()
+            _seed_defaults(conn)
+            conn.commit()
+            _INITIALIZED_DATABASE = _database_identity()
+        finally:
+            conn.close()
 
 
 def _seed_defaults(conn):
@@ -886,7 +915,7 @@ def normalize_category_data(category, data, *, conn=None):
 
     owns_conn = conn is None
     if owns_conn:
-        initialize()
+        ensure_initialized()
         conn = database.get_connection()
     try:
         rules = _rules_for_category(conn, category)

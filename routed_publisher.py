@@ -1,5 +1,6 @@
 """Publish AI-processed ads through admin-managed destination rules."""
 import logging
+import sqlite3
 from datetime import date
 
 import aiohttp
@@ -276,15 +277,24 @@ class RoutedPublisher:
         return merged
 
     async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
-        if routing_rules.is_rate_limited():
-            return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
-        if pairs is None:
-            rule_pairs = routing_rules.pending(limit)
-            # The Advertio Cargo channel keeps its historical eligibility rules,
-            # but now shares the cycle fairly with managed publishing rules so a
-            # full rule queue cannot starve it indefinitely.
-            koolbar_pairs = self._koolbar_pairs(limit)
-            pairs = self._merge_pending_pairs(rule_pairs, koolbar_pairs, limit)
+        try:
+            if routing_rules.is_rate_limited():
+                return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
+            if pairs is None:
+                rule_pairs = routing_rules.pending(limit)
+                # Merge both queues only after all preflight DB reads succeed.
+                # A lock at this point must defer the entire cycle, never send
+                # a partial list or risk re-sending an uncertain Telegram post.
+                koolbar_pairs = self._koolbar_pairs(limit)
+                pairs = self._merge_pending_pairs(rule_pairs, koolbar_pairs, limit)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            logger.warning(
+                "[TRANSFER TELEGRAM] SQLite busy during queue preflight; "
+                "deferred entire publisher cycle (no messages sent)"
+            )
+            return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "db_busy": True}
         result = {"found": len(pairs), "sent": 0, "failed": 0, "rejected": 0}
         blocked_targets = {}
         for record, rule in pairs:

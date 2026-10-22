@@ -436,7 +436,6 @@ async def _send_transfer_country(monitor, chat_id: int) -> None:
 def install_transfer_live_command(monitor):
     """Install /transferlive without creating a second Telegram polling loop."""
     original_handle_update = monitor._handle_update
-    original_register_commands = monitor._register_commands
 
     async def handle_update(self, update):
         message = update.get("message") or {}
@@ -458,26 +457,5 @@ def install_transfer_live_command(monitor):
         else:
             await _send_transfer_live(self, chat_id)
 
-    async def register_commands(self):
-        await original_register_commands()
-        commands = [
-            {"command": "start", "description": "فعال‌سازی دریافت گزارش‌ها"},
-            {"command": "stop", "description": "توقف دریافت گزارش‌ها"},
-            {"command": "status", "description": "نمایش وضعیت فعلی سیستم"},
-            {"command": "health", "description": "بررسی سلامت فعلی سیستم"},
-            {"command": "today", "description": "نمایش آمار امروز"},
-            {"command": "source", "description": "نمایش کانال‌ها و گروه‌های تحت کرال"},
-            {"command": "down_errors", "description": "Download crawler error log"},
-            {"command": "database", "description": "Download full SQLite database"},
-            {"command": "backoffice", "description": "Open private publishing back office"},
-            {"command": "transferlive", "description": "نمایش آگهی‌های فعال حمل‌ونقل"},
-            {"command": "transfercountry", "description": "خلاصه درخواست‌ها بر اساس کشورهای مبدا و مقصد"},
-        ]
-        try:
-            await self._api("setMyCommands", {"commands": commands})
-        except Exception:
-            pass
-
     monitor._handle_update = MethodType(handle_update, monitor)
-    monitor._register_commands = MethodType(register_commands, monitor)
     return monitor

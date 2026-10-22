@@ -73,6 +73,22 @@ accounts, channel inventory, settings, and operation history. Use the sections i
 when processing new data. Manual queue buttons start a one-off run; they do not change
 the scheduled crawler configuration.
 
+The **Active Cargo** tab (/cargo) provides a searchable, 25-per-page report of
+potentially active transfer ads: upcoming dated trips or recent undated posts
+within the configured backfill window. Search by Telegram ID, channel, route
+city or title, filter by upcoming/undated trip and Advertio delivery status,
+and view the original Telegram post, description and API error.
+
+The **Ready for API** metric applies the route-completeness, supported-country,
+delivery-state and retry-time gates. This is not proof the original Telegram
+message still exists; the platform checks canonical cities, content and
+duplicates on ingest. Select up to 25 eligible records on the displayed page
+and click **Send selected active cargo to Advertio**, or click **Send next 25
+ready ads** for automatic batch ordering. Both operations reuse the existing
+cargo-only idempotent queue, configured daily budget, and shared pipeline
+lock. Sent/rejected records cannot be resubmitted through this report.
+The existing Telegram and Housing publishers are unaffected.
+
 The **Advertio Cargo — Website API** card is separate from the Telegram @advertio_cargo
 publisher and the housing delivery queue. Its auto-publish setting applies to newly
 submitted cargo listings only after API validation and duplicate checks. **Sent to API**

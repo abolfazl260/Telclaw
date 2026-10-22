@@ -90,7 +90,13 @@ class MessageRepository:
             origin_country_iso2=excluded.origin_country_iso2,
             destination_city_canonical=excluded.destination_city_canonical,
             destination_city_key=excluded.destination_city_key,
-            destination_country_iso2=excluded.destination_country_iso2""", (
+            destination_country_iso2=excluded.destination_country_iso2
+        WHERE transfer_locations.origin_city_canonical IS NOT excluded.origin_city_canonical
+           OR transfer_locations.origin_city_key IS NOT excluded.origin_city_key
+           OR transfer_locations.origin_country_iso2 IS NOT excluded.origin_country_iso2
+           OR transfer_locations.destination_city_canonical IS NOT excluded.destination_city_canonical
+           OR transfer_locations.destination_city_key IS NOT excluded.destination_city_key
+           OR transfer_locations.destination_country_iso2 IS NOT excluded.destination_country_iso2""", (
             data.get("processed_message_id"),
             origin["city"], origin["city_key"], origin["country_iso2"],
             destination["city"], destination["city_key"], destination["country_iso2"],

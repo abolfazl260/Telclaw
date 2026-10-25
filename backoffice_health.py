@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import config
+from backoffice_jobs import jobs_report
 from storage.database import get_connection
 from services.health_metrics import collect as collect_health_metrics
 
@@ -557,6 +558,7 @@ def snapshot():
             "edits": _recent_edits(conn),
             "publishing": _publishing_report(conn),
             "advertio_cargo": _cargo_delivery_report(conn),
+            "advertio_jobs": jobs_report(conn),
             "overview": _overview_report(conn),
             "system": _system_report(conn),
             "bot": {

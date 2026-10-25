@@ -113,6 +113,18 @@ SPECS = (
     _s("TELCLAW_ADVERTIO_CARGO_BATCH_SIZE", "ADVERTIO_CARGO_BATCH_SIZE", "Advertio Cargo", kind="int", minimum=1, maximum=100, fallback="50"),
     _s("TELCLAW_ADVERTIO_CARGO_DAILY_LIMIT", "ADVERTIO_CARGO_DAILY_LIMIT", "Advertio Cargo", kind="int", minimum=1, maximum=500, fallback="250"),
 
+    _s("TELCLAW_ADVERTIO_JOBS_ENABLED", "ADVERTIO_JOBS_ENABLED", "Advertio Jobs", kind="bool", fallback="false"),
+    _s("TELCLAW_ADVERTIO_JOBS_AUTO_PUBLISH", "ADVERTIO_JOBS_AUTO_PUBLISH", "Advertio Jobs", kind="bool", fallback="true"),
+    _s("TELCLAW_ADVERTIO_JOBS_BACKFILL_ENABLED", "ADVERTIO_JOBS_BACKFILL_ENABLED", "Advertio Jobs", kind="bool", fallback="false"),
+    _s("TELCLAW_ADVERTIO_JOBS_BACKFILL_DAYS", "ADVERTIO_JOBS_BACKFILL_DAYS", "Advertio Jobs", kind="int", fallback="7", minimum=1, maximum=365),
+    _s("TELCLAW_ADVERTIO_JOBS_FRESHNESS_DAYS", "ADVERTIO_JOBS_FRESHNESS_DAYS", "Advertio Jobs", kind="int", fallback="7", minimum=1, maximum=365),
+    _s("TELCLAW_ADVERTIO_JOBS_BATCH_SIZE", "ADVERTIO_JOBS_BATCH_SIZE", "Advertio Jobs", kind="int", fallback="25", minimum=1, maximum=100),
+    _s("TELCLAW_ADVERTIO_JOBS_DAILY_LIMIT", "ADVERTIO_JOBS_DAILY_LIMIT", "Advertio Jobs", kind="int", fallback="200", minimum=1, maximum=1000),
+    _s("TELCLAW_ADVERTIO_JOBS_MAX_ATTEMPTS", "ADVERTIO_JOBS_MAX_ATTEMPTS", "Advertio Jobs", kind="int", fallback="8", minimum=1, maximum=100),
+    _s("TELCLAW_ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS", "ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS", "Advertio Jobs", kind="int", fallback="1800", minimum=1, maximum=86400),
+    _s("TELCLAW_ADVERTIO_JOBS_SOURCES", "ADVERTIO_JOBS_SOURCES", "Advertio Jobs", kind="str", fallback=""),
+    _s("TELCLAW_ADVERTIO_DAILY_REQUEST_LIMIT", "ADVERTIO_DAILY_REQUEST_LIMIT", "Advertio", kind="int", minimum=1, maximum=10000, fallback="1000"),
+
     _s("TELCLAW_TRANSFER_TELEGRAM_PUBLISH_ENABLED", "TRANSFER_TELEGRAM_PUBLISH_ENABLED", "Transfer Publisher", kind="bool", restart=True, fallback="false"),
     _s("TELCLAW_TRANSFER_TELEGRAM_CHANNEL", "TRANSFER_TELEGRAM_CHANNEL", "Transfer Publisher", restart=True),
     _s("TELCLAW_TRANSFER_TELEGRAM_INTERVAL_MINUTES", "TRANSFER_TELEGRAM_INTERVAL_MINUTES", "Transfer Publisher", kind="float", minimum=0.1, fallback="1"),

@@ -35,6 +35,7 @@ class SchedulerService:
         self._tasks = {}
         self._pipeline_lock = asyncio.Lock()
         self._advertio_cargo_service = None
+        self._advertio_jobs_service = None
 
     def request_stage_skip(self, stage):
         if stage not in {"crawl", "processing", "ai", "advertio"}:
@@ -169,7 +170,6 @@ class SchedulerService:
                         f"Failed: {advertio_stats['failed']}"
                     )
                     await self.monitor.report("advertio", advertio_stats)
-                self.stage_control.consume_skip("advertio")
 
             # Independent destination: one failure cannot roll back Telegram
             # publication or the housing Advertio pipeline.
@@ -189,6 +189,24 @@ class SchedulerService:
                     await self.monitor.report("advertio_cargo", cargo_stats)
                 except Exception as exc:
                     logger.exception("Advertio cargo queue failed: %s", exc)
+
+            if (config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_JOBS_ENABLED
+                    and config.ADVERTIO_INGEST_KEY and not skip_advertio):
+                from delivery.advertio_jobs import AdvertioJobsService
+                try:
+                    if self._advertio_jobs_service is None:
+                        self._advertio_jobs_service = AdvertioJobsService()
+                    jobs_stats = await asyncio.to_thread(
+                        self._advertio_jobs_service.deliver_pending,
+                        limit=config.ADVERTIO_JOBS_BATCH_SIZE,
+                        before_datetime=advertio_cycle_cutoff,
+                        should_stop=lambda: self.stage_control.is_skip_requested("advertio"),
+                    )
+                    logger.info("Advertio Jobs cycle: %s", jobs_stats)
+                    await self.monitor.report("advertio_jobs", jobs_stats)
+                except Exception:
+                    logger.error("Independent Advertio Jobs queue failed")
+            self.stage_control.consume_skip("advertio")
 
             return processing_stats, classification_stats, extraction_stats
 

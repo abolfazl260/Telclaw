@@ -1461,7 +1461,7 @@ async def operations_page(request):
     advertio_running = states["advertio"]["status"] in {"queued", "running", "stopping"}
     cargo_running = cargo_state["status"] in {"queued", "running", "stopping"}
     groq_running = states["groq"]["status"] in {"queued", "running", "stopping"}
-    pipeline_busy = processing_running or classification_running or ai_running or advertio_running or cargo_running
+    pipeline_busy = processing_running or classification_running or ai_running or advertio_running or cargo_running or states.get("advertio_jobs", {}).get("status") in {"queued", "running", "stopping"}
 
     processing_controls = action_form(
         "run_processing", "Run Processing", disabled=pipeline_busy
@@ -1543,6 +1543,10 @@ async def operations_page(request):
         "probe_advertio_api", "Test Advertio API /health",
         disabled=probe_state.get("status") in {"queued", "running", "stopping"},
     )
+
+    from backoffice_jobs import jobs_section
+    jobs_html = jobs_section(report.get("advertio_jobs") or {}, action_form,
+        _operation_state_box("Jobs delivery", states.get("advertio_jobs") or {}))
 
     cargo_alerts = []
     if not config.ADVERTIO_INGEST_ENABLED:
@@ -1773,7 +1777,7 @@ async def operations_page(request):
       <h2 id="ops-guide-title">How to use Operations</h2>
       <p>Run the stages from top to bottom: process records, classify them, extract structured fields, then send eligible ads to Advertio. Each button starts a manual run; it does not change the scheduled crawler.</p>
       <nav class="ops-jump-nav" aria-label="Operations shortcuts">
-        <a href="#pipeline">1. Processing</a><a href="#advertio-delivery">2. Advertio delivery</a>
+        <a href="#advertio-jobs">Advertio Jobs</a><a href="#pipeline">1. Processing</a><a href="#advertio-delivery">2. Advertio delivery</a>
         <a href="#diagnostics">3. Diagnostics</a><a href="/cargo">Active Cargo report</a><a href="#unsent-transfer-ads">4. Transfer queue</a>
         <a href="#crawler">5. Crawler</a><a href="#accounts">6. Accounts</a>
         <a href="#channels">7. Channels</a><a href="#settings">8. Settings</a><a href="#activity">9. Activity log</a>
@@ -1804,6 +1808,7 @@ async def operations_page(request):
       </div>
     </section>
 
+    {jobs_html}
     <section class="ops-section" id="advertio-delivery">
       <h2>2. Send eligible ads to Advertio</h2>
       <p class="muted">Housing listings and passenger-cargo use separate delivery queues. Sending a cargo record to the API is not the same as publishing an older PendingReview listing.</p>
@@ -1974,6 +1979,20 @@ async def operations_action(request):
         if action == "probe_advertio_api":
             operations.start_advertio_probe(requested_by=admin_id)
             _operations_redirect(notice="Advertio API health check started. No listing is sent.")
+        if action in {"run_advertio_jobs", "backfill_advertio_jobs"}:
+            operations.start_advertio_jobs(limit=int(data.get("limit") or 5), requested_by=admin_id,
+                backfill=action == "backfill_advertio_jobs")
+            _operations_redirect(notice="Jobs delivery started using normal validation and queue rules.")
+        if action == "stop_advertio_jobs":
+            operations.stop_advertio_jobs()
+            _operations_redirect(notice="Jobs stop requested; in-flight HTTP calls finish safely.")
+        if action == "requeue_advertio_jobs":
+            operations.requeue_advertio_jobs(int(data.get("message_row_id") or 0), requested_by=admin_id)
+            _operations_redirect(notice="Corrected Jobs record requeued for full validation.")
+        if action == "resume_advertio_jobs":
+            from delivery.advertio_jobs import AdvertioJobsService
+            AdvertioJobsService.resume()
+            _operations_redirect(notice="Jobs API fault acknowledged; validation still applies.")
         if action == "run_advertio_cargo":
             operations.start_advertio_cargo(
                 limit=int(data.get("limit") or 10),

@@ -10,6 +10,7 @@ import uuid
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
+from delivery.jobs_discovery import discovery_report
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
 from storage.database import get_connection
@@ -427,6 +428,8 @@ class AdvertioJobsService:
             else config.ADVERTIO_JOBS_FRESHNESS_DAYS
         )
         with closing(get_connection()) as conn:
+            admission = discovery_report(conn, backfill=backfill, at=now())
+            enqueued = 0
             watermark = int(self._meta(conn, "deployment_watermark", "0"))
             sql = """SELECT m.* FROM messages m JOIN joblist j ON j.processed_message_id=m.id
                 LEFT JOIN advertio_jobs_deliveries d ON d.processed_message_id=m.id
@@ -447,7 +450,7 @@ class AdvertioJobsService:
             values.append(min(100, max(1, int(limit))))
             for row in conn.execute(sql, values).fetchall():
                 record = dict(row)
-                conn.execute(
+                cursor = conn.execute(
                     """INSERT OR IGNORE INTO advertio_jobs_deliveries
                     (processed_message_id,source_name,external_id,updated_at) VALUES(?,?,?,?)""",
                     (
@@ -457,7 +460,9 @@ class AdvertioJobsService:
                         now().isoformat(),
                     ),
                 )
+                enqueued += cursor.rowcount
             conn.commit()
+            return {**admission, "enqueued": enqueued}
 
     def pending(self, limit, before_datetime=None):
         with closing(get_connection()) as conn:
@@ -650,7 +655,7 @@ class AdvertioJobsService:
                     100,
                 ),
             )
-            self.enqueue(size)
+            result["discovery"] = self.enqueue(size)
             for record in self.pending(size, before_datetime):
                 with closing(get_connection()) as conn:
                     stop = self._meta(conn, "stop") == "1"

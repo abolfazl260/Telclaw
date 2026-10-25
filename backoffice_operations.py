@@ -508,10 +508,14 @@ class BackofficeOperations:
             async with self.pipeline_lock:
                 if self._advertio_jobs is None:
                     self._advertio_jobs = AdvertioJobsService()
+                admission = None
                 if backfill:
-                    await asyncio.to_thread(self._advertio_jobs.enqueue, limit, backfill=True)
-                return await asyncio.to_thread(self._advertio_jobs.deliver_pending,
+                    admission = await asyncio.to_thread(self._advertio_jobs.enqueue, limit, backfill=True)
+                result = await asyncio.to_thread(self._advertio_jobs.deliver_pending,
                     limit=limit, before_datetime=_now_iso(), should_stop=stop_event.is_set)
+                if admission is not None:
+                    result["backfill_discovery"] = admission
+                return result
         return self._start_background("advertio_jobs", requested_by,
             {"limit":limit,"backfill":backfill}, operation)
 

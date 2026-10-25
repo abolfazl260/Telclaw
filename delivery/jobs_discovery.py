@@ -26,7 +26,11 @@ def discovery_report(conn, *, backfill=False, at=None):
         LEFT JOIN advertio_jobs_deliveries d ON d.processed_message_id=m.id
         WHERE m.ai_category='joblist' OR m.classification_category='joblist'
     ) GROUP BY reason""", (at.isoformat(), (at-timedelta(days=days)).isoformat(), int(backfill), watermark)).fetchall()
-    return dict(mode='backfill' if backfill else 'new', effective_days=days,
+    awaiting = conn.execute("""SELECT COALESCE(ai_status,'unset'),COUNT(*) FROM messages
+        WHERE (ai_category='joblist' OR classification_category='joblist')
+          AND (ai_status IS NOT 'processed' OR ai_category IS NOT 'joblist')
+        GROUP BY COALESCE(ai_status,'unset')""").fetchall()
+    return dict(awaiting_ai_states={r[0]:r[1] for r in awaiting}, mode='backfill' if backfill else 'new', effective_days=days,
                 backfill_enabled=bool(config.ADVERTIO_JOBS_BACKFILL_ENABLED),
                 source_date_cutoff=(at-timedelta(days=days)).isoformat(),
                 counts={r[0]:r[1] for r in rows})

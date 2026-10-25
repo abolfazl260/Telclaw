@@ -3,6 +3,8 @@
 from datetime import date
 from pathlib import Path
 
+from ai.structured_output import JSON_GENERATION_RULES
+
 
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 PROMPT_FILES = {
@@ -33,6 +35,7 @@ def render_prompt(category: str, message_text: str = "") -> str:
     """Render the category prompt with the current date and message context."""
     prompt = load_prompt(category).replace("{category}", category)
     prompt = f"{prompt.rstrip()}\n\nCurrent date for relative date interpretation: {date.today().isoformat()}"
+    prompt = f"{prompt}\n\nJSON encoding: {JSON_GENERATION_RULES}"
     if message_text:
         prompt = f"{prompt}\n\nMessage to extract:\n{message_text}"
     return prompt

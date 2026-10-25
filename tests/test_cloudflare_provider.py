@@ -65,6 +65,7 @@ def test_manager_can_instantiate_both_providers(monkeypatch):
     monkeypatch.setattr("config.CLOUDFLARE_ACCOUNT_ID", "account")
     monkeypatch.setattr("config.CLOUDFLARE_API_TOKEN", "token")
     monkeypatch.setattr("config.CLOUDFLARE_MODEL", "model")
+    monkeypatch.setattr("config.CLOUDFLARE_PROVIDERS", [{"account_id": "account", "api_token": "token", "model": "model"}])
     assert isinstance(AIProviderManager().provider_instance, CloudflareProvider)
 
 

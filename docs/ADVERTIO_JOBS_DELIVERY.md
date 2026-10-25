@@ -433,3 +433,27 @@ terminal idempotency. Other tests cover stale/invalid dates, effective window,
 failed extraction/missing category data and read-only preview. No production DB
 was accessed, so a particular operator's empty queue still requires its admission
 counts for diagnosis. No migration or environment changes are needed.
+
+## Recover successful AI flags with missing Jobs data
+
+If admission reports `missing_extracted_record`, `messages` says extraction
+succeeded but the related `joblist` row is absent. Do not construct a listing
+from that flag or guess the missing data. This symptom alone cannot identify
+whether legacy data, a prior migration or another write path caused the mismatch.
+
+Operations → Jobs now offers **Recover missing Jobs extraction data (count)**.
+After confirmation it requeues at most the requested 1–1000 records (default 100),
+newest first. It requires enabled Jobs AI and an idle manual pipeline, holds the
+shared pipeline lock and logs the affected count. Only successful Jobs rows with
+processed text/classification and no Jobs data or delivery queue entry qualify.
+It preserves source date/text, category, Telegram status, valid Jobs records and
+all existing delivery states. Nothing runs automatically on startup.
+
+Then use **Run AI Extraction**, inspect admission again and explicitly backfill
+still-open historical jobs inside the permitted date window. Recovering the
+missing row does not make an old job current. The awaiting-AI diagnostic also
+breaks down its total into stored statuses, distinguishing pending, skipped and
+failed rows. Skipped-while-disabled recovery and failed-extraction retry remain
+separate operations. No migrations or new environment variables; deploy/restart
+the feature commit to expose the new control. Rollback by reverting the code;
+records already requeued remain pending and can be processed normally.

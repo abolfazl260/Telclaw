@@ -1989,6 +1989,11 @@ async def operations_action(request):
                 limit=int(data.get("limit") or 100), requested_by=admin_id,
             )
             _operations_redirect(notice=f"Requeued {count} skipped Jobs. Run AI Extraction to process them; Advertio backfill is separate.")
+        if action == "requeue_missing_jobs_extractions":
+            count = await operations.requeue_missing_jobs_extractions(
+                limit=int(data.get("limit") or 100), requested_by=admin_id,
+            )
+            _operations_redirect(notice=f"Requeued {count} Jobs with missing extraction data. Run AI Extraction, then inspect Jobs admission again.")
         if action == "run_ai":
             operations.start_ai(data.get("account"), admin_id)
             _operations_redirect(notice="AI extraction queue started.")

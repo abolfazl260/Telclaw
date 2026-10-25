@@ -327,6 +327,22 @@ class BackofficeOperations:
                        {"requested_by": requested_by, "count": count})
         return count
 
+    async def requeue_missing_jobs_extractions(self, limit=100, requested_by=None):
+        if not config.is_ai_extraction_enabled("joblist"):
+            raise ValueError("Enable Jobs AI extraction before recovering missing data")
+        busy = [name for name in SERIAL_PIPELINE_JOBS
+                if self.state(name)["status"] in {"queued", "running", "stopping"}]
+        if busy:
+            raise RuntimeError("Stop manual pipeline work before recovering Jobs")
+        async with self.pipeline_lock:
+            count = await asyncio.to_thread(
+                self.ai.repository.requeue_missing_jobs_extractions, limit=limit,
+            )
+        self._activity("jobs_missing_extraction_requeue", "WARNING",
+                       f"Requeued {count} Jobs marked successful without stored extraction data",
+                       {"requested_by": requested_by, "count": count})
+        return count
+
     async def _connect_account(self, account_name):
         account_name = str(account_name or "").strip()
         if not account_name:

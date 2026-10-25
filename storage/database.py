@@ -411,6 +411,31 @@ def requeue_disabled_jobs_extractions(limit=100):
         conn.close()
 
 
+def requeue_missing_jobs_extractions(limit=100):
+    """Explicitly repair successful Jobs flags without stored extraction data."""
+    limit = int(limit)
+    if not 1 <= limit <= 1000:
+        raise ValueError("Batch size must be between 1 and 1000")
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""UPDATE messages
+            SET ai_status='pending',ai_error=NULL,ai_started_at=NULL,ai_processed_at=NULL
+            WHERE id IN (
+                SELECT m.id FROM messages m
+                WHERE m.processing_status='processed'
+                  AND m.classification_status='processed'
+                  AND m.classification_category='joblist'
+                  AND m.ai_status='processed' AND m.ai_category='joblist'
+                  AND NOT EXISTS (SELECT 1 FROM joblist j WHERE j.processed_message_id=m.id)
+                  AND NOT EXISTS (SELECT 1 FROM advertio_jobs_deliveries d WHERE d.processed_message_id=m.id)
+                ORDER BY m.id DESC LIMIT ?
+            )""", (limit,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def _last_time(conn,where,params=()):
     row=conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}",params).fetchone(); return row["value"] if row and row["value"] else None
 

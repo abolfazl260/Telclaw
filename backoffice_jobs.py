@@ -128,7 +128,10 @@ def jobs_section(report, action_form, state_box):
         + "</td><td>" + e((backfill.get("counts") or {}).get(key, 0)) + "</td></tr>"
         for key, label in labels.items()
     )
+    awaiting_summary = " · ".join(e(key) + ": " + e(count)
+                                  for key, count in (discovery.get("awaiting_ai_states") or {}).items())
     admission_html = f"""<details class="ops-recovery" open><summary>Why are Jobs not being sent?</summary>
+    <p>Awaiting AI breakdown: {awaiting_summary or "none"}</p>
     <p>Automatic window: {e(discovery.get('effective_days'))} days · Backfill window:
     {e(backfill.get('effective_days'))} days · Backfill: {'enabled' if backfill.get('backfill_enabled') else 'disabled'}.</p>
     <p class="muted">Windows use the original Telegram post date, not today's AI processing date.
@@ -138,6 +141,15 @@ def jobs_section(report, action_form, state_box):
     <p class="muted">If everything is awaiting AI, first run extraction. If records need explicit backfill,
     verify the jobs are still open, then enable and run bounded backfill below. For old or invalid dates, verify source freshness before changing settings.
     Queued blocked/rejected records require correction and explicit requeue. A cooldown or depleted budget also prevents transmission.</p></details>"""
+
+    missing_count = (discovery.get("counts") or {}).get("missing_extracted_record", 0)
+    admission_html += action_form(
+        "requeue_missing_jobs_extractions",
+        f"Recover missing Jobs extraction data ({missing_count})",
+        extra='<label>Batch size<input type="number" name="limit" min="1" max="1000" value="100"></label>',
+        disabled=not missing_count or not config.is_ai_extraction_enabled("joblist"),
+        confirm="Requeue only Jobs marked successful but missing stored extraction data? Existing Jobs data and delivery records are excluded. Run AI Extraction afterwards; this does not publish anything.",
+    )
 
     ready = report.get("enabled") and report.get("key_configured")
     controls = action_form(

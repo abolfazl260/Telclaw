@@ -382,6 +382,7 @@ async def crawl_channel(
                     sender_id=sender_id,
                     sender_username=sender_username,
                     sender_type=sender_type,
+                    sender_is_original=int(getattr(message, "fwd_from", None) is None),
                     has_media=has_media,
                     media_type=media_type,
                     file_unique_id=file_unique_id,

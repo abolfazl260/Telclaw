@@ -18,6 +18,8 @@ CATEGORY_FIELDS = {
         "volume", "volume_unit", "price", "currency", "contact", "features",
     ),
     "joblist": (
+        "role", "job_category", "country_code", "province", "city",
+        "work_arrangement", "is_job_listing",
         "job_title", "company", "location", "employment_type", "salary",
         "salary_currency", "salary_period", "experience", "education",
         "skills", "remote", "job_type", "description", "application_method",
@@ -120,6 +122,8 @@ def _field_schema(field):
         return {"type": ["array", "null"], "items": {"type": "string"}}
     if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity", "volume"}:
         return {"type": ["number", "string", "null"]}
+    if field == "is_job_listing":
+        return {"type": ["boolean", "null"]}
     if field == "remote":
         return {"type": ["boolean", "string", "null"]}
     return {"type": ["string", "number", "boolean", "null"]}

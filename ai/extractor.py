@@ -193,8 +193,6 @@ def _normalize_defaults(result):
     if category == "housinglist":
         category_data.setdefault("country_code", "CA")
         category_data.setdefault("currency", "CAD")
-    elif category == "joblist" and category_data.get("salary") is not None:
-        category_data.setdefault("salary_currency", "CAD")
     return result
 
 

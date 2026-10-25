@@ -32,8 +32,8 @@ from storage import database
 
 logger = logging.getLogger('telclaw.backoffice.operations')
 
-RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "advertio_cargo", "advertio_probe", "groq")
-SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio", "advertio_cargo"}
+RUNNABLE_PIPELINE_JOBS = ("processing", "classification", "ai", "advertio", "advertio_cargo", "advertio_jobs", "advertio_probe", "groq")
+SERIAL_PIPELINE_JOBS = {"processing", "classification", "ai", "advertio", "advertio_cargo", "advertio_jobs"}
 
 
 def _now_iso():
@@ -50,6 +50,7 @@ class BackofficeOperations:
         self._ai = getattr(console_ui, "ai_service", None)
         self._advertio = getattr(console_ui, "advertio_service", None)
         self._advertio_cargo = None
+        self._advertio_jobs = None
         self._crawler = getattr(console_ui, "crawler", None)
         self._accounts = getattr(console_ui, "accounts", None)
         self._channels = getattr(console_ui, "channels", None)
@@ -477,6 +478,37 @@ class BackofficeOperations:
             return await asyncio.to_thread(probe)
 
         return self._start_background("advertio_probe", requested_by, {}, operation)
+
+    def start_advertio_jobs(self, limit=5, requested_by=None, backfill=False):
+        if not config.ADVERTIO_INGEST_ENABLED or not config.ADVERTIO_JOBS_ENABLED:
+            raise RuntimeError("Advertio Jobs ingestion is disabled")
+        if not config.ADVERTIO_INGEST_KEY:
+            raise RuntimeError("Advertio ingest key is not configured")
+        limit = int(limit)
+        if not 1 <= limit <= config.ADVERTIO_JOBS_BATCH_SIZE:
+            raise ValueError("Jobs batch exceeds configured limit")
+        async def operation(stop_event):
+            from delivery.advertio_jobs import AdvertioJobsService
+            async with self.pipeline_lock:
+                if self._advertio_jobs is None:
+                    self._advertio_jobs = AdvertioJobsService()
+                if backfill:
+                    await asyncio.to_thread(self._advertio_jobs.enqueue, limit, backfill=True)
+                return await asyncio.to_thread(self._advertio_jobs.deliver_pending,
+                    limit=limit, before_datetime=_now_iso(), should_stop=stop_event.is_set)
+        return self._start_background("advertio_jobs", requested_by,
+            {"limit":limit,"backfill":backfill}, operation)
+
+    def stop_advertio_jobs(self):
+        from delivery.advertio_jobs import AdvertioJobsService
+        AdvertioJobsService.stop()
+        self.request_stop("advertio_jobs")
+
+    def requeue_advertio_jobs(self, message_row_id, requested_by=None):
+        from delivery.advertio_jobs import AdvertioJobsService
+        AdvertioJobsService.requeue(int(message_row_id))
+        self._activity("advertio_jobs_requeue", "WARNING", "Requeued corrected Jobs record",
+                       {"message_row_id":int(message_row_id),"requested_by":requested_by})
 
     def start_advertio_cargo(self, limit=10, requested_by=None):
         """Manually deliver cargo only; never depend on Housing or Telegram."""

@@ -1,0 +1,357 @@
+# Advertio Jobs delivery
+
+Implementation branch: `feat/advertio-jobs-auto-ingest`, based on maintained default
+`main` at `7bfa9358f267944201e2a2799a6f2764009256b4` (includes merged provider fixes and
+startup performance fixes). `Stage` was inspected; its four divergent commits are
+AI fallback diagnostics/tests, not a different Jobs integration. This change does
+not merge branches or deploy the running collector.
+
+## Verified receiving contract
+
+Inspected GitLab `advertio/platform/advertio-monorepo` default `master` at
+`0d84b241784f601cf4a2aa8a3be1467530cb19d0`: ingest endpoint, command and handler,
+category seed, attribute validator, Jobs form/title builder, location endpoints,
+and `docs/CRAWLER-INTEGRATION.md`. Also read the four requested documents in the
+GitHub Advertio documentation repository. Live read-only verification on
+2026-10-25 returned HTTP 200 for `/health` (Healthy), Jobs attributes, countries,
+Canadian provinces and Toronto city search. The live schema is captured in
+`tests/fixtures/advertio_jobs_schema.json`; tests never fetch production data.
+
+The receiving API needs **no backend changes**. Its active schema is authoritative.
+Older advice to start every category with `autoPublish=false` is superseded **for
+eligible Jobs** by the explicit product decision in this task. Housing and Cargo
+flags are unchanged. The approximate 1,000 shared daily request budget is a local
+initial ceiling, **not a verified production capacity or current edge policy**.
+Confirm that policy with the Advertio operator before rollout.
+
+## Architecture and independence
+
+Collection → established cleaning → classification → category extraction → existing
+`joblist` persistence → dedicated Jobs outbox → existing `AdvertioClient` → ingest
+validation/dedup/moderation → persisted delivery result and actual remote status.
+
+- `delivery/advertio_jobs.py`: catalog cache, mapping, safety checks, queue worker.
+- `storage/advertio_jobs_queue.py`: additive startup schema and deployment watermark.
+- `delivery/advertio_transport.py`: shared semaphore and atomic daily HTTP reservations.
+- `backoffice_jobs.py`: read-only diagnostics and operations section.
+- Scheduler runs Jobs after existing Housing/Cargo stages via `asyncio.to_thread`,
+  under the existing pipeline lock. A database lease additionally prevents overlapping
+  Jobs workers across manual operations, scheduler instances and processes sharing DB.
+- AI extraction succeeds independently of delivery. No Jobs response updates
+  `messages.advertio_status`, Cargo tables or Telegram publication status.
+
+No HTTP or schema initialization runs on Back Office page reads. Catalog calls
+are public and never include the ingest key. HTTP errors persist fixed codes,
+not remote response bodies, applicant information or credentials. Redirects are
+disabled on AdvertioClient requests so a custom ingest header cannot follow a
+redirect to another host.
+
+## Extraction and compatibility
+
+The Jobs allow-list/prompt now includes `role`, `job_category`, canonical `job_type`,
+`job_title`, `country_code`, `province`, `city`, `work_arrangement`, `salary`,
+`salary_currency`, `salary_period`, `description`, and `is_job_listing`.
+`is_job_listing` explicitly distinguishes employment from service promotions/spam.
+Unknown facts remain null. A full-time value additionally needs full-time wording
+in cleaned source text; equivalent English and Persian phrases are supported.
+
+Existing `employment_type`, company, skills, experience, education, location,
+remote, application method and contact remain in storage. Historical `job_type`
+values are **not rewritten**. Legacy records missing the new eligibility evidence
+cannot auto-publish; correct/re-extract them explicitly first. Jobs extraction no
+longer defaults a salary currency to CAD. Existing handling of unsupported
+currencies in the shared extraction pipeline is otherwise retained.
+
+`messages.sender_is_original` is nullable. Newly crawled unforwarded messages get
+1; forwards get 0; existing unknown provenance stays null. A verified human
+original sender can supply their handle and positive user ID. Unrelated handles
+in message text, source channel usernames and chat/message IDs are not contacts.
+Otherwise use the actual stored post URL, or construct its canonical public URL
+from the known source username and original message ID (needed for legacy
+text-only collector rows). Private `/c/` links must match the stored channel ID.
+
+## Mandatory attributes and taxonomy
+
+`attributesJson` is serialized once as a JSON **string**. Required values:
+
+| Attribute | Values |
+| --- | --- |
+| role | employer, seeker |
+| job_type | full_time, part_time, contract, temporary |
+| job_category | restaurant_food, construction, cleaning, delivery_driver, retail, beauty_personal_care, office_admin, it_tech, general_labour, warehouse, skilled_trades, customer_service, sales, healthcare_support, childcare, education, design_creative, other |
+
+The worker checks live attribute types/options before transmission and pauses on
+schema drift. `other` requires an identified occupation; it is not an uncertainty
+fallback. Optional `work_arrangement` is on_site/hybrid/remote. Remote is never
+`job_type` and still needs an actual Canadian city. Optional title uses a stated
+position of at most 60 characters; otherwise the English category label from the
+live schema is used. Generated listing title:
+`Hiring|Looking for work · position or category · canonical city`.
+
+Only current keys are emitted: role, job_category, job_type, job_title,
+work_arrangement, salary, salary_period. Legacy/internal fields never leak into
+`attributesJson`. Their factual content is retained through the original description.
+
+## Geography
+
+Only `countryCode=CA` is accepted locally. The worker caches the live schema,
+countries, provinces and exact city searches for one hour, with bounded cache size.
+It calls `cities?countryCode=CA&q=...&provinceCode=...&limit=200` where province is
+available. It does **not** use the first 200 nationwide cities as the entire catalog.
+A saturated search result is held, because the current API exposes no pagination.
+
+Code, English name and Persian `nameFa` must match exactly after case/whitespace and
+Persian character normalization. Source text must contain that city's name/code or
+catalog Persian alias. An omitted province may be derived from a **unique matching
+catalog city**, never guessed. Explicit conflicting/unknown province, ambiguous city,
+unknown city, nearby-city substitution and location-free remote work are blocked.
+No neighborhood is substituted for a different catalog city.
+
+## Compensation and description
+
+Salary is optional. The adapter verifies the extracted amount **in an explicit CAD
+pay expression in cleaned original text**, with a supported hour/month/year period.
+It accepts English/Persian numerals. Bare dollars, USD and other currencies,
+negotiable/unknown pay, missing periods, non-finite/boolean/out-of-range amounts and
+amounts not evidenced by the source are omitted together with salary_period. Bounds
+are the intersection of 1–1,000,000 and the active schema. No currency conversion.
+For a supported explicit CAD range, only its lower end can be structured; full range
+remains in description. Unrecognized wording is conservatively left unstructured.
+
+`description` is **exactly stored `messages.cleaned_text`**, including source language,
+compensation and contact instructions. No AI summary replaces it. Established cleaning
+is unchanged. Description must have at least 20 nonblank characters. A description over
+2,000 UTF-16 code units is held with `description_exceeds_2000_no_truncation` rather
+than silently removing facts. Title also respects the 200-character envelope limit.
+
+## Example request
+
+Authentication: `X-Ingest-Key` from server configuration; never paste it into UI/logs.
+
+```json
+{
+  "sourceName": "tg-jobs-0123456789abcdef",
+  "externalId": "512",
+  "sourceUrl": "https://t.me/reviewed_jobs/512",
+  "contactHandle": null,
+  "title": "Hiring · Line cook · Toronto",
+  "description": "Hiring a part-time line cook in Toronto. CAD 20/hour. Apply through the original Telegram post.",
+  "categorySlug": "jobs",
+  "attributesJson": "{\"role\":\"employer\",\"job_category\":\"restaurant_food\",\"job_type\":\"part_time\",\"job_title\":\"Line cook\",\"salary\":20,\"salary_period\":\"hour\"}",
+  "countryCode": "CA",
+  "province": "ON",
+  "city": "toronto",
+  "mediaKeys": [],
+  "autoPublish": true
+}
+```
+
+Poster user ID is optional and emitted only for a proven original human author.
+There is no call to the native `POST /api/leads` endpoint.
+
+## Automatic publishing and safety
+
+Eligible new records on explicitly reviewed sources request `autoPublish=true` by
+default. The Jobs, parent ingest and API-key gates all apply inside the worker,
+including manual batches. Empty source approval list blocks every Jobs record.
+Source approval is distinct from classification and mandatory completeness checks.
+
+Conservative source-text rules flag application/recruitment/training/equipment fees,
+suspicious crypto/gift-card/check transfers, banking-password requests and identity
+harvesting. Flags are explainable fixed labels. Valid flagged payloads request
+`autoPublish=false`; incomplete flagged records stay blocked. These rules are a
+limited heuristic, not comprehensive fraud detection; false positives go to moderation.
+
+The receiver alone decides publication. A Similar verdict remains `PendingReview`
+even with autoPublish true. Store the actual response unchanged. A sent or
+already_existed row is terminal and cannot be requeued through the UI. No extra
+request is made to force it Active. Status counts are the last **recorded** remote
+response, not ongoing synchronization with subsequent moderator actions.
+
+## Schema migration and queue states
+
+Startup `MessageRepository.initialize()` invokes existing DB initialization once
+per database/process. Nullable additions: six TEXT columns (role, job_category,
+country_code, province, city, work_arrangement), INTEGER `joblist.is_job_listing`,
+and INTEGER `messages.sender_is_original`. No rename, record deletion, table-wide
+Jobs rewrite or per-channel schema initialization is introduced.
+
+New tables: `advertio_jobs_deliveries` (FK to messages.id), `advertio_jobs_attempts`
+(FK to messages.id), `advertio_jobs_meta`, and `advertio_request_log`.
+Outbox persists frozen source identity, lead ID, remote status, fixed error code,
+safety flags, validation timestamp, evaluation attempts, retry time, first/last
+HTTP attempt times, update time and worker claim token. Attempts history records
+HTTP start/outcome; interrupted attempts are marked abandoned on recovery.
+
+| State | Meaning |
+| --- | --- |
+| waiting | Discovered post-deployment record; still needs full validation |
+| sending | Claimed by one leased Jobs worker |
+| sent | API accepted; inspect actual remote_status separately |
+| already_existed | Successful terminal no-op, including cross-source duplicate |
+| retry | Temporary failure/cooldown; unchanged source identity |
+| rejected | Permanent HTTP/schema rejection requiring correction |
+| blocked | Local ineligibility or exhausted retry allowance; explicit reevaluation |
+
+Evaluation attempts are bounded (default 8); HTTP attempts are separately audited.
+The worker renews its lease between rows. Abandoned sending claims recover after
+the larger of configured claim timeout and `12 × HTTP timeout + 120` seconds.
+Scheduler cutoff defers newly failed/recovered retry rows until a later cycle.
+
+Source namespace: `tg-jobs-` + first 16 SHA256 hex characters of numeric channel ID
+as stored by the collector. If unavailable, hash the trimmed lowercase username
+without `@`. The original Telegram message ID is externalId. Freeze both values
+when first enqueued, including across retries and corrected fields. Do not change
+this convention in production. Username-only sources that rename require an
+explicit identity migration; do not delete/recreate their queue rows.
+
+## HTTP outcomes, budgets and operator controls
+
+- 201: save lead ID and actual status (Active or PendingReview).
+- 200/alreadyExisted: terminal success. It may reference another source's lead;
+  do not assume a current-origin mapping was created or delete that other lead.
+- 400/other permanent errors: rejected, no automatic resend.
+- 401/404 ingest: retry row, persistent queue fault and operator activity alert;
+  **explicit resume is required even after the displayed cooldown timestamp**.
+- Schema drift: pause and operator alert; update mapping after inspection, then resume.
+- 429: respect numeric or HTTP-date Retry-After; wait at least that long.
+- 5xx, malformed success response, network timeout: bounded exponential retry with
+  fixed source identity. A timeout can occur after creation; it never proves absence.
+- Unexpected failures: sanitized retry and 10-minute queue cooldown.
+
+Jobs HTTP request ceiling defaults to 200/day, batch to 25 evaluations. A shared
+AdvertioClient request ledger reserves daily capacity atomically before I/O for
+Housing, Cargo and Jobs; media and catalogs count too. A shared semaphore caps
+process HTTP concurrency at existing ADVERTIO_CONCURRENCY. Requests made outside
+AdvertioClient (for example the Back Office health probe) are not in that ledger.
+Daily boundaries are UTC. Receiver-side limits can still be lower and return 429.
+Jobs can use fewer than 200 ingests because its public catalog requests count.
+
+Back Office → Operations → **Advertio Jobs** shows gates/key presence, AI counts,
+all queue counts, cached eligible vs unassessed records, actual recorded remote
+Active/PendingReview counts, request budget, cooldown/faults and recent history.
+It provides Send next eligible Jobs, safe stop after in-flight calls, corrected
+blocked/rejected requeue, explicit bounded backfill when enabled, and API-fault
+resume. Manual delivery uses the same service/lease/validation/budget. Settings has
+an independent Advertio Jobs group, including source approvals and auto-publish.
+The existing authentication/CSRF requirements apply to these operations.
+
+## Environment defaults
+
+| Variable (TELCLAW_ prefix) | Default |
+| --- | --- |
+| ADVERTIO_JOBS_ENABLED | false |
+| ADVERTIO_JOBS_AUTO_PUBLISH | true |
+| ADVERTIO_JOBS_BACKFILL_ENABLED | false |
+| ADVERTIO_JOBS_BACKFILL_DAYS | 7 |
+| ADVERTIO_JOBS_FRESHNESS_DAYS | 7 |
+| ADVERTIO_JOBS_BATCH_SIZE | 25 |
+| ADVERTIO_JOBS_DAILY_LIMIT | 200 |
+| ADVERTIO_JOBS_MAX_ATTEMPTS | 8 |
+| ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS | 1800 |
+| ADVERTIO_JOBS_SOURCES | empty, comma-separated reviewed numeric IDs/usernames |
+| ADVERTIO_DAILY_REQUEST_LIMIT | 1000 shared HTTP requests/day |
+
+Also requires the existing TELCLAW_ADVERTIO_INGEST_ENABLED=true and configured
+TELCLAW_ADVERTIO_INGEST_KEY. Back Office persisted settings override environment
+values: inspect/reset any override before changing `.env` during deployment/rollback.
+No Housing/Cargo flags need to change.
+
+## Backfill, deployment and rollback
+
+1. Review the PR and run `python -m pytest -q tests` in the project environment.
+2. Back up SQLite with its backup API (or stop application and copy DB plus WAL).
+3. Deploy the feature commit with Jobs **disabled**; restart normally so startup
+   applies additive schema. Record the new deployment watermark.
+4. Confirm `/health`, live Jobs schema and location search again from the actual
+   deployment network; confirm current shared rate policy with Advertio operations.
+5. Confirm ingest key presence on the server without printing its value. Add only
+   reviewed channel IDs to ADVERTIO_JOBS_SOURCES. Keep auto-publish true.
+6. Temporarily set batch size 1–5 and a small daily request limit sufficient for
+   schema/catalog lookup as well as the ingest. Explicitly enable Jobs.
+7. Collect a genuinely fresh, complete job advertisement from the reviewed source;
+   use Send next eligible Jobs. Inspect source URL/contact, actual lead ID and status.
+   Verify an actual unique listing becomes **Active** without manual approval.
+8. Verify incomplete jobs remain blocked, scam-flagged jobs request moderation,
+   duplicates stop, and Similar retains the receiver's PendingReview verdict.
+9. Restore batch 25/daily 200, retain backfill false; let normal scheduled cycles run.
+
+First schema installation stores MAX(messages.id) as a fixed boundary even while
+disabled. Ordinary discovery excludes all records at/below it. It admits only
+post-deployment, recently dated source messages; reprocessing an old SQLite record
+alone does not make it new. Enabling BACKFILL_ENABLED alone never scans history.
+An explicit Back Office backfill admits at most the selected batch within the
+smaller of backfill/freshness windows. Verify that historical jobs remain open
+before invoking it; their existence in SQLite is insufficient evidence.
+
+Rollback: set **effective** TELCLAW_ADVERTIO_JOBS_ENABLED=false (including persisted
+Back Office overrides). The worker checks this between requests; an in-flight call
+may finish and is recorded. Stop Jobs Delivery can stop the current batch without
+a code rollback. Keep additive tables/columns and successful records; disablement
+never deletes/deactivates published listings and does not alter Housing/Cargo or
+Telegram delivery. Keep a database backup before any separate code rollback.
+
+## Known operational limits and release gates
+
+- Live health/schema were verified; authenticated ingest, public source-link opening,
+  live automatic Active publication and moderation scenarios **have not been verified
+  in production by this change**. No ingest key or deployment-server access was
+  supplied in this development environment. Unit tests use controlled HTTP fakes.
+  Those staged rollout checks remain required before calling the release deployed.
+- Telclaw has no reliable Telegram delete/withdrawal event reconciliation. Therefore
+  this feature performs **no automatic deletion or source deactivation**. A crawl miss,
+  partial scan, AI failure or disconnection never issues DELETE. Full deletion sync
+  is not claimed. A future verified event reconciler must call only the per-post
+  `DELETE /api/ingest/leads/{sourceName}/{externalId}` for the positively confirmed
+  original post; cross-source duplicates may have no mapping and return 404.
+- No Telegram edit/upsert or later remote moderation-status polling is introduced.
+- Scam rules, supported employment phrases and salary parsing are deliberately
+  conservative. Unrecognized valid wording can need correction/re-extraction.
+- Catalog values, source approvals, key validity and active job availability remain
+  operational inputs, not facts inferred from a successful SQLite lookup.
+
+## Development validation and exact file manifest
+
+Verified on the feature branch with Python 3.12:
+
+- `python -m pytest -q tests`: **1,074 passed**, 56 existing deprecation/aiohttp warnings.
+- Dedicated Jobs coverage: **96 passed**, including real AI-service persistence to the
+  outbox, both roles, missing fields, multilingual payloads, compensation, unsafe
+  moderation, remote statuses, retries, concurrency, recovery, settings gates,
+  explicit backfill and shared budgets. All ingest HTTP calls are mocked.
+- Ruff undefined-name/import checks on new modules, Jobs tests and changed client: passed.
+- `git diff --check`: passed.
+- Production read-only health/schema/catalog checks: HTTP 200; no authenticated
+  ingestion or deployment was performed.
+
+Modified files:
+
+```text
+.env.example
+ai/category_classifier.py
+ai/category_schemas.py
+ai/extractor.py
+ai/prompts/joblist.txt
+backoffice_health.py
+backoffice_operations.py
+backoffice_settings.py
+backoffice_web.py
+collection/crawler.py
+config.py
+delivery/advertio_client.py
+docs/SYSTEM_STRUCTURE_MAP.md
+services/scheduler_service.py
+storage/database.py
+```
+
+New files:
+
+```text
+backoffice_jobs.py
+delivery/advertio_jobs.py
+delivery/advertio_transport.py
+docs/ADVERTIO_JOBS_DELIVERY.md
+storage/advertio_jobs_queue.py
+tests/fixtures/advertio_jobs_schema.json
+tests/test_advertio_jobs.py
+```

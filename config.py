@@ -193,3 +193,18 @@ TRANSFER_TELEGRAM_PUBLISH_ENABLED = os.getenv("TELCLAW_TRANSFER_TELEGRAM_PUBLISH
 TRANSFER_TELEGRAM_CHANNEL = os.getenv("TELCLAW_TRANSFER_TELEGRAM_CHANNEL", "").strip()
 TRANSFER_TELEGRAM_INTERVAL_MINUTES = _float_env("TELCLAW_TRANSFER_TELEGRAM_INTERVAL_MINUTES", 1, minimum=0.1)
 TRANSFER_TELEGRAM_TIMEOUT_SECONDS = _float_env("TELCLAW_TRANSFER_TELEGRAM_TIMEOUT_SECONDS", 30, minimum=1)
+
+# Jobs is opt-in; auto-publish is the product default once enabled.
+ADVERTIO_JOBS_ENABLED = os.getenv("TELCLAW_ADVERTIO_JOBS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_JOBS_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_JOBS_AUTO_PUBLISH", "true").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_JOBS_BACKFILL_ENABLED = os.getenv("TELCLAW_ADVERTIO_JOBS_BACKFILL_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_JOBS_BACKFILL_DAYS = _int_env("TELCLAW_ADVERTIO_JOBS_BACKFILL_DAYS", 7, minimum=1)
+ADVERTIO_JOBS_FRESHNESS_DAYS = _int_env("TELCLAW_ADVERTIO_JOBS_FRESHNESS_DAYS", 7, minimum=1)
+ADVERTIO_JOBS_BATCH_SIZE = min(100, _int_env("TELCLAW_ADVERTIO_JOBS_BATCH_SIZE", 25, minimum=1))
+ADVERTIO_JOBS_DAILY_LIMIT = _int_env("TELCLAW_ADVERTIO_JOBS_DAILY_LIMIT", 200, minimum=1)
+ADVERTIO_JOBS_MAX_ATTEMPTS = _int_env("TELCLAW_ADVERTIO_JOBS_MAX_ATTEMPTS", 8, minimum=1)
+ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS = _int_env("TELCLAW_ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS", 1800, minimum=60)
+# Explicitly reviewed channel IDs (preferred), or normalized usernames, comma separated.
+ADVERTIO_JOBS_SOURCES = os.getenv("TELCLAW_ADVERTIO_JOBS_SOURCES", "").strip()
+# Telclaw-side shared transport ceiling; confirm the receiver's current policy before rollout.
+ADVERTIO_DAILY_REQUEST_LIMIT = _int_env("TELCLAW_ADVERTIO_DAILY_REQUEST_LIMIT", 1000, minimum=1)

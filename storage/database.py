@@ -9,6 +9,12 @@ import config
 MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","processing_started_at":"TEXT","collection_status":"TEXT NOT NULL DEFAULT 'collected'","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","ai_started_at":"TEXT","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","media_group_id":"TEXT","media_path":"TEXT","media_paths":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT","classification_status":"TEXT NOT NULL DEFAULT 'waiting'","classification_started_at":"TEXT","classification_category":"TEXT","classification_error":"TEXT","classification_processed_at":"TEXT","classification_attempts":"INTEGER NOT NULL DEFAULT 0"}
 CATEGORY_TABLES = {"housinglist":{"property_type":"TEXT","listing_type":"TEXT","title":"TEXT","description":"TEXT","location":"TEXT","country_code":"TEXT","province":"TEXT","city":"TEXT","neighborhood":"TEXT","price":"REAL","currency":"TEXT","rent_period":"TEXT","bedrooms":"TEXT","bathrooms":"INTEGER","area":"REAL","area_unit":"TEXT","furnished":"TEXT","availability":"TEXT","property_condition":"TEXT","contact":"TEXT","features":"TEXT"},"transferlist":{"title":"TEXT","description":"TEXT","origin_city":"TEXT","origin_province":"TEXT","origin_country":"TEXT","destination_city":"TEXT","destination_province":"TEXT","destination_country":"TEXT","airline":"TEXT","flight_number":"TEXT","departure_date":"TEXT","departure_time":"TEXT","arrival_date":"TEXT","arrival_time":"TEXT","transport_type":"TEXT","cargo_type":"TEXT","weight":"REAL","weight_unit":"TEXT","quantity":"REAL","volume":"REAL","volume_unit":"TEXT","price":"REAL","currency":"TEXT","contact":"TEXT","features":"TEXT"},"joblist":{"job_title":"TEXT","company":"TEXT","location":"TEXT","employment_type":"TEXT","salary":"REAL","salary_currency":"TEXT","salary_period":"TEXT","experience":"TEXT","education":"TEXT","skills":"TEXT","remote":"INTEGER","job_type":"TEXT","description":"TEXT","application_method":"TEXT","contact":"TEXT"}}
 
+CATEGORY_TABLES["joblist"].update({key: "TEXT" for key in (
+    "role", "job_category", "country_code", "province", "city", "work_arrangement",
+)})
+CATEGORY_TABLES["joblist"]["is_job_listing"] = "INTEGER"
+MESSAGE_COLUMNS["sender_is_original"] = "INTEGER"
+
 def get_connection():
     db_path=Path(config.DB_NAME)
     if db_path.parent!=Path("."): db_path.parent.mkdir(parents=True,exist_ok=True)
@@ -133,6 +139,8 @@ def initialize_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_created ON system_activity(created_at DESC)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_kind ON system_activity(kind, created_at DESC)")
         _create_category_tables(cursor); conn.commit()
+        from storage.advertio_jobs_queue import initialize_jobs_schema
+        initialize_jobs_schema(conn)
     finally: conn.close()
     recover_stale_processing_states()
 
@@ -387,11 +395,11 @@ def get_pipeline_health():
     finally:
         conn.close()
 
-def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,has_media=False,media_type=None,file_unique_id=None,media_group_id=None,media_path=None,media_paths=None,message_link=None,media_reference=None):
+def insert_message(channel_username,message_id,text,date_str,*,raw_text=None,cleaned_text=None,collection_status="collected",processing_status="pending",ai_status="waiting",pipeline_version=None,cleaned_at=None,channel_id=None,channel_name=None,sender_id=None,sender_username=None,sender_type=None,sender_is_original=None,has_media=False,media_type=None,file_unique_id=None,media_group_id=None,media_path=None,media_paths=None,message_link=None,media_reference=None):
     conn=get_connection()
     try:
         encoded_paths = json.dumps(media_paths,ensure_ascii=False,separators=(",",":")) if isinstance(media_paths,(list,tuple)) else media_paths
-        cursor=conn.execute("INSERT OR IGNORE INTO messages(channel_username,message_id,text,raw_text,cleaned_text,date,media_path,media_paths,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,has_media,media_type,file_unique_id,media_group_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(channel_username,message_id,text,raw_text,cleaned_text,date_str,media_path,encoded_paths,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,int(bool(has_media)),media_type,str(file_unique_id) if file_unique_id is not None else None,str(media_group_id) if media_group_id is not None else None)); conn.commit(); return cursor.rowcount>0
+        cursor=conn.execute("INSERT OR IGNORE INTO messages(channel_username,message_id,text,raw_text,cleaned_text,date,media_path,media_paths,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,sender_is_original,has_media,media_type,file_unique_id,media_group_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(channel_username,message_id,text,raw_text,cleaned_text,date_str,media_path,encoded_paths,message_link,media_reference,collection_status,processing_status,ai_status,pipeline_version,cleaned_at,channel_id,channel_name,sender_id,sender_username,sender_type,sender_is_original,int(bool(has_media)),media_type,str(file_unique_id) if file_unique_id is not None else None,str(media_group_id) if media_group_id is not None else None)); conn.commit(); return cursor.rowcount>0
     finally: conn.close()
 
 def get_latest_message_id(channel_username):

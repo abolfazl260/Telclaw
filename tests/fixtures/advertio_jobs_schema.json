@@ -1,0 +1,93 @@
+[
+  {
+    "id": "077dadc019ce418190abd4030b4850fa",
+    "key": "role",
+    "label": "I am",
+    "labelFa": "من",
+    "type": "Select",
+    "isRequired": true,
+    "isHardFilter": true,
+    "isSoftFilter": false,
+    "sortOrder": 0,
+    "optionsJson": "[{\"value\":\"employer\",\"label\":\"Hiring\",\"labelFa\":\"استخدام می‌کنم\"},{\"value\":\"seeker\",\"label\":\"Looking for work\",\"labelFa\":\"دنبال کار هستم\"}]",
+    "validationJson": null
+  },
+  {
+    "id": "f64596bbce444d98ae19d5dfd914a25c",
+    "key": "job_category",
+    "label": "Field",
+    "labelFa": "حوزه‌ی کاری",
+    "type": "Select",
+    "isRequired": true,
+    "isHardFilter": true,
+    "isSoftFilter": false,
+    "sortOrder": 1,
+    "optionsJson": "[{\"value\":\"restaurant_food\",\"label\":\"Restaurant & Food\",\"labelFa\":\"رستوران و غذا\"},{\"value\":\"construction\",\"label\":\"Construction\",\"labelFa\":\"ساختمان\"},{\"value\":\"cleaning\",\"label\":\"Cleaning\",\"labelFa\":\"نظافت\"},{\"value\":\"delivery_driver\",\"label\":\"Delivery & Driving\",\"labelFa\":\"پیک و رانندگی\"},{\"value\":\"retail\",\"label\":\"Retail & Store\",\"labelFa\":\"فروشگاه\"},{\"value\":\"beauty_personal_care\",\"label\":\"Beauty & Salon\",\"labelFa\":\"آرایش و زیبایی\"},{\"value\":\"office_admin\",\"label\":\"Office & Admin\",\"labelFa\":\"اداری\"},{\"value\":\"it_tech\",\"label\":\"IT & Tech\",\"labelFa\":\"آی‌تی و فناوری\"},{\"value\":\"general_labour\",\"label\":\"General Labour\",\"labelFa\":\"کارگری\"},{\"value\":\"warehouse\",\"label\":\"Warehouse\",\"labelFa\":\"انبار\"},{\"value\":\"skilled_trades\",\"label\":\"Skilled Trades\",\"labelFa\":\"فنی و حرفه‌ای\"},{\"value\":\"customer_service\",\"label\":\"Customer Service\",\"labelFa\":\"خدمات مشتری\"},{\"value\":\"sales\",\"label\":\"Sales\",\"labelFa\":\"فروش\"},{\"value\":\"healthcare_support\",\"label\":\"Healthcare & Care\",\"labelFa\":\"درمان و مراقبت\"},{\"value\":\"childcare\",\"label\":\"Childcare\",\"labelFa\":\"نگهداری کودک\"},{\"value\":\"education\",\"label\":\"Teaching & Tutoring\",\"labelFa\":\"آموزش و تدریس\"},{\"value\":\"design_creative\",\"label\":\"Design & Creative\",\"labelFa\":\"طراحی و هنر\"},{\"value\":\"other\",\"label\":\"Other\",\"labelFa\":\"سایر\"}]",
+    "validationJson": null
+  },
+  {
+    "id": "bf0d4d2336dc42a39c25115af84c94d4",
+    "key": "job_type",
+    "label": "Hours",
+    "labelFa": "نوع همکاری",
+    "type": "Select",
+    "isRequired": true,
+    "isHardFilter": true,
+    "isSoftFilter": false,
+    "sortOrder": 2,
+    "optionsJson": "[{\"value\":\"full_time\",\"label\":\"Full-time\",\"labelFa\":\"تمام‌وقت\"},{\"value\":\"part_time\",\"label\":\"Part-time\",\"labelFa\":\"پاره‌وقت\"},{\"value\":\"contract\",\"label\":\"Contract\",\"labelFa\":\"قراردادی\"},{\"value\":\"temporary\",\"label\":\"Temporary\",\"labelFa\":\"موقت\"}]",
+    "validationJson": null
+  },
+  {
+    "id": "6f7bd0ebb40c43dc9b117a7d7866d455",
+    "key": "job_title",
+    "label": "Job title",
+    "labelFa": "عنوان شغل",
+    "type": "Text",
+    "isRequired": false,
+    "isHardFilter": false,
+    "isSoftFilter": false,
+    "sortOrder": 3,
+    "optionsJson": null,
+    "validationJson": null
+  },
+  {
+    "id": "70035fd3aad34749a784a4cfefe606dc",
+    "key": "work_arrangement",
+    "label": "Where",
+    "labelFa": "محل کار",
+    "type": "Select",
+    "isRequired": false,
+    "isHardFilter": false,
+    "isSoftFilter": true,
+    "sortOrder": 4,
+    "optionsJson": "[{\"value\":\"on_site\",\"label\":\"On-site\",\"labelFa\":\"حضوری\"},{\"value\":\"hybrid\",\"label\":\"Hybrid\",\"labelFa\":\"ترکیبی\"},{\"value\":\"remote\",\"label\":\"Remote\",\"labelFa\":\"دورکاری\"}]",
+    "validationJson": null
+  },
+  {
+    "id": "13575680a8504e0481599c91c131c91f",
+    "key": "salary",
+    "label": "Pay (CAD)",
+    "labelFa": "حقوق (دلار)",
+    "type": "Number",
+    "isRequired": false,
+    "isHardFilter": false,
+    "isSoftFilter": true,
+    "sortOrder": 5,
+    "optionsJson": null,
+    "validationJson": "{\"min\":1,\"max\":1000000}"
+  },
+  {
+    "id": "59c7c4f7a583436b8efaddc75a547dfe",
+    "key": "salary_period",
+    "label": "Pay period",
+    "labelFa": "دوره‌ی پرداخت",
+    "type": "Select",
+    "isRequired": false,
+    "isHardFilter": false,
+    "isSoftFilter": false,
+    "sortOrder": 6,
+    "optionsJson": "[{\"value\":\"hour\",\"label\":\"per hour\",\"labelFa\":\"ساعتی\"},{\"value\":\"month\",\"label\":\"per month\",\"labelFa\":\"ماهانه\"},{\"value\":\"year\",\"label\":\"per year\",\"labelFa\":\"سالانه\"}]",
+    "validationJson": null
+  }
+]

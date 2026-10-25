@@ -1,43 +1,99 @@
 """HTTP client for the Advertio Ingest API contract (ADR-0009)."""
 
 from pathlib import Path
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+
+from delivery.advertio_transport import request_slot
 
 import requests
 
 
 class AdvertioError(RuntimeError):
-    def __init__(self, message, *, status=None, retryable=False, already_existed=False, lead_id=None):
+    def __init__(
+        self,
+        message,
+        *,
+        status=None,
+        retryable=False,
+        already_existed=False,
+        lead_id=None,
+        retry_after=None,
+    ):
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.already_existed = already_existed
         self.lead_id = lead_id
+        self.retry_after = retry_after
 
 
 class AdvertioClient:
     """Small transport-only client. Business mapping stays in AdvertioDeliveryService."""
 
-    def __init__(self, base_url, ingest_key, timeout=60):
+    def __init__(self, base_url, ingest_key, timeout=60, category="legacy"):
         self.base_url = base_url.rstrip("/")
         self.ingest_key = ingest_key
         self.timeout = timeout
+        self.category = category
 
     @property
     def headers(self):
         return {"X-Ingest-Key": self.ingest_key}
 
     def _raise_for_response(self, response):
-        if response.status_code < 400:
+        if response.status_code < 300:
             return
-        detail = response.text.strip()[:4000]
+        # Never persist a response body: upstream errors can echo credentials or PII.
+        retry_after = None
+        raw = getattr(response, "headers", {}).get("Retry-After")
+        if raw:
+            try:
+                retry_after = max(0, float(raw))
+            except (TypeError, ValueError):
+                try:
+                    retry_after = max(
+                        0,
+                        (
+                            parsedate_to_datetime(raw) - datetime.now(timezone.utc)
+                        ).total_seconds(),
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    pass
         # Advertio documents 429 (nginx/Cloudflare rate limiting) and 5xx
         # as transient failures. Client-side validation 4xx errors are permanent.
         retryable = response.status_code == 429 or response.status_code >= 500
         raise AdvertioError(
-            f"Advertio request failed: HTTP {response.status_code}: {detail}",
+            f"Advertio request failed: HTTP {response.status_code}",
             status=response.status_code,
             retryable=retryable,
+            retry_after=retry_after,
         )
+
+    def _request(self, method, url, **kwargs):
+        with request_slot(self.category):
+            # Custom X-Ingest-Key headers must never follow cross-host redirects.
+            kwargs.setdefault("allow_redirects", False)
+            return getattr(requests, method)(url, **kwargs)
+
+    def catalog(self, path, **params):
+        try:
+            response = self._request(
+                "get",
+                f"{self.base_url}/api/{path}",
+                params=params,
+                timeout=self.timeout,
+            )
+        except requests.RequestException as exc:
+            raise AdvertioError("catalog_transport_error", retryable=True) from exc
+        self._raise_for_response(response)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AdvertioError("invalid_catalog_json", retryable=True) from exc
+        if not isinstance(body, list):
+            raise AdvertioError("invalid_catalog_shape", retryable=True)
+        return body
 
     def upload_media(self, path, source_name):
         file_path = Path(path)
@@ -48,7 +104,8 @@ class AdvertioClient:
 
         try:
             with file_path.open("rb") as handle:
-                response = requests.post(
+                response = self._request(
+                    "post",
                     f"{self.base_url}/api/ingest/media",
                     params={"source": source_name},
                     headers=self.headers,
@@ -56,48 +113,67 @@ class AdvertioClient:
                     timeout=self.timeout,
                 )
         except requests.RequestException as exc:
-            raise AdvertioError(f"Advertio media transport error: {exc}", retryable=True) from exc
+            raise AdvertioError(
+                f"Advertio media transport error: {exc}", retryable=True
+            ) from exc
 
         self._raise_for_response(response)
         try:
             payload = response.json()
             key = payload["key"]
         except (ValueError, KeyError, TypeError) as exc:
-            raise AdvertioError("Advertio media response did not contain a valid key") from exc
+            raise AdvertioError(
+                "Advertio media response did not contain a valid key"
+            ) from exc
         return key
 
     def list_cities(self, country_code):
         """Read the platform's authoritative public city catalog (no guesses)."""
         try:
-            response = requests.get(
+            response = self._request(
+                "get",
                 f"{self.base_url}/api/locations/cities",
                 params={"countryCode": country_code, "limit": 200},
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise AdvertioError(f"Advertio catalog transport error: {exc}", retryable=True) from exc
+            raise AdvertioError(
+                f"Advertio catalog transport error: {exc}", retryable=True
+            ) from exc
         self._raise_for_response(response)
         try:
             body = response.json()
         except ValueError as exc:
-            raise AdvertioError("Invalid Advertio city catalog JSON", retryable=True) from exc
+            raise AdvertioError(
+                "Invalid Advertio city catalog JSON", retryable=True
+            ) from exc
         if not isinstance(body, list):
-            raise AdvertioError("Invalid Advertio city catalog response shape", retryable=True)
+            raise AdvertioError(
+                "Invalid Advertio city catalog response shape", retryable=True
+            )
         return body
 
     def create_lead(self, payload):
         try:
-            response = requests.post(
+            response = self._request(
+                "post",
                 f"{self.base_url}/api/ingest/leads",
                 headers={**self.headers, "Content-Type": "application/json"},
                 json=payload,
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise AdvertioError(f"Advertio lead transport error: {exc}", retryable=True) from exc
+            raise AdvertioError(
+                "Advertio lead transport error", retryable=True
+            ) from exc
 
         if response.status_code not in {200, 201}:
             self._raise_for_response(response)
+            raise AdvertioError(
+                "Unexpected Advertio lead HTTP status",
+                status=response.status_code,
+                retryable=True,
+            )
 
         try:
             body = response.json()
@@ -105,11 +181,27 @@ class AdvertioClient:
             raise AdvertioError(
                 "Advertio lead response was not valid JSON",
                 status=response.status_code,
-                retryable=response.status_code >= 500,
+                retryable=True,
             ) from exc
 
         if not isinstance(body, dict) or not body.get("leadId"):
-            raise AdvertioError("Advertio lead response did not contain leadId", status=response.status_code)
+            raise AdvertioError(
+                "Advertio lead response did not contain leadId",
+                status=response.status_code,
+                retryable=True,
+            )
+
+        if self.category == "jobs" and (
+            not isinstance(body.get("alreadyExisted"), bool)
+            or not isinstance(body.get("status"), str)
+            or not body["status"].strip()
+            or (response.status_code == 200 and not body["alreadyExisted"])
+        ):
+            raise AdvertioError(
+                "Invalid Jobs ingest success contract",
+                status=response.status_code,
+                retryable=True,
+            )
 
         return {
             "lead_id": body["leadId"],
@@ -120,28 +212,36 @@ class AdvertioClient:
 
     def delete_lead(self, source_name, external_id):
         try:
-            response = requests.delete(
+            response = self._request(
+                "delete",
                 f"{self.base_url}/api/ingest/leads/{source_name}/{external_id}",
                 headers=self.headers,
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise AdvertioError(f"Advertio delete transport error: {exc}", retryable=True) from exc
+            raise AdvertioError(
+                f"Advertio delete transport error: {exc}", retryable=True
+            ) from exc
         if response.status_code not in {204, 404}:
             self._raise_for_response(response)
         return response.status_code
 
     def deactivate_source(self, source_name):
         try:
-            response = requests.delete(
+            response = self._request(
+                "delete",
                 f"{self.base_url}/api/ingest/sources/{source_name}",
                 headers=self.headers,
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise AdvertioError(f"Advertio source deactivation transport error: {exc}", retryable=True) from exc
+            raise AdvertioError(
+                f"Advertio source deactivation transport error: {exc}", retryable=True
+            ) from exc
         self._raise_for_response(response)
         try:
             return response.json()
         except ValueError as exc:
-            raise AdvertioError("Advertio source deactivation response was not valid JSON") from exc
+            raise AdvertioError(
+                "Advertio source deactivation response was not valid JSON"
+            ) from exc

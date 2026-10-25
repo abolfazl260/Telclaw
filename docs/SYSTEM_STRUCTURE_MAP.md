@@ -432,6 +432,7 @@ channel_name
 sender_id
 sender_username
 sender_type
+sender_is_original  # nullable provenance; newly collected non-forwarded messages = 1
 has_media
 media_type
 file_unique_id
@@ -705,7 +706,13 @@ tests/test_transferlist_schema.py
 
 ## 11. `joblist`
 
-Current fields:
+Jobs adds nullable `role`, `job_category`, `country_code`, `province`, `city`,
+`work_arrangement` and `is_job_listing`. Newly extracted `job_type` is the canonical
+employment arrangement (`full_time`, `part_time`, `contract`, `temporary`); remote
+is a separate work arrangement. Existing legacy values are retained, not converted.
+No CAD salary is inferred. See [Jobs delivery](ADVERTIO_JOBS_DELIVERY.md).
+
+Legacy fields remain readable:
 
 ```text
 job_title
@@ -887,6 +894,12 @@ Do not invent a new queue status in the UI without checking the worker's actual 
 
 ---
 
+Jobs uses **only** `advertio_jobs_deliveries` / `advertio_jobs_attempts`, never
+`messages.advertio_status` or Telegram state. Startup creates the schema and freezes
+a deployment watermark. The scheduler runs a bounded Jobs pass under its pipeline
+lock; a database lease also serializes manual and scheduled Jobs workers. Blocked
+records require explicit correction/requeue. See [Jobs delivery](ADVERTIO_JOBS_DELIVERY.md).
+
 ## 16. AI Provider Architecture
 
 The provider layer is intentionally replaceable.
@@ -1001,6 +1014,14 @@ Responsibilities include:
 If output formatting changes, inspect both the publisher and the transfer schema/persistence because missing stored values cannot be fixed only in presentation code.
 
 ### Advertio
+
+Jobs has a dedicated adapter `delivery/advertio_jobs.py`, startup schema in
+`storage/advertio_jobs_queue.py`, and read-only operations view in `backoffice_jobs.py`.
+It uses `POST /api/ingest/leads` with `autoPublish=true` for eligible reviewed sources;
+safety flags request moderation, and receiver `PendingReview` overrides remain terminal.
+`delivery/advertio_transport.py` coordinates HTTP concurrency and persistent daily
+request accounting across AdvertioClient instances, including Housing and Cargo.
+Existing Housing/Cargo payload rules and Telegram publication are unchanged.
 
 Main files:
 

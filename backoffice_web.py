@@ -1,4 +1,5 @@
 """Private rule back office, served directly or behind a proxy."""
+from backoffice_operations_ui import OPERATIONS_CSS, OPERATIONS_JS
 import hashlib
 import csv
 import io
@@ -1235,7 +1236,7 @@ async def health_page(request):
     activity_rows = "".join(
         f"""<tr><td>{_escape(row.get('created_at') or '—')}</td><td>{_escape(row.get('kind') or '—')}</td>
         <td>{_health_badge(row.get('level') or 'INFO')}</td><td>{_escape(row.get('source') or '—')}</td>
-        <td>{_escape(row.get('message') or '—')}</td><td><pre>{_activity_details(row.get('details_data'))}</pre></td></tr>"""
+        <td>{_escape(row.get('message') or '—')}</td><td><details><summary>View details</summary><pre>{_activity_details(row.get('details_data'))}</pre></details></td></tr>"""
         for row in report["activity"]
     )
     edit_rows = "".join(
@@ -1350,7 +1351,14 @@ def _operation_state_box(label, state, result_label="Result"):
     error = state.get("error")
     details = ""
     if result is not None:
-        details += f'<div class="op-result"><strong>{_escape(result_label)}:</strong><pre>{_activity_details(result)}</pre></div>'
+        if isinstance(result, dict):
+            counters = "".join(
+                f'<span>{_escape(key.replace("_", " ").title())}: <strong>{_escape(result[key])}</strong></span>'
+                for key in ("found", "processed", "sent", "already_existed", "failed", "blocked", "rejected", "retry", "remaining")
+                if key in result
+            )
+            details += f'<div class="ops-result-metrics">{counters}</div>'
+        details += f'<details class="op-result"><summary>{_escape(result_label)} · technical details</summary><pre>{_activity_details(result)}</pre></details>'
     if error:
         details += f'<div class="op-error"><strong>Error:</strong> {_escape(error)}</div>'
     return f"""<div class="op-state">
@@ -1501,6 +1509,7 @@ async def operations_page(request):
         extra=f'<label>Telegram account{ai_account_select}</label>',
         disabled=pipeline_busy or not account_names,
     )
+    ai_controls += '<details class="ops-recovery"><summary>Retry &amp; recover skipped Jobs</summary><p class="muted">Requeue first, then run AI Extraction. Historical delivery uses Jobs backfill separately.</p>'
     ai_controls += action_form(
         "retry_invalid_extraction",
         "Retry Invalid AI Extraction",
@@ -1519,6 +1528,7 @@ async def operations_page(request):
         disabled=pipeline_busy or not config.is_ai_extraction_enabled("joblist"),
         confirm="Return only unextracted Jobs skipped because Jobs AI was disabled to the AI queue? This does not send them to Advertio.",
     )
+    ai_controls += "</details>"
     if ai_running:
         ai_controls += action_form("stop_ai", "Stop AI Extraction", danger=True)
 
@@ -1716,7 +1726,7 @@ async def operations_page(request):
     activity_rows = "".join(
         f"""<tr><td>{_escape(row.get('created_at') or '—')}</td><td>{_escape(row.get('kind') or '—')}</td>
         <td>{_health_badge(row.get('level') or 'INFO')}</td><td>{_escape(row.get('message') or '—')}</td>
-        <td><pre>{_activity_details(row.get('details_data'))}</pre></td></tr>"""
+        <td><details><summary>View details</summary><pre>{_activity_details(row.get('details_data'))}</pre></details></td></tr>"""
         for row in operational_activity
     )
 
@@ -1741,13 +1751,11 @@ async def operations_page(request):
         transfer_nav.append(f'<a href="/operations?transfer_page={transfer_page + 1}">Next 20</a>')
     transfer_nav_html = " · ".join(transfer_nav) or "—"
 
-    auto_refresh = ""
-    if operations.any_running():
-        auto_refresh = (
-            f'<script nonce="{request["csp_nonce"]}">'
-            'setTimeout(()=>window.location.reload(),3000);'
-            '</script>'
-        )
+    running_names = [name.replace("_", " ").title() for name, state in states.items()
+                     if state.get("status") in {"queued", "running", "stopping"}]
+    running_html = ('<div class="ops-running" role="status">Running: ' +
+                    _escape(", ".join(running_names)) +
+                    ' · Status refreshes every 10 seconds while forms are untouched.</div>') if running_names else ""
 
     content = f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Operations</title>
@@ -1773,23 +1781,32 @@ async def operations_page(request):
     .checks .check{{display:flex;align-items:center;gap:.3rem}}.ops-links{{display:flex;gap:.6rem;flex-wrap:wrap}}
     .ops-links a{{display:inline-block;padding:.5rem .7rem;border-radius:7px;background:#eef4ff;color:#1957b8;text-decoration:none;font-weight:600}}
     @media(max-width:760px){{.ops-form{{grid-template-columns:1fr}}}}
-    </style></head><body><h1>Telclaw · Operations</h1>
+    {OPERATIONS_CSS}
+    </style></head><body data-ops-running="{str(operations.any_running()).lower()}"><h1>Telclaw · Operations</h1>
     <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a><a class="active" href="/operations">Operations</a>
     <a href="/cargo">Active Cargo</a><a href="/data">Database</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
-    <p class="muted">These controls call the same crawler, processing, classification, extraction, Advertio and account services used by the terminal UI.
-    Long-running queue commands execute in the background; this page refreshes automatically while one is running.</p>
     {banner}
-
     <section class="ops-intro" aria-labelledby="ops-guide-title">
-      <h2 id="ops-guide-title">How to use Operations</h2>
-      <p>Run the stages from top to bottom: process records, classify them, extract structured fields, then send eligible ads to Advertio. Each button starts a manual run; it does not change the scheduled crawler.</p>
-      <nav class="ops-jump-nav" aria-label="Operations shortcuts">
-        <a href="#advertio-jobs">Advertio Jobs</a><a href="#pipeline">1. Processing</a><a href="#advertio-delivery">2. Advertio delivery</a>
-        <a href="#diagnostics">3. Diagnostics</a><a href="/cargo">Active Cargo report</a><a href="#unsent-transfer-ads">4. Transfer queue</a>
-        <a href="#crawler">5. Crawler</a><a href="#accounts">6. Accounts</a>
-        <a href="#channels">7. Channels</a><a href="#settings">8. Settings</a><a href="#activity">9. Activity log</a>
-      </nav>
+      <div><h2 id="ops-guide-title">How to use Operations</h2>
+      <p>Prepare ads → extract with AI → deliver to the matching Advertio queue.</p>
+      <p class="muted">AI success and public publication are separate outcomes.</p></div>
+      <a href="/settings">Configuration →</a>
     </section>
+    {running_html}
+    <div class="ops-overview" aria-label="Queue overview">
+      <div class="ops-metric"><strong>{int(pipeline['processing_pending']):,}</strong><span>Awaiting processing</span></div>
+      <div class="ops-metric"><strong>{int(pipeline['classification_pending']):,}</strong><span>Awaiting classification</span></div>
+      <div class="ops-metric"><strong>{int(pipeline['ai_pending']):,}</strong><span>Awaiting AI extraction</span></div>
+      <div class="ops-metric"><strong>{int(pipeline['ai_failed']):,}</strong><span>AI failures to review</span></div>
+    </div>
+    <div class="ops-workspace">
+    <nav class="ops-sidebar" aria-label="Operations sections">
+      <h2>Prepare</h2><a href="#pipeline">Processing &amp; AI</a>
+      <h2>Deliver</h2><a href="#advertio-jobs">Jobs</a><a href="#advertio-delivery">Housing</a><a href="#advertio-cargo">Cargo</a>
+      <h2>Manage</h2><a href="#crawler">Scheduled crawler</a><a href="#accounts">Telegram accounts</a>
+      <a href="#channels">Source channels</a><a href="#unsent-transfer-ads">Transfer queue</a>
+      <a href="#diagnostics">Diagnostics</a><a href="#settings">Settings &amp; health</a><a href="#activity">Operation history</a>
+    </nav>
 
     <section class="ops-section" id="pipeline">
       <h2>1. Process incoming ads</h2>
@@ -1810,24 +1827,25 @@ async def operations_page(request):
         <p>Pending: <strong>{int(pipeline['ai_pending']):,}</strong> · Failed: <strong>{int(pipeline['ai_failed']):,}</strong> ·
         Enabled: <strong>{'yes' if config.AI_EXTRACTION_ENABLED else 'no'}</strong></p>
         {_operation_state_box("AI extraction", states["ai"])}
-        <div class="op-actions">{ai_controls}</div></section>
+        <p class="ops-disabled-help">Controls are unavailable while a pipeline operation is active. Jobs recovery also requires both AI extraction and Jobs extraction enabled in <a href="/settings">Settings</a>.</p><div class="op-actions">{ai_controls}</div></section>
 
       </div>
     </section>
 
     {jobs_html}
     <section class="ops-section" id="advertio-delivery">
-      <h2>2. Send eligible ads to Advertio</h2>
-      <p class="muted">Housing listings and passenger-cargo use separate delivery queues. Sending a cargo record to the API is not the same as publishing an older PendingReview listing.</p>
+      <h2>Housing · Advertio delivery</h2>
+      <p class="muted">Send eligible existing housing listings to Advertio. Jobs and Cargo have their own sections.</p>
       <div class="ops-grid">
-      <section class="op-card"><h2>Advertio Delivery</h2>
+      <section class="op-card"><h2>Housing delivery queue</h2>
         <p>Housing pending: <strong>{int(pipeline['advertio_pending']):,}</strong> · Failed: <strong>{int(pipeline['advertio_failed']):,}</strong> ·
         Enabled: <strong>{'yes' if config.ADVERTIO_INGEST_ENABLED else 'no'}</strong></p>
         {_operation_state_box("Advertio", states["advertio"])}
         <p class="muted">Housing API delivery only. Cargo website API delivery has its own controls below.</p>
         <div class="op-actions">{advertio_controls}</div></section>
 
-      <section class="op-card" style="grid-column:1 / -1"><h2>Advertio Cargo — Website API</h2>
+      </div></section>
+    <section class="ops-section" id="advertio-cargo"><h2>Advertio Cargo — Website API</h2><div class="ops-grid"><section class="op-card">
         <p><a href="/cargo"><strong>View active cargo ads, filter records and send selected listings →</strong></a></p>
         <p class="muted">Separate from Telegram @advertio_cargo. Category: passenger-cargo. The last 30 processed cargo records are listed below.</p>
         <p>Website API: <strong>{'enabled' if cargo_enabled else 'disabled'}</strong> · API key: <strong>{'configured' if cargo_key_ready else 'missing'}</strong> ·
@@ -1862,9 +1880,7 @@ async def operations_page(request):
         {_operation_state_box("Advertio website cargo", cargo_state)}
         {_operation_state_box("Advertio API health", probe_state)}
         <div class="op-actions">{cargo_controls}</div>
-        <h3>Recent Cargo API records</h3>
-        {cargo_table}
-        {cargo_ai_table}
+        <details class="ops-recovery"><summary>Recent Cargo API records &amp; extraction failures</summary>{cargo_table}{cargo_ai_table}</details>
       </section>
 
       </div>
@@ -1920,6 +1936,7 @@ async def operations_page(request):
     <section class="ops-section" id="activity"><h2>9. Operation history</h2>
       <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Operation</th><th>Level</th><th>Message</th><th>Details</th></tr></thead>
       <tbody>{activity_rows or '<tr><td colspan="5">No Back Office operations have run yet.</td></tr>'}</tbody></table></div></section>
+    </div>
     <form method="post" action="/logout"><input type="hidden" name="csrf" value="{csrf}">
       <button class="secondary">Log out of Back Office</button></form>
     <script nonce="{request['csp_nonce']}">
@@ -1927,7 +1944,7 @@ async def operations_page(request):
       if(!confirm(button.dataset.confirm)) event.preventDefault();
     }}));
     </script>
-    {auto_refresh}
+    <script nonce="{request['csp_nonce']}">{OPERATIONS_JS}</script>
     </body></html>"""
     return web.Response(text=content, content_type="text/html")
 

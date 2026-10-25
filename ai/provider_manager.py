@@ -156,7 +156,7 @@ class AIProviderManager:
                 raise
         raise last_error
 
-    def _call(self, method, *args, **kwargs):
+    def _call(self, method, *args, allow_invalid_output_fallback=True, **kwargs):
         attempts = 0
         last_error = None
         while attempts <= config.AI_RETRY_COUNT:
@@ -168,7 +168,8 @@ class AIProviderManager:
                 return result
             except AIExtractionError as exc:
                 last_error = exc
-                if method == "extract" and getattr(exc, "reason", None) == "invalid_provider_output":
+                if (method == "extract" and allow_invalid_output_fallback
+                        and getattr(exc, "reason", None) == "invalid_provider_output"):
                     return self._try_alternate_extraction_after_invalid_output(
                         exc, *args, **kwargs
                     )
@@ -206,8 +207,9 @@ class AIProviderManager:
     def classify_batch(self, messages):
         return self._call("classify_batch", messages)
 
-    def extract(self, text, category):
-        return self._call("extract", text, category)
+    def extract(self, text, category, *, allow_invalid_output_fallback=True):
+        return self._call("extract", text, category,
+                          allow_invalid_output_fallback=allow_invalid_output_fallback)
 
     def health_check(self):
         if hasattr(self.provider_instance, "health_check"):

@@ -126,7 +126,8 @@ class GroqClient:
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
             retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            logger.error(
+            logger.log(
+                logging.WARNING if reason == "invalid_provider_output" else logging.ERROR,
                 "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
                 response.status_code, self.model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", detail[:4000] or "<empty>",
             )

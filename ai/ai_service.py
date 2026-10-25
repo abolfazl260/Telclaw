@@ -94,7 +94,14 @@ class AIProcessingService:
         while True:
             try:
                 self._print_message_status(0, 0, record, category, "request_started") if progress else None
-                result = self.provider_manager.extract(source_text, category)
+                # Alternates were already tried on the first invalid-output pass.
+                # Outer malformed-output retries must not cycle all providers again.
+                if invalid_json_attempts and isinstance(self.provider_manager, AIProviderManager):
+                    result = self.provider_manager.extract(
+                        source_text, category, allow_invalid_output_fallback=False
+                    )
+                else:
+                    result = self.provider_manager.extract(source_text, category)
                 if progress:
                     self._print_message_status(0, 0, record, category, "request_completed")
                 return result

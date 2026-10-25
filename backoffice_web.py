@@ -1512,6 +1512,13 @@ async def operations_page(request):
         disabled=pipeline_busy or int(pipeline.get("ai_failed") or 0) == 0,
         confirm="Requeue all failed AI extraction rows, including legacy failures with unknown causes?",
     )
+    ai_controls += action_form(
+        "requeue_disabled_jobs_extractions",
+        "Requeue Jobs skipped while AI was disabled",
+        extra='<label>Batch size<input type="number" name="limit" min="1" max="1000" value="100"></label>',
+        disabled=pipeline_busy or not config.is_ai_extraction_enabled("joblist"),
+        confirm="Return only unextracted Jobs skipped because Jobs AI was disabled to the AI queue? This does not send them to Advertio.",
+    )
     if ai_running:
         ai_controls += action_form("stop_ai", "Stop AI Extraction", danger=True)
 
@@ -1960,6 +1967,11 @@ async def operations_action(request):
         if action == "retry_failed_extraction":
             retried = await operations.retry_failed_extractions(admin_id)
             _operations_redirect(notice=f"Requeued {retried} failed AI extraction(s).")
+        if action == "requeue_disabled_jobs_extractions":
+            count = await operations.requeue_disabled_jobs_extractions(
+                limit=int(data.get("limit") or 100), requested_by=admin_id,
+            )
+            _operations_redirect(notice=f"Requeued {count} skipped Jobs. Run AI Extraction to process them; Advertio backfill is separate.")
         if action == "run_ai":
             operations.start_ai(data.get("account"), admin_id)
             _operations_redirect(notice="AI extraction queue started.")

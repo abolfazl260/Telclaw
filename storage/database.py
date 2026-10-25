@@ -383,6 +383,34 @@ def retry_failed_extractions(*, invalid_output_only=False):
         conn.close()
 
 
+def requeue_disabled_jobs_extractions(limit=100):
+    """Explicit bounded recovery of Jobs skipped solely because extraction was off."""
+    limit = int(limit)
+    if not 1 <= limit <= 1000:
+        raise ValueError("Batch size must be between 1 and 1000")
+    conn = get_connection()
+    try:
+        cursor = conn.execute("""UPDATE messages
+            SET ai_status='pending', ai_error=NULL,
+                ai_started_at=NULL, ai_processed_at=NULL
+            WHERE id IN (
+                SELECT m.id FROM messages m
+                WHERE m.processing_status='processed'
+                  AND m.classification_status='processed'
+                  AND m.classification_category='joblist'
+                  AND m.ai_status='skipped'
+                  AND m.ai_error='skipped:category_disabled:joblist'
+                  AND NOT EXISTS (SELECT 1 FROM joblist j WHERE j.processed_message_id=m.id)
+                  AND NOT EXISTS (SELECT 1 FROM advertio_jobs_deliveries d
+                      WHERE d.processed_message_id=m.id)
+                ORDER BY m.id LIMIT ?
+            )""", (limit,))
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
 def _last_time(conn,where,params=()):
     row=conn.execute(f"SELECT MAX(date) value FROM messages WHERE {where}",params).fetchone(); return row["value"] if row and row["value"] else None
 

@@ -126,6 +126,9 @@ class MessageRepository:
     def retry_failed_extractions(self, invalid_output_only=False):
         return database.retry_failed_extractions(invalid_output_only=invalid_output_only)
 
+    def requeue_disabled_jobs_extractions(self, limit=100):
+        return database.requeue_disabled_jobs_extractions(limit=limit)
+
     def get_ai_pending(self, limit=100, channel_username=None):
         return database.get_ai_pending_messages(limit=limit, channel_username=channel_username)
 

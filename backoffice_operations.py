@@ -311,6 +311,22 @@ class BackofficeOperations:
         )
         return retried
 
+    async def requeue_disabled_jobs_extractions(self, limit=100, requested_by=None):
+        if not config.is_ai_extraction_enabled("joblist"):
+            raise ValueError("Enable Jobs AI extraction before requeueing")
+        busy = [name for name in SERIAL_PIPELINE_JOBS
+                if self.state(name)["status"] in {"queued", "running", "stopping"}]
+        if busy:
+            raise RuntimeError("Stop manual pipeline work before requeueing Jobs")
+        async with self.pipeline_lock:
+            count = await asyncio.to_thread(
+                self.ai.repository.requeue_disabled_jobs_extractions, limit=limit,
+            )
+        self._activity("jobs_disabled_extraction_requeue", "INFO",
+                       f"Requeued {count} Jobs skipped while extraction was disabled",
+                       {"requested_by": requested_by, "count": count})
+        return count
+
     async def _connect_account(self, account_name):
         account_name = str(account_name or "").strip()
         if not account_name:

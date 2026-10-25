@@ -364,3 +364,19 @@ storage/advertio_jobs_queue.py
 tests/fixtures/advertio_jobs_schema.json
 tests/test_advertio_jobs.py
 ```
+
+## Recover Jobs skipped while AI extraction was disabled
+
+In Back Office → Operations → AI Extraction, enable Jobs extraction in Settings,
+then use **Requeue Jobs skipped while AI was disabled** (default 100, maximum
+1000 per action). The confirmation and result notice show the scope and affected
+count. Next select a Telegram account and use **Run AI Extraction**; the scheduler
+may also process the pending queue normally.
+
+Only processed/classified Jobs with `ai_status=skipped` and the exact reason
+`skipped:category_disabled:joblist` qualify. Existing extracted Jobs and any Jobs
+with delivery queue records are excluded. Other categories, successful/failed AI
+outcomes, Telegram publication and Advertio delivery states remain untouched.
+This action only requeues extraction; it neither calls AI nor ingests listings.
+Historical delivery still requires the separate explicit bounded Backfill.
+No migration or automatic historical requeue runs on startup.

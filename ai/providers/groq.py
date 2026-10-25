@@ -14,6 +14,7 @@ from ai.category_schemas import CATEGORIES, CLASSIFICATION_CATEGORIES, validate_
 from ai.category_classifier import build_classification_prompt, validate_classification_result
 from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_null_like_values, _normalize_selected_category_data, _validate_english_title
 from ai.prompt_loader import render_prompt
+from ai.structured_output import extraction_response_format
 from ai.rate_limiter import RateLimiter
 from ai.providers.base import AIProvider
 
@@ -102,10 +103,11 @@ class GroqClient:
             ],
             "temperature": 0,
             "max_completion_tokens": config.GROQ_MAX_COMPLETION_TOKENS,
-            "response_format": {"type": "json_object"},
+            "response_format": extraction_response_format(self.model, category),
         }
         if self.model in {"openai/gpt-oss-20b", "openai/gpt-oss-120b"}:
             payload["include_reasoning"] = False
+            payload["reasoning_effort"] = "low"
 
         try:
             with self.rate_limiter.slot():
@@ -126,7 +128,8 @@ class GroqClient:
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
             retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            logger.error(
+            log = logger.warning if reason == "invalid_provider_output" else logger.error
+            log(
                 "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
                 response.status_code, self.model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", detail[:4000] or "<empty>",
             )
@@ -151,6 +154,8 @@ class GroqClient:
             choices = response_data.get("choices", [])
             if not choices:
                 raise ValueError("No choices returned")
+            if choices[0].get("finish_reason") == "length":
+                raise ValueError("Groq output token limit reached")
             message = choices[0].get("message", {})
             if message.get("refusal"):
                 raise ValueError(f"Model refused extraction: {message['refusal']}")

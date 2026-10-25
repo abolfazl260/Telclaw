@@ -14,6 +14,7 @@ from ai.category_schemas import CATEGORIES, CLASSIFICATION_CATEGORIES, validate_
 from ai.category_classifier import build_classification_prompt, validate_classification_result
 from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_null_like_values, _normalize_selected_category_data, _validate_english_title
 from ai.prompt_loader import render_prompt
+from ai.structured_output import JSON_GENERATION_RULES
 from ai.rate_limiter import RateLimiter
 from ai.providers.base import AIProvider
 
@@ -140,7 +141,12 @@ class CloudflareProvider(AIProvider):
                     time.sleep(max(0.0, self._unavailable_until[self.active_index] - now))
                 else:
                     self.active_index = next_index
-            payload = {"messages": messages, "temperature": 0, "response_format": {"type": "json_object"}}
+            request_messages = list(messages)
+            if invalid_json_attempts:
+                request_messages.append({"role": "system", "content":
+                    "The previous response was invalid JSON. Regenerate the complete "
+                    "response from the original input. " + JSON_GENERATION_RULES})
+            payload = {"messages": request_messages, "temperature": 0, "response_format": {"type": "json_object"}}
             if config.CLOUDFLARE_MAX_TOKENS:
                 # Optional: the configured Workers AI model must support this cap.
                 payload["max_tokens"] = config.CLOUDFLARE_MAX_TOKENS

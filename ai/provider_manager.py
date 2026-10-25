@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import config
 from ai.extractor import AIExtractionError
 from ai.providers.factory import create_provider
+
+
+logger = logging.getLogger("telclaw.ai")
 
 
 class AIProviderManager:
@@ -102,13 +106,12 @@ class AIProviderManager:
         )
 
     def _try_alternate_extraction_after_invalid_output(self, error, *args, **kwargs):
-        """Use another configured AI provider when the primary emits bad JSON.
+        """Try each available alternate exactly once for this extraction attempt.
 
-        Malformed output can be specific to a source text or a model. Do not
-        impose a global cooldown on the primary for a content-level failure,
-        and do not repair malformed JSON or accept partially validated data.
-        Only the extraction stage uses this fallback; classification rules
-        and their output contracts are unchanged.
+        Bad JSON is a per-message failure, not a global provider outage. Keep
+        the primary eligible for later messages and preserve its priority.
+        Genuine failures (e.g. alternate rate limits) keep their own status
+        and cooldown rather than being mislabeled as invalid JSON.
         """
         if len(self.providers) < 2:
             raise error
@@ -121,17 +124,35 @@ class AIProviderManager:
             if self._unavailable_until[index] > now:
                 continue
             candidate = self.providers[index]
+            logger.warning(
+                "[AI INVALID JSON FAILOVER] primary=%s alternate=%s",
+                getattr(self.providers[current], "name", "unknown"),
+                getattr(candidate, "name", "unknown"),
+            )
             try:
                 return candidate.extract(*args, **kwargs)
             except AIExtractionError as alternate_error:
+                logger.warning(
+                    "[AI EXTRACTION FALLBACK FAILED] provider=%s reason=%s status=%s",
+                    getattr(candidate, "name", "unknown"),
+                    getattr(alternate_error, "reason", None),
+                    getattr(alternate_error, "status", None),
+                )
                 if getattr(alternate_error, "reason", None) != "invalid_provider_output":
-                    # Preserve real network/rate-limit/permission errors rather
-                    # than misreporting them as malformed JSON.
+                    if self._is_failover_error(alternate_error):
+                        cooldown = (
+                            getattr(alternate_error, "retry_after", None)
+                            if getattr(alternate_error, "status", None) == 429
+                            else None
+                        )
+                        if cooldown is not None and float(cooldown) <= 0:
+                            cooldown = None
+                        self._mark_unavailable(index, cooldown)
                     raise
                 last_error = alternate_error
         raise last_error
 
-    def _call(self, method, *args, **kwargs):
+    def _call(self, method, *args, allow_invalid_output_fallback=True, **kwargs):
         attempts = 0
         last_error = None
         while attempts <= config.AI_RETRY_COUNT:
@@ -143,7 +164,8 @@ class AIProviderManager:
                 return result
             except AIExtractionError as exc:
                 last_error = exc
-                if method == "extract" and getattr(exc, "reason", None) == "invalid_provider_output":
+                if (method == "extract" and allow_invalid_output_fallback
+                        and getattr(exc, "reason", None) == "invalid_provider_output"):
                     return self._try_alternate_extraction_after_invalid_output(
                         exc, *args, **kwargs
                     )
@@ -181,8 +203,11 @@ class AIProviderManager:
     def classify_batch(self, messages):
         return self._call("classify_batch", messages)
 
-    def extract(self, text, category):
-        return self._call("extract", text, category)
+    def extract(self, text, category, *, allow_invalid_output_fallback=True):
+        return self._call(
+            "extract", text, category,
+            allow_invalid_output_fallback=allow_invalid_output_fallback,
+        )
 
     def health_check(self):
         if hasattr(self.provider_instance, "health_check"):

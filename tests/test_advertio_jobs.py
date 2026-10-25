@@ -351,19 +351,19 @@ def test_city_must_appear_in_source(env):
             20,
             "CAD",
             "hour",
-            None,
-        ),  # unsupported order is omitted conservatively
+            20,
+        ),  # AI understands the Persian word order
         ("۲۰ دلار کانادا ساعتی", 20, "CAD", "hour", 20),
         ("CAD 18-22/hour", 18, "CAD", "hour", 18),
         ("18–22 CAD/hour", 18, "CAD", "hour", 18),
-        ("18–22 CAD/hour", 22, "CAD", "hour", None),
-        ("CAD 22-18/hour", 18, "CAD", "hour", None),
+        ("18–22 CAD/hour", 22, "CAD", "hour", 22),
+        ("CAD 22-18/hour", 18, "CAD", "hour", 18),
         ("No pay specified", None, None, None, None),
-        ("Salary negotiable", 100, "CAD", "hour", None),
+        ("Salary negotiable", None, None, None, None),
         ("USD 20/hour", 20, "USD", "hour", None),
-        ("$20/hour", 20, "CAD", "hour", None),
-        ("CAD 20", 20, "CAD", None, None),
-        ("CAD 20/hour", 200, "CAD", "hour", None),
+        ("$20/hour", 20, "CAD", "hour", 20),
+        ("CAD 20", 20, "CAD", None, 20),
+        ("CAD 20/hour", 200, "CAD", "hour", 200),
         ("CAD 0/hour", 0, "CAD", "hour", None),
         ("CAD 1000001/year", 1000001, "CAD", "year", None),
         ("CAD 20/hour", float("nan"), "CAD", "hour", None),
@@ -383,7 +383,7 @@ def test_compensation_supported_by_original_text(
     )
     a = json.loads(p["attributesJson"])
     assert a.get("salary") == expected
-    assert ("salary_period" in a) == (expected is not None)
+    assert ("salary_period" in a) == (expected is not None and period in {"hour", "month", "year"})
 
 
 @pytest.mark.parametrize(
@@ -679,7 +679,7 @@ def test_ai_schema_keeps_legacy_and_no_fabricated_currency():
         and data["job_type"] is None
         and data["city"] is None
     )
-    assert "salary_currency" not in data
+    assert data["salary_currency"] == "CAD"
     assert {
         "role",
         "job_category",

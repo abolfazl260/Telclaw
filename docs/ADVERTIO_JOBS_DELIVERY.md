@@ -58,9 +58,9 @@ in cleaned source text; equivalent English and Persian phrases are supported.
 Existing `employment_type`, company, skills, experience, education, location,
 remote, application method and contact remain in storage. Historical `job_type`
 values are **not rewritten**. Legacy records missing the new eligibility evidence
-cannot auto-publish; correct/re-extract them explicitly first. Jobs extraction no
-longer defaults a salary currency to CAD. Existing handling of unsupported
-currencies in the shared extraction pipeline is otherwise retained.
+cannot auto-publish; correct/re-extract them explicitly first. Jobs extraction defaults an unspecified salary currency to CAD by explicit product
+decision. Explicit foreign compensation remains stored internally and in the original
+description; it is not converted or submitted as CAD.
 
 `messages.sender_is_original` is nullable. Newly crawled unforwarded messages get
 1; forwards get 0; existing unknown provenance stays null. A verified human
@@ -109,20 +109,28 @@ No neighborhood is substituted for a different catalog city.
 
 ## Compensation and description
 
-Salary is optional. The adapter verifies the extracted amount **in an explicit CAD
-pay expression in cleaned original text**, with a supported hour/month/year period.
-It accepts English/Persian numerals. Bare dollars, USD and other currencies,
-negotiable/unknown pay, missing periods, non-finite/boolean/out-of-range amounts and
-amounts not evidenced by the source are omitted together with salary_period. Bounds
-are the intersection of 1–1,000,000 and the active schema. No currency conversion.
-For a supported explicit CAD range, only its lower end can be structured; full range
-remains in description. Unrecognized wording is conservatively left unstructured.
+Salary extraction is AI-led: the prompt asks for the amount (lower end of a range),
+actual payment period where identifiable, and currency. Unspecified currency defaults
+to CAD by explicit product decision; an explicit other currency is preserved without
+conversion. The adapter no longer reparses the source with restrictive salary regexes.
+It trusts extraction while still enforcing finite numeric amounts and the active API
+bounds (currently 1–1,000,000). A salary and the word negotiable may coexist: keep the
+amount. Unknown payment periods are omitted; the active backend permits salary without
+salary_period, and the frontend can display the CAD amount without a period suffix.
 
-`description` is **exactly stored `messages.cleaned_text`**, including source language,
-compensation and contact instructions. No AI summary replaces it. Established cleaning
-is unchanged. Description must have at least 20 nonblank characters. A description over
-2,000 UTF-16 code units is held with `description_exceeds_2000_no_truncation` rather
-than silently removing facts. Title also respects the 200-character envelope limit.
+When AI extracts no salary, the outgoing description gains the display-only footer
+`حقوق: توافقی (Negotiable)`, unless the original already says negotiable/توافقی/قابل مذاکره.
+The original source text is retained verbatim as the prefix and is never overwritten
+in SQLite. This makes the fallback visible in listing details using today's contract:
+**there is no new structured salary_negotiable attribute or feed-card Negotiable badge**.
+A dedicated badge/filter requires an Advertio change; the current API rejects that key.
+Explicit foreign amounts and amounts outside API bounds remain in the original text
+without a false negotiable label. They are not submitted as CAD numeric attributes.
+
+No AI summary replaces the cleaned description. Established cleaning is unchanged.
+Description must have at least 20 nonblank characters. Both the original and the final
+description with any footer must fit 2,000 UTF-16 code units; an over-limit record is
+blocked, never truncated. Title still respects the 200-character envelope limit.
 
 ## Example request
 
@@ -305,8 +313,9 @@ Telegram delivery. Keep a database backup before any separate code rollback.
   `DELETE /api/ingest/leads/{sourceName}/{externalId}` for the positively confirmed
   original post; cross-source duplicates may have no mapping and return 404.
 - No Telegram edit/upsert or later remote moderation-status polling is introduced.
-- Scam rules, supported employment phrases and salary parsing are deliberately
-  conservative. Unrecognized valid wording can need correction/re-extraction.
+- Scam rules and supported employment phrases are deliberately conservative. Salary
+  semantics are delegated to AI and can be wrong; numerical API validation is not a
+  guarantee of extraction accuracy. Incorrect values need correction/re-extraction.
 - Catalog values, source approvals, key validity and active job availability remain
   operational inputs, not facts inferred from a successful SQLite lookup.
 

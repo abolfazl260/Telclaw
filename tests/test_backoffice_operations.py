@@ -267,6 +267,28 @@ async def test_operations_page_renders_terminal_controls(monkeypatch):
     response = await backoffice_web.operations_page(request)
 
     assert response.status == 200
+    from html.parser import HTMLParser
+    class Sections(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.ids = []
+            self.forms = 0
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag == 'section' and attrs.get('class') == 'ops-section':
+                self.ids.append(attrs.get('id'))
+            if tag == 'form' and attrs.get('action') == '/operations/action':
+                self.forms += 1
+    parsed = Sections()
+    parsed.feed(response.text)
+    assert len(parsed.ids) == len(set(parsed.ids)) == 11
+    assert 'advertio-cargo' in parsed.ids
+    assert 'advertio-delivery' in parsed.ids
+    assert parsed.forms > 10
+    assert 'aria-label="Operations sections"' in response.text
+    assert 'telclaw.ops.panel' in response.text
+    assert 'Retry &amp; recover skipped Jobs' in response.text
+    assert 'data-ops-running="false"' in response.text
     assert "Run Processing" in response.text
     assert "Run Classification" in response.text
     assert "Run AI Extraction" in response.text
@@ -417,3 +439,15 @@ async def test_api_health_probe_does_not_send_ingest_key_or_any_listing(monkeypa
     assert calls[0][0].endswith("/health")
     assert "headers" not in calls[0][1]
     assert "secret-should-not-leak" not in str(calls)
+
+
+def test_operation_result_is_scannable_and_raw_json_is_collapsed():
+    text = backoffice_web._operation_state_box('AI extraction', {
+        'status': 'completed', 'result': {'found': 20, 'processed': 16, 'failed': 4,
+                                        'untrusted': '<script>bad()</script>'},
+    })
+    assert 'Processed: <strong>16</strong>' in text
+    assert 'Failed: <strong>4</strong>' in text
+    assert '<details class="op-result">' in text
+    assert '<script>bad()</script>' not in text
+    assert '<details class="op-result" open' not in text

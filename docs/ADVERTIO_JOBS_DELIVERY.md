@@ -380,3 +380,18 @@ outcomes, Telegram publication and Advertio delivery states remain untouched.
 This action only requeues extraction; it neither calls AI nor ingests listings.
 Historical delivery still requires the separate explicit bounded Backfill.
 No migration or automatic historical requeue runs on startup.
+
+## Operations workspace navigation
+
+Operations now has a queue overview and separate navigation for Processing & AI,
+Jobs, Housing, Cargo and management tools. Pick Jobs to see its independent queue.
+Recovery/backfill and record history expand on demand; primary delivery controls
+stay visible. AI controls explain why recovery can be unavailable. Results show
+key counters first with raw JSON under technical details. Selecting Jobs does
+not send anything or change delivery settings.
+
+The selected section and opened details persist in the browser tab across action
+redirects and polling refreshes. Running operations refresh every 10 seconds;
+editing a form pauses polling until the next navigation/reload. With JavaScript
+disabled all sections remain visible and anchor navigation/forms still work.
+No database migration, API contract, queue selection or publication policy changes.

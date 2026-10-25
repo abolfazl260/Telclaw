@@ -4,6 +4,7 @@ from html import escape
 from datetime import datetime, timezone
 
 import config
+from delivery.jobs_discovery import discovery_report
 
 
 def jobs_report(conn):
@@ -45,6 +46,8 @@ def jobs_report(conn):
             ).fetchone()[0]
     if "advertio_jobs_deliveries" not in tables:
         return report
+    report["discovery"] = discovery_report(conn)
+    report["backfill_discovery"] = discovery_report(conn, backfill=True)
     for row in conn.execute(
         "SELECT status,COUNT(*) n FROM advertio_jobs_deliveries GROUP BY status"
     ):
@@ -106,6 +109,35 @@ def jobs_report(conn):
 def jobs_section(report, action_form, state_box):
     def e(value):
         return escape(str(value if value is not None else "—"))
+
+    discovery = report.get("discovery") or {}
+    backfill = report.get("backfill_discovery") or {}
+    labels = {
+        "awaiting_jobs_extraction": "Awaiting successful Jobs AI extraction",
+        "missing_extracted_record": "AI marked successful but Jobs data missing",
+        "processing_incomplete": "Text processing incomplete",
+        "already_in_delivery_queue": "Already queued (check statuses below)",
+        "invalid_source_date": "Missing / invalid original Telegram date",
+        "future_source_date": "Original Telegram date is in the future",
+        "outside_source_date_window": "Older than the permitted source-date window",
+        "requires_explicit_backfill": "Historical records requiring explicit backfill",
+        "ready_for_queue": "Ready for queue admission (not yet validated for publication)",
+    }
+    admission_rows = "".join(
+        "<tr><td>" + e(label) + "</td><td>" + e((discovery.get("counts") or {}).get(key, 0))
+        + "</td><td>" + e((backfill.get("counts") or {}).get(key, 0)) + "</td></tr>"
+        for key, label in labels.items()
+    )
+    admission_html = f"""<details class="ops-recovery" open><summary>Why are Jobs not being sent?</summary>
+    <p>Automatic window: {e(discovery.get('effective_days'))} days · Backfill window:
+    {e(backfill.get('effective_days'))} days · Backfill: {'enabled' if backfill.get('backfill_enabled') else 'disabled'}.</p>
+    <p class="muted">Windows use the original Telegram post date, not today's AI processing date.
+    Backfill uses the smaller of BACKFILL_DAYS and FRESHNESS_DAYS. Processing old ads with AI does not automatically send them.
+    Backfill counts below are a preview; enabling backfill alone does not start sending. Both modes exclude existing queue records.</p>
+    <div class="scroll"><table><thead><tr><th>Admission reason</th><th>Normal send</th><th>Explicit backfill</th></tr></thead><tbody>{admission_rows}</tbody></table></div>
+    <p class="muted">If everything is awaiting AI, first run extraction. If records need explicit backfill,
+    verify the jobs are still open, then enable and run bounded backfill below. For old or invalid dates, verify source freshness before changing settings.
+    Queued blocked/rejected records require correction and explicit requeue. A cooldown or depleted budget also prevents transmission.</p></details>"""
 
     ready = report.get("enabled") and report.get("key_configured")
     controls = action_form(
@@ -206,6 +238,7 @@ def jobs_section(report, action_form, state_box):
     <p>Queue cooldown until (UTC): {e(report.get("paused_until"))} · Reason: {e(report.get("pause_reason"))}</p>
     <p class="muted">Sent to Advertio means API acceptance. Actual Active/PendingReview are recorded receiver statuses at submission time, not live polling. Locally eligible is the cached validation result; unassessed rows have not passed catalog checks yet. Empty source allowlist blocks publication. Historical backfill is opt-in.</p>
     <p><a href="/settings">Jobs auto-publish, source approval and delivery settings</a></p>
+    {admission_html}
     {state_box}<div class="op-actions">{controls}</div>
     <details class="ops-recovery"><summary>Recent Jobs records · status, errors &amp; requeue</summary><div class="scroll"><table><thead><tr><th>Local ID</th><th>Delivery</th><th>Remote status</th><th>Lead ID</th><th>Error</th><th>Safety flags</th><th>Evaluations</th><th>Updated UTC</th><th>Action</th></tr></thead><tbody>{"".join(rows) or '<tr><td colspan="9">No Jobs delivery records yet.</td></tr>'}</tbody></table></div></details>
     <details><summary>View delivery history</summary><div class="scroll"><table><thead><tr><th>Local ID</th><th>Attempt UTC</th><th>Outcome</th><th>HTTP</th><th>Remote</th><th>Error</th></tr></thead><tbody>{history}</tbody></table></div></details></section>"""

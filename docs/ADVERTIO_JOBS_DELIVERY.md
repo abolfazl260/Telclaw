@@ -395,3 +395,41 @@ redirects and polling refreshes. Running operations refresh every 10 seconds;
 editing a form pauses polling until the next navigation/reload. With JavaScript
 disabled all sections remain visible and anchor navigation/forms still work.
 No database migration, API contract, queue selection or publication policy changes.
+
+## Diagnose successful AI extraction with no Jobs transmission
+
+A manual AI extraction result is not a Jobs delivery report. The extraction
+stage's legacy `advertio` counters belong to Housing. Jobs delivery uses its own
+queue, manual command and scheduled stage.
+
+Jobs now includes **Why are Jobs not being sent?** with mutually exclusive counts
+for normal admission versus an explicit backfill preview: awaiting successful
+Jobs extraction, successful flag without a stored Jobs row, incomplete processing,
+already queued, invalid/future source date, outside the effective date window,
+pre-deployment records needing explicit backfill, and ready for queue admission.
+The preview performs local SELECT queries only, does not call AI/Advertio, and
+does not validate eligibility or send anything. Already queued records must be
+inspected by delivery state; blocked/rejected records are not silently requeued.
+
+`enqueue()` returns the admission snapshot plus the actual inserted count.
+Delivery results retain it under `discovery`; manual historical runs additionally
+retain `backfill_discovery` so the following normal discovery does not conceal
+the historical admission reason. Cooldown, disabled, busy and exhausted-budget
+results remain distinguishable from an empty queue.
+
+Windows use the original Telegram date, not `ai_processed_at`. Explicit backfill
+uses `min(ADVERTIO_JOBS_BACKFILL_DAYS, ADVERTIO_JOBS_FRESHNESS_DAYS)`. Merely enabling
+backfill does not queue history. Check the source job is still open before a
+bounded backfill; do not refresh the source date or reset the deployment watermark
+to manufacture freshness. After deploying, refresh Operations → Jobs and inspect
+both admission columns before retrying. Invalid dates require source correction;
+missing extraction requires AI processing; historical rows inside the permitted
+window require explicit backfill. Ready for admission is not proof that role,
+job type, location, source allowlist or scam checks will pass.
+
+Regression tests reproduce old AI-processed Jobs excluded from normal delivery,
+then explicitly backfill a recent historical record, verify autoPublish=true and
+terminal idempotency. Other tests cover stale/invalid dates, effective window,
+failed extraction/missing category data and read-only preview. No production DB
+was accessed, so a particular operator's empty queue still requires its admission
+counts for diagnosis. No migration or environment changes are needed.

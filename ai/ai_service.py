@@ -94,7 +94,15 @@ class AIProcessingService:
         while True:
             try:
                 self._print_message_status(0, 0, record, category, "request_started") if progress else None
-                result = self.provider_manager.extract(source_text, category)
+                # A fallback provider was already tried in the first pass.
+                # Subsequent retries target the primary only, avoiding a
+                # redundant second round of Groq -> Cloudflare (or reverse).
+                if invalid_json_attempts and isinstance(self.provider_manager, AIProviderManager):
+                    result = self.provider_manager.extract(
+                        source_text, category, allow_invalid_output_fallback=False
+                    )
+                else:
+                    result = self.provider_manager.extract(source_text, category)
                 if progress:
                     self._print_message_status(0, 0, record, category, "request_completed")
                 return result
@@ -104,7 +112,7 @@ class AIProcessingService:
                         raise
                     invalid_json_attempts += 1
                     logger.warning(
-                        "[AI INVALID PROVIDER OUTPUT] provider=%s retry=%s/%s message_id=%s channel=%s",
+                        "[AI INVALID PROVIDER OUTPUT] provider=%s retry=%s/%s strategy=primary_only message_id=%s channel=%s",
                         getattr(self.provider_manager, "provider", "groq-1"),
                         invalid_json_attempts,
                         config.GROQ_INVALID_JSON_MAX_RETRIES,

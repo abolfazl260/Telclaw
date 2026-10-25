@@ -204,41 +204,14 @@ class JobsCatalog:
 
 
 def salary_attributes(record, text, schema):
-    """Verify one explicit CAD pay expression, including amount and period, in source."""
-    currency = str(record.get("salary_currency") or "").upper()
-    period = record.get("salary_period")
-    if (
-        currency != "CAD"
-        or not isinstance(period, str)
-        or period not in ENUMS["salary_period"]
-    ):
+    """Trust AI extraction; enforce only the receiving API's numeric constraints.
+
+    CAD is the authorized default. An explicit foreign currency is never relabelled.
+    Salary period is optional in the active backend schema; omit it when unknown.
+    """
+    currency = str(record.get("salary_currency") or "CAD").strip().upper()
+    if currency != "CAD":
         return {}
-    if re.search(r"negotiable|توافقی", text, re.I):
-        return {}
-    number = r"\d+(?:,\d{3})*(?:\.\d+)?"
-    cad = r"(?:CAD\s*\$?|C\$|Canadian\s+dollars?|دلار\s*کانادا)"
-    pay_period = {
-        "hour": r"(?:/\s*(?:h(?:ou)?rs?)\b|per\s+hour\b|ساعتی|هر\s*ساعت)",
-        "month": r"(?:/\s*month\b|per\s+month\b|ماهانه|هر\s*ماه)",
-        "year": r"(?:/\s*year\b|per\s+year\b|annually\b|سالانه|هر\s*سال)",
-    }[period]
-    # Translate numerals, not language/content, solely for parsing.
-    plain = text.translate(
-        str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-    )
-    expression = rf"(?:(?:{cad})\s*({number})|({number})\s*(?:{cad}))(?:\s*[-–—]\s*({number}))?\s*(?:{pay_period})"
-    # Also accept CAD 18-22/hour (range before optional currency suffix).
-    range_expr = rf"(?:(?:{cad})\s*)?({number})\s*[-–—]\s*({number})\s*(?:{cad})?\s*(?:{pay_period})"
-    candidates, ranges = [], []
-    for m in re.finditer(range_expr, plain, re.I):
-        if re.search(cad, m.group(0), re.I):
-            ranges.append(m.span())
-            low, high = [float(x.replace(",", "")) for x in m.groups()]
-            if low <= high:
-                candidates.append(low)
-    for m in re.finditer(expression, plain, re.I):
-        if not any(m.start() < end and m.end() > start for start, end in ranges):
-            candidates.append(float((m.group(1) or m.group(2)).replace(",", "")))
     try:
         amount = float(record.get("salary"))
     except (TypeError, ValueError, OverflowError):
@@ -250,10 +223,26 @@ def salary_attributes(record, text, schema):
         or not max(1, bounds.get("min", 1))
         <= amount
         <= min(1000000, bounds.get("max", 1000000))
-        or amount not in candidates
     ):
         return {}
-    return {"salary": amount, "salary_period": period}
+    attributes = {"salary": amount}
+    period = record.get("salary_period")
+    if isinstance(period, str) and period in ENUMS["salary_period"]:
+        attributes["salary_period"] = period
+    return attributes
+
+
+def compensation_description(description, record):
+    """Make undisclosed pay visible with the current API; preserve original content.
+
+    Jobs currently has no salary_negotiable attribute. A display-only annotation
+    avoids sending an unsupported key or manufacturing a numeric salary.
+    """
+    if record.get("salary") not in (None, ""):
+        return description
+    if re.search(r"negotiable|توافقی|قابل\s*مذاکره", description, re.I):
+        return description
+    return description + "\n\nحقوق: توافقی (Negotiable)"
 
 
 class AdvertioJobsService:
@@ -320,6 +309,9 @@ class AdvertioJobsService:
         if isinstance(arrangement, str) and arrangement in ENUMS["work_arrangement"]:
             attrs["work_arrangement"] = arrangement
         attrs.update(salary_attributes(record, description, schema))
+        description = compensation_description(description, record)
+        if len(description.encode("utf-16-le")) // 2 > 2000:
+            raise JobsMappingError("description_exceeds_2000_with_compensation_label")
         for key, value in attrs.items():
             if key not in schema:
                 raise AdvertioError("jobs_schema_changed")

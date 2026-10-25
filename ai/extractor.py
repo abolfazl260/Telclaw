@@ -193,6 +193,10 @@ def _normalize_defaults(result):
     if category == "housinglist":
         category_data.setdefault("country_code", "CA")
         category_data.setdefault("currency", "CAD")
+    elif category == "joblist" and category_data.get("salary") is not None:
+        # Explicit product default: unspecified Jobs compensation currency is CAD.
+        if not category_data.get("salary_currency"):
+            category_data["salary_currency"] = "CAD"
     return result
 
 
@@ -216,11 +220,8 @@ def _normalize_currencies(result):
         if currency is not None and str(currency).strip().upper() not in {"CAD", "USD", "EUR", "GBP"}:
             category_data["price"] = None
             category_data["currency"] = None
-    elif category == "joblist":
-        currency = category_data.get("salary_currency")
-        if currency is not None and str(currency).strip().upper() != "CAD":
-            category_data["salary"] = None
-            category_data["salary_currency"] = None
+    # Jobs keeps explicit foreign compensation internally and in the original
+    # description; only the delivery adapter decides what CAD fields can be sent.
     return result
 
 

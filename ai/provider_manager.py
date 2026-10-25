@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import config
 from ai.extractor import AIExtractionError
 from ai.providers.factory import create_provider
+
+
+logger = logging.getLogger("telclaw.ai")
 
 
 class AIProviderManager:
@@ -121,14 +125,35 @@ class AIProviderManager:
             if self._unavailable_until[index] > now:
                 continue
             candidate = self.providers[index]
+            logger.warning(
+                "[AI EXTRACTION FALLBACK] primary=%s alternate=%s reason=invalid_provider_output",
+                getattr(self.providers[current], "name", current),
+                getattr(candidate, "name", index),
+            )
             try:
-                return candidate.extract(*args, **kwargs)
+                result = candidate.extract(*args, **kwargs)
+                logger.info("[AI EXTRACTION FALLBACK] alternate=%s status=success", getattr(candidate, "name", index))
+                return result
             except AIExtractionError as alternate_error:
-                if getattr(alternate_error, "reason", None) != "invalid_provider_output":
-                    # Preserve real network/rate-limit/permission errors rather
-                    # than misreporting them as malformed JSON.
-                    raise
-                last_error = alternate_error
+                reason = getattr(alternate_error, "reason", None)
+                logger.warning(
+                    "[AI EXTRACTION FALLBACK] alternate=%s status=failed reason=%s",
+                    getattr(candidate, "name", index), reason,
+                )
+                if reason == "invalid_provider_output":
+                    # Content-specific failure: do not globally cool down this provider.
+                    last_error = alternate_error
+                    continue
+                if self._is_failover_error(alternate_error):
+                    # Avoid repeatedly selecting a rate-limited/unreachable fallback
+                    # on the next bounded retry. Do not cool down malformed JSON.
+                    cooldown = getattr(alternate_error, "retry_after", None) if getattr(alternate_error, "status", None) == 429 else None
+                    if cooldown is not None and float(cooldown) <= 0:
+                        cooldown = None
+                    self._mark_unavailable(index, cooldown)
+                # Do not mask a real 429/network/permission error as invalid JSON;
+                # the service layer applies its existing bounded retry policy.
+                raise
         raise last_error
 
     def _call(self, method, *args, **kwargs):

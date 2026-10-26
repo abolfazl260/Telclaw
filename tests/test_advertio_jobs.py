@@ -96,7 +96,6 @@ def env(tmp_path, monkeypatch):
         ADVERTIO_JOBS_ENABLED=True,
         ADVERTIO_INGEST_KEY="test-secret-never-display",
         ADVERTIO_JOBS_AUTO_PUBLISH=True,
-        ADVERTIO_JOBS_SOURCES="jobs_one,jobs_two",
         ADVERTIO_JOBS_BACKFILL_ENABLED=False,
         ADVERTIO_JOBS_BATCH_SIZE=25,
         ADVERTIO_JOBS_DAILY_LIMIT=200,
@@ -246,7 +245,7 @@ def test_complete_contract_and_original_description(env, role, prefix):
         ("cleaned_text", "Hiring"),
         ("cleaned_text", "a" * 2001),
         ("ai_status", "failed"),
-        ("channel_username", "unapproved"),
+        ("sender_type", "bot"),
     ],
 )
 def test_local_ineligibility_never_fabricates(env, key, value):
@@ -328,6 +327,16 @@ def test_ambiguous_city_and_truncated_catalog_are_blocked(env):
     c.cities = [c.cities[0]] * 200
     with pytest.raises(JobsMappingError, match="truncated"):
         s.build_payload(record())
+
+
+def test_jobs_from_any_collected_source_go_to_advertio_without_approval(env):
+    service, client = env
+    add_post(channel="new_job_ads_source")
+    result = service.deliver_pending()
+    assert result["sent"] == 1
+    assert client.sent[0]["sourceUrl"] == "https://t.me/new_job_ads_source/101"
+    assert client.sent[0]["categorySlug"] == "jobs"
+    assert client.sent[0]["autoPublish"] is True
 
 
 def test_city_must_appear_in_source(env):

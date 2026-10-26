@@ -232,6 +232,11 @@ def _failure_diagnostics(conn):
         stage, reason = _queue_diagnostic({
             "status": status, "remote_status": remote, "error_code": code
         })
+        if code and code.startswith("invalid_or_missing_"):
+            # Grouped counters do not include field values: do not call them
+            # "missing" when some rows may contain unsupported values.
+            field = code.removeprefix("invalid_or_missing_").replace("_", " ")
+            reason = f"Missing or unsupported {field}."
         summary.append(dict(stage=stage, reason=reason, count=count, code=code or "none"))
     for r in grouped_ai:
         state, code, count = r

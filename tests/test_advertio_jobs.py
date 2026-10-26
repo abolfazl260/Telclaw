@@ -231,9 +231,7 @@ def test_complete_contract_and_original_description(env, role, prefix):
     [
         ("role", None),
         ("job_category", None),
-        ("job_type", None),
         ("job_category", "unknown"),
-        ("job_type", "remote"),
         ("is_job_listing", None),
         ("is_job_listing", False),
         ("country_code", "US"),
@@ -293,16 +291,41 @@ def test_remote_and_multilingual(env, text, job_type, arrangement):
         assert json.loads(p["attributesJson"])["work_arrangement"] == arrangement
 
 
-def test_unspecified_hours_not_assumed_and_remote_no_city(env):
-    for changes in [
-        dict(
-            cleaned_text="Hiring staff in Toronto. Please contact us.",
-            job_type="full_time",
-        ),
-        dict(work_arrangement="remote", city=None),
-    ]:
-        with pytest.raises(JobsMappingError):
-            env[0].build_payload(record(**changes))
+def test_ai_inferred_type_and_default_are_accepted_without_literal_evidence(env):
+    service, _ = env
+    source = "Hiring staff in Toronto. Please contact us."
+    inferred, _ = service.build_payload(record(
+        cleaned_text=source, job_type="full_time", job_type_resolution="inferred"
+    ))
+    assert json.loads(inferred["attributesJson"])["job_type"] == "full_time"
+    assert inferred["description"] == source
+
+    for missing in (None, "remote", "unknown"):
+        payload, _ = service.build_payload(record(
+            cleaned_text=source, job_type=missing, job_type_resolution="default"
+        ))
+        assert json.loads(payload["attributesJson"])["job_type"] == "temporary"
+        assert "job_type_resolution" not in json.loads(payload["attributesJson"])
+        assert payload["autoPublish"] is True
+        assert payload["description"] == source
+
+    with pytest.raises(JobsMappingError):
+        service.build_payload(record(work_arrangement="remote", city=None))
+
+
+def test_professional_work_request_uses_other_with_stated_specialty(env):
+    source = "Looking for a legal consultant to work on a legal matter in Toronto."
+    payload, _ = env[0].build_payload(record(
+        cleaned_text=source, role="employer", job_category="other",
+        job_title="Legal consultant", job_type=None,
+    ))
+    attrs = json.loads(payload["attributesJson"])
+    assert attrs["role"] == "employer"
+    assert attrs["job_category"] == "other"
+    assert attrs["job_type"] == "temporary"
+    assert attrs["job_title"] == "Legal consultant"
+    assert payload["title"] == "Hiring · Legal consultant · Toronto"
+    assert payload["description"] == source
 
 
 def test_no_unknown_other_fallback(env):
@@ -508,11 +531,11 @@ def test_http_policy_and_no_tight_retry(env, http, retryable, outcome, caplog):
 
 def test_missing_fields_blocked_controlled_requeue(env):
     s, c = env
-    mid = add_post(changes={"job_type": None})
+    mid = add_post(changes={"job_category": None})
     assert s.deliver_pending()["blocked"] == 1 and not c.sent
-    assert delivery(mid)["error_code"] == "invalid_or_missing_job_type"
+    assert delivery(mid)["error_code"] == "invalid_or_missing_job_category"
     corrected = database.get_category_record(mid, "joblist")
-    corrected["job_type"] = "full_time"
+    corrected["job_category"] = "warehouse"
     database.save_category_record(mid, "joblist", corrected)
     assert s.deliver_pending()["found"] == 0
     s.requeue(mid)
@@ -699,7 +722,12 @@ def test_ai_schema_keeps_legacy_and_no_fabricated_currency():
         "is_job_listing",
     } <= set(CATEGORY_FIELDS["joblist"])
     prompt = render_prompt("joblist")
-    assert "Remote is NEVER job_type" in prompt and "other" in prompt
+    assert "NEVER job_type" in prompt and "other" in prompt
+    assert "job_type_resolution" in prompt
+    assert "temporary if neither" in prompt
+    assert "professional engagement" in prompt
+    assert "Examples:" not in prompt
+    assert "job_type_resolution" in CATEGORY_FIELDS["joblist"]
 
 
 def test_additive_migration_preserves_existing_records_and_watermark(
@@ -738,7 +766,7 @@ def test_backoffice_reports_remote_status_history_and_no_secret(env):
     s, c = env
     add_post()
     s.deliver_pending()
-    add_post(message_id=102, changes={"job_type": None})
+    add_post(message_id=102, changes={"job_category": None})
     s.deliver_pending()
     with closing(database.get_connection()) as conn:
         report = jobs_report(conn)
@@ -1025,7 +1053,7 @@ def test_changed_classification_is_blocked(env):
         ("employer", "full_time", "sent"),
         ("seeker", "full_time", "sent"),
         (None, "full_time", "blocked"),
-        ("employer", None, "blocked"),
+        ("employer", None, "sent"),
     ],
 )
 def test_real_ai_persistence_to_jobs_queue(env, monkeypatch, role, job_type, expected):
@@ -1062,6 +1090,8 @@ def test_real_ai_persistence_to_jobs_queue(env, monkeypatch, role, job_type, exp
     assert service.deliver_pending()[expected] == 1
     if expected == "sent":
         assert client.sent[0]["description"] == TEXT
+        if job_type is None:
+            assert json.loads(client.sent[0]["attributesJson"])["job_type"] == "temporary"
 
 
 def test_extraction_failure_never_enters_jobs_delivery(env, monkeypatch):

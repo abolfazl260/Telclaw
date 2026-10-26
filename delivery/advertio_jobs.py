@@ -90,21 +90,6 @@ class JobsMappingError(ValueError):
     """Fixed operator-facing reason code; never include source text or credentials."""
 
 
-def source_approved(record):
-    approved = {
-        normalized(v).lstrip("@")
-        for v in config.ADVERTIO_JOBS_SOURCES.split(",")
-        if v.strip()
-    }
-    return bool(
-        {
-            str(record.get("channel_id") or ""),
-            normalized(record.get("channel_username")).lstrip("@"),
-        }
-        & approved
-    )
-
-
 def _object(value):
     if isinstance(value, str):
         try:
@@ -267,8 +252,8 @@ class AdvertioJobsService:
             raise JobsMappingError("ai_not_processed_joblist")
         if record.get("is_job_listing") not in (True, 1, "true"):
             raise JobsMappingError("not_verified_employment_listing")
-        if not source_approved(record) or record.get("sender_type") == "bot":
-            raise JobsMappingError("source_not_approved")
+        if record.get("sender_type") == "bot":
+            raise JobsMappingError("bot_sender_not_allowed")
         description = record.get("cleaned_text")
         if not isinstance(description, str) or len(description.strip()) < 20:
             raise JobsMappingError("insufficient_cleaned_description")

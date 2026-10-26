@@ -105,6 +105,10 @@ def _admission_diagnostic(row):
     if reason == "awaiting_jobs_extraction":
         state = str(row.get("ai_status") or "unset")
         code = str(row.get("ai_error") or "")
+        if row.get("classification_status") == "failed":
+            return "Classification", "Job classification failed before Jobs AI extraction."
+        if state == "processed" and row.get("ai_category") != "joblist":
+            return "AI extraction", "AI extraction completed for a different category, not Jobs."
         if state == "failed":
             return "AI extraction", AI_REASON_TEXT.get(
                 code, "AI extraction failed; inspect the sanitized AI error code."
@@ -172,7 +176,7 @@ def _failure_diagnostics(conn):
         dict(r) for r in conn.execute("""
             WITH candidates AS (
                 SELECT m.id, m.message_id, m.channel_username, m.ai_status, m.ai_error,
-                       m.date AS source_date,
+                       m.date AS source_date, m.classification_status, m.ai_category,
                        CASE
                         WHEN m.ai_status IS NOT 'processed' OR m.ai_category IS NOT 'joblist'
                          THEN 'awaiting_jobs_extraction'

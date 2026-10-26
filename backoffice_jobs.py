@@ -60,7 +60,7 @@ def _field_value(row, field):
 def _queue_diagnostic(row):
     code = row.get("error_code") or ""
     status = row.get("status") or ""
-    if row.get("remote_status") == "PendingReview" and status == "sent":
+    if row.get("remote_status") == "PendingReview" and status in {"sent", "already_existed"}:
         return "Advertio moderation", "Accepted by Advertio; pending review, not rejected."
     if code.startswith("invalid_or_missing_"):
         field = code.removeprefix("invalid_or_missing_")
@@ -153,7 +153,7 @@ def _failure_diagnostics(conn):
             JOIN messages m ON m.id=d.processed_message_id
             LEFT JOIN joblist j ON j.processed_message_id=m.id
             WHERE d.status IN ('blocked','rejected','retry')
-               OR (d.status='sent' AND d.remote_status='PendingReview')
+               OR (d.status IN ('sent','already_existed') AND d.remote_status='PendingReview')
             ORDER BY d.updated_at DESC LIMIT 50
         """)
     ]
@@ -170,29 +170,37 @@ def _failure_diagnostics(conn):
     )).isoformat()
     prequeue = [
         dict(r) for r in conn.execute("""
-            SELECT m.id, m.message_id, m.channel_username, m.ai_status, m.ai_error,
-                   m.date AS source_date,
-                   CASE
-                    WHEN m.ai_status IS NOT 'processed' OR m.ai_category IS NOT 'joblist'
-                     THEN 'awaiting_jobs_extraction'
-                    WHEN j.processed_message_id IS NULL THEN 'missing_extracted_record'
-                    WHEN m.processing_status IS NOT 'processed' THEN 'processing_incomplete'
-                    WHEN julianday(m.date) IS NULL THEN 'invalid_source_date'
-                    WHEN julianday(m.date)>julianday(?) THEN 'future_source_date'
-                    WHEN julianday(m.date)<julianday(?) THEN 'outside_source_date_window'
-                    WHEN m.id<=? THEN 'requires_explicit_backfill'
-                    ELSE 'ready_for_queue'
-                   END AS admission_reason
-            FROM messages m
-            LEFT JOIN joblist j ON j.processed_message_id=m.id
-            LEFT JOIN advertio_jobs_deliveries d ON d.processed_message_id=m.id
-            WHERE d.processed_message_id IS NULL
-              AND (m.classification_category='joblist' OR m.ai_category='joblist')
-            ORDER BY CASE WHEN m.ai_status='failed' THEN 0
-                          WHEN m.ai_status='skipped' THEN 1
-                          WHEN m.ai_status='processed' THEN 2
-                          ELSE 3 END, m.id DESC
-            LIMIT 50
+            WITH candidates AS (
+                SELECT m.id, m.message_id, m.channel_username, m.ai_status, m.ai_error,
+                       m.date AS source_date,
+                       CASE
+                        WHEN m.ai_status IS NOT 'processed' OR m.ai_category IS NOT 'joblist'
+                         THEN 'awaiting_jobs_extraction'
+                        WHEN j.processed_message_id IS NULL THEN 'missing_extracted_record'
+                        WHEN m.processing_status IS NOT 'processed' THEN 'processing_incomplete'
+                        WHEN julianday(m.date) IS NULL THEN 'invalid_source_date'
+                        WHEN julianday(m.date)>julianday(?) THEN 'future_source_date'
+                        WHEN julianday(m.date)<julianday(?) THEN 'outside_source_date_window'
+                        WHEN m.id<=? THEN 'requires_explicit_backfill'
+                        ELSE 'ready_for_queue'
+                       END AS admission_reason
+                FROM messages m
+                LEFT JOIN joblist j ON j.processed_message_id=m.id
+                LEFT JOIN advertio_jobs_deliveries d ON d.processed_message_id=m.id
+                WHERE d.processed_message_id IS NULL
+                  AND (m.classification_category='joblist' OR m.ai_category='joblist')
+            )
+            SELECT * FROM (
+                SELECT candidates.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY admission_reason,
+                            CASE WHEN admission_reason='awaiting_jobs_extraction'
+                                 THEN ai_status ELSE '' END
+                        ORDER BY id DESC
+                    ) AS sample_rank
+                FROM candidates
+            )
+            WHERE sample_rank<=8 ORDER BY admission_reason, id DESC LIMIT 50
         """, (now.isoformat(), cutoff, boundary))
     ]
     for item in prequeue:
@@ -202,7 +210,7 @@ def _failure_diagnostics(conn):
         SELECT status, remote_status, error_code, COUNT(*) AS n
         FROM advertio_jobs_deliveries
         WHERE status IN ('blocked','rejected','retry')
-           OR (status='sent' AND remote_status='PendingReview')
+           OR (status IN ('sent','already_existed') AND remote_status='PendingReview')
         GROUP BY status, remote_status, error_code
     """).fetchall()
     grouped_ai = conn.execute("""

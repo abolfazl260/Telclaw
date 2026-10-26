@@ -204,7 +204,5 @@ ADVERTIO_JOBS_BATCH_SIZE = min(100, _int_env("TELCLAW_ADVERTIO_JOBS_BATCH_SIZE",
 ADVERTIO_JOBS_DAILY_LIMIT = _int_env("TELCLAW_ADVERTIO_JOBS_DAILY_LIMIT", 200, minimum=1)
 ADVERTIO_JOBS_MAX_ATTEMPTS = _int_env("TELCLAW_ADVERTIO_JOBS_MAX_ATTEMPTS", 8, minimum=1)
 ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS = _int_env("TELCLAW_ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS", 1800, minimum=60)
-# Explicitly reviewed channel IDs (preferred), or normalized usernames, comma separated.
-ADVERTIO_JOBS_SOURCES = os.getenv("TELCLAW_ADVERTIO_JOBS_SOURCES", "").strip()
 # Telclaw-side shared transport ceiling; confirm the receiver's current policy before rollout.
 ADVERTIO_DAILY_REQUEST_LIMIT = _int_env("TELCLAW_ADVERTIO_DAILY_REQUEST_LIMIT", 1000, minimum=1)

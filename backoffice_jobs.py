@@ -422,6 +422,50 @@ def jobs_section(report, action_form, state_box):
             ("Not yet assessed", "unassessed"),
         ]
     )
+    issue_counts = "".join(
+        "<tr><td>" + e(item["stage"]) + "</td><td>" + e(item["reason"])
+        + "</td><td>" + e(item["code"]) + "</td><td>" + e(item["count"])
+        + "</td></tr>" for item in report.get("issue_summary", [])
+    )
+    delivery_issue_rows = "".join(
+        "<tr>" + "".join("<td>" + e(value) + "</td>" for value in (
+            item.get("id"), item.get("channel_username"), item.get("message_id"),
+            item.get("status"), item.get("stage"), item.get("reason"),
+            item.get("error_code"), item.get("http_status"),
+        )) + "</tr>" for item in report.get("delivery_issues", [])
+    )
+    prequeue_issue_rows = "".join(
+        "<tr>" + "".join("<td>" + e(value) + "</td>" for value in (
+            item.get("id"), item.get("channel_username"), item.get("message_id"),
+            item.get("ai_status"), item.get("stage"), item.get("reason"),
+            item.get("admission_reason"), item.get("ai_error"),
+        )) + "</tr>" for item in report.get("prequeue_issues", [])
+    )
+    diagnostic_html = f"""<details class="ops-recovery" open>
+    <summary>Jobs failure diagnostics · stages &amp; reasons (English)</summary>
+    <p class="muted">Read-only diagnostics. A blocked record failed local checks before the API call.
+    Rejected means a permanent HTTP failure; Retry means an intermittent failure.
+    PendingReview means the Advertio API accepted the listing but has not made it Active.
+    HTTP error bodies are intentionally not retained; do not assume which exact field caused HTTP 400.</p>
+    <h3>Failure reasons by stage</h3>
+    <div class="scroll"><table><thead><tr><th>Failed stage</th><th>Explanation (English)</th>
+    <th>Stored code</th><th>Count</th></tr></thead>
+    <tbody>{issue_counts or '<tr><td colspan="4">No failed or review records found.</td></tr>'}</tbody></table></div>
+    <h3>Latest delivery problems · up to 50</h3>
+    <div class="scroll"><table><thead><tr><th>Local ID</th><th>Source</th><th>Telegram ID</th>
+    <th>Delivery status</th><th>Failed stage</th><th>Explanation (English)</th>
+    <th>Stored error code</th><th>Last HTTP</th></tr></thead>
+    <tbody>{delivery_issue_rows or '<tr><td colspan="8">No local blocks, API failures or pending-review outcomes yet.</td></tr>'}</tbody></table></div>
+    <h3>Not yet in the Jobs delivery queue · 50 prioritized examples</h3>
+    <p class="muted">Includes extraction failures, skipped extraction, missing Jobs details,
+    date exclusions and historical records requiring manual backfill.
+    These are not API rejections: no Jobs ingest request was attempted for them.</p>
+    <div class="scroll"><table><thead><tr><th>Local ID</th><th>Source</th><th>Telegram ID</th>
+    <th>AI status</th><th>Stopped stage</th><th>Explanation (English)</th>
+    <th>Admission code</th><th>AI error code</th></tr></thead>
+    <tbody>{prequeue_issue_rows or '<tr><td colspan="8">No unqueued Jobs records found.</td></tr>'}</tbody></table></div>
+    </details>"""
+
     rows = []
     for r in report.get("recent", []):
         retry = (
@@ -478,9 +522,10 @@ def jobs_section(report, action_form, state_box):
     <div class="ops-result-metrics">{counts}</div><p>Requests today (including Jobs catalog calls): {e(report.get("requests_today"))} ·
     Remaining Jobs/shared request budget: {e(report.get("remaining_budget"))}</p>
     <p>Queue cooldown until (UTC): {e(report.get("paused_until"))} · Reason: {e(report.get("pause_reason"))}</p>
-    <p class="muted">Sent to Advertio means API acceptance. Actual Active/PendingReview are recorded receiver statuses at submission time, not live polling. Locally eligible is the cached validation result; unassessed rows have not passed catalog checks yet. Empty source allowlist blocks publication. Historical backfill is opt-in.</p>
-    <p><a href="/settings">Jobs auto-publish, source approval and delivery settings</a></p>
+    <p class="muted">Sent to Advertio means API acceptance. Actual Active/PendingReview are recorded receiver statuses at submission time, not live polling. Locally eligible is the cached validation result; unassessed rows have not passed catalog checks yet. Historical backfill is opt-in. Diagnostics below show the local, AI and HTTP stages.</p>
+    <p><a href="/settings">Jobs auto-publish and delivery settings</a></p>
     {admission_html}
+    {diagnostic_html}
     {state_box}<div class="op-actions">{controls}</div>
     <details class="ops-recovery"><summary>Recent Jobs records · status, errors &amp; requeue</summary><div class="scroll"><table><thead><tr><th>Local ID</th><th>Delivery</th><th>Remote status</th><th>Lead ID</th><th>Error</th><th>Safety flags</th><th>Evaluations</th><th>Updated UTC</th><th>Action</th></tr></thead><tbody>{"".join(rows) or '<tr><td colspan="9">No Jobs delivery records yet.</td></tr>'}</tbody></table></div></details>
     <details><summary>View delivery history</summary><div class="scroll"><table><thead><tr><th>Local ID</th><th>Attempt UTC</th><th>Outcome</th><th>HTTP</th><th>Remote</th><th>Error</th></tr></thead><tbody>{history}</tbody></table></div></details></section>"""

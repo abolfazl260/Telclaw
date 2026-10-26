@@ -122,7 +122,6 @@ SPECS = (
     _s("TELCLAW_ADVERTIO_JOBS_DAILY_LIMIT", "ADVERTIO_JOBS_DAILY_LIMIT", "Advertio Jobs", kind="int", fallback="200", minimum=1, maximum=1000),
     _s("TELCLAW_ADVERTIO_JOBS_MAX_ATTEMPTS", "ADVERTIO_JOBS_MAX_ATTEMPTS", "Advertio Jobs", kind="int", fallback="8", minimum=1, maximum=100),
     _s("TELCLAW_ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS", "ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS", "Advertio Jobs", kind="int", fallback="1800", minimum=1, maximum=86400),
-    _s("TELCLAW_ADVERTIO_JOBS_SOURCES", "ADVERTIO_JOBS_SOURCES", "Advertio Jobs", kind="str", fallback=""),
     _s("TELCLAW_ADVERTIO_DAILY_REQUEST_LIMIT", "ADVERTIO_DAILY_REQUEST_LIMIT", "Advertio", kind="int", minimum=1, maximum=10000, fallback="1000"),
 
     _s("TELCLAW_TRANSFER_TELEGRAM_PUBLISH_ENABLED", "TRANSFER_TELEGRAM_PUBLISH_ENABLED", "Transfer Publisher", kind="bool", restart=True, fallback="false"),

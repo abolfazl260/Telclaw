@@ -159,10 +159,12 @@ There is no call to the native `POST /api/leads` endpoint.
 
 ## Automatic publishing and safety
 
-Eligible new records on explicitly reviewed sources request `autoPublish=true` by
-default. The Jobs, parent ingest and API-key gates all apply inside the worker,
-including manual batches. Empty source approval list blocks every Jobs record.
-Source approval is distinct from classification and mandatory completeness checks.
+Eligible AI-validated Jobs from any collected source request `autoPublish=true` by
+default; no channel/source allowlist is required. The Jobs, parent ingest and API-key
+gates still apply to scheduled and manual batches. Employment evidence,
+mandatory fields, Canadian location, original source URL/contact verification,
+freshness, bot-author exclusion and scam moderation remain mandatory.
+The destination is the Advertio ingest API, not a Telegram publishing channel.
 
 Conservative source-text rules flag application/recruitment/training/equipment fees,
 suspicious crypto/gift-card/check transfers, banking-password requests and identity
@@ -241,7 +243,7 @@ Active/PendingReview counts, request budget, cooldown/faults and recent history.
 It provides Send next eligible Jobs, safe stop after in-flight calls, corrected
 blocked/rejected requeue, explicit bounded backfill when enabled, and API-fault
 resume. Manual delivery uses the same service/lease/validation/budget. Settings has
-an independent Advertio Jobs group, including source approvals and auto-publish.
+an independent Advertio Jobs group, including auto-publish and delivery limits.
 The existing authentication/CSRF requirements apply to these operations.
 
 ## Environment defaults
@@ -257,7 +259,6 @@ The existing authentication/CSRF requirements apply to these operations.
 | ADVERTIO_JOBS_DAILY_LIMIT | 200 |
 | ADVERTIO_JOBS_MAX_ATTEMPTS | 8 |
 | ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS | 1800 |
-| ADVERTIO_JOBS_SOURCES | empty, comma-separated reviewed numeric IDs/usernames |
 | ADVERTIO_DAILY_REQUEST_LIMIT | 1000 shared HTTP requests/day |
 
 Also requires the existing TELCLAW_ADVERTIO_INGEST_ENABLED=true and configured
@@ -273,11 +274,12 @@ No Housing/Cargo flags need to change.
    applies additive schema. Record the new deployment watermark.
 4. Confirm `/health`, live Jobs schema and location search again from the actual
    deployment network; confirm current shared rate policy with Advertio operations.
-5. Confirm ingest key presence on the server without printing its value. Add only
-   reviewed channel IDs to ADVERTIO_JOBS_SOURCES. Keep auto-publish true.
+5. Confirm ingest key presence on the server without printing its value. No source
+   channel list is needed; verify the collected Jobs sources are appropriate for
+   publication. Keep auto-publish true.
 6. Temporarily set batch size 1–5 and a small daily request limit sufficient for
    schema/catalog lookup as well as the ingest. Explicitly enable Jobs.
-7. Collect a genuinely fresh, complete job advertisement from the reviewed source;
+7. Collect a genuinely fresh, complete job advertisement from any crawled source;
    use Send next eligible Jobs. Inspect source URL/contact, actual lead ID and status.
    Verify an actual unique listing becomes **Active** without manual approval.
 8. Verify incomplete jobs remain blocked, scam-flagged jobs request moderation,
@@ -316,7 +318,7 @@ Telegram delivery. Keep a database backup before any separate code rollback.
 - Scam rules and supported employment phrases are deliberately conservative. Salary
   semantics are delegated to AI and can be wrong; numerical API validation is not a
   guarantee of extraction accuracy. Incorrect values need correction/re-extraction.
-- Catalog values, source approvals, key validity and active job availability remain
+- Catalog values, key validity and active job availability remain
   operational inputs, not facts inferred from a successful SQLite lookup.
 
 ## Development validation and exact file manifest
@@ -425,14 +427,16 @@ to manufacture freshness. After deploying, refresh Operations → Jobs and inspe
 both admission columns before retrying. Invalid dates require source correction;
 missing extraction requires AI processing; historical rows inside the permitted
 window require explicit backfill. Ready for admission is not proof that role,
-job type, location, source allowlist or scam checks will pass.
+job type, location, source URL/contact or scam checks will pass.
 
 Regression tests reproduce old AI-processed Jobs excluded from normal delivery,
 then explicitly backfill a recent historical record, verify autoPublish=true and
 terminal idempotency. Other tests cover stale/invalid dates, effective window,
 failed extraction/missing category data and read-only preview. No production DB
 was accessed, so a particular operator's empty queue still requires its admission
-counts for diagnosis. No migration or environment changes are needed.
+counts for diagnosis. No database migration is needed. The former TELCLAW_ADVERTIO_JOBS_SOURCES
+allowlist setting is no longer read or shown; old .env or persisted overrides
+are ignored without removing the stored historical value.
 
 ## Recover successful AI flags with missing Jobs data
 

@@ -314,7 +314,7 @@ def test_ai_inferred_type_and_default_are_accepted_without_literal_evidence(env)
 
 
 def test_professional_work_request_uses_other_with_stated_specialty(env):
-    source = "Looking for a legal consultant to work on a legal matter in Toronto."
+    source = "Looking for a legal consultant to work on a legal matter in Toronto. CAD 20/hour."
     payload, _ = env[0].build_payload(record(
         cleaned_text=source, role="employer", job_category="other",
         job_title="Legal consultant", job_type=None,
@@ -326,6 +326,16 @@ def test_professional_work_request_uses_other_with_stated_specialty(env):
     assert attrs["job_title"] == "Legal consultant"
     assert payload["title"] == "Hiring · Legal consultant · Toronto"
     assert payload["description"] == source
+
+
+def test_internal_job_type_resolution_is_persisted_but_not_sent(env):
+    service, _ = env
+    mid = add_post(changes={"job_type": "temporary", "job_type_resolution": "default"})
+    stored = database.get_category_record(mid, "joblist")
+    assert stored["job_type"] == "temporary"
+    assert stored["job_type_resolution"] == "default"
+    payload, _ = service.build_payload({**record(), **stored})
+    assert "job_type_resolution" not in json.loads(payload["attributesJson"])
 
 
 def test_no_unknown_other_fallback(env):

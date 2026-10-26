@@ -13,6 +13,7 @@ CATEGORY_TABLES["joblist"].update({key: "TEXT" for key in (
     "role", "job_category", "country_code", "province", "city", "work_arrangement",
 )})
 CATEGORY_TABLES["joblist"]["is_job_listing"] = "INTEGER"
+CATEGORY_TABLES["joblist"]["job_type_resolution"] = "TEXT"
 MESSAGE_COLUMNS["sender_is_original"] = "INTEGER"
 
 def get_connection():

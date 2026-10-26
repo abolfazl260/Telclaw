@@ -246,6 +246,45 @@ resume. Manual delivery uses the same service/lease/validation/budget. Settings 
 an independent Advertio Jobs group, including auto-publish and delivery limits.
 The existing authentication/CSRF requirements apply to these operations.
 
+## English failure diagnostics in Back Office
+
+Operations → Advertio Jobs → **Jobs failure diagnostics · stages & reasons (English)**
+shows read-only, server-side explanations from persisted state. It does not call AI,
+Advertio or the crawler and makes no queue mutations. Each row identifies the local
+message ID, source username and original Telegram message ID so the operator can
+locate and correct it without displaying the ad text or applicant details.
+
+- **Failure reasons by stage** summarizes persisted AI-extraction failed/skipped
+  outcomes and delivery blocked/rejected/retry statuses. PendingReview is shown
+  separately as **Advertio moderation**, *not* an API rejection.
+- **Latest delivery problems** samples the 50 most recently updated Jobs outbox
+  records in blocked, rejected, retry or accepted PendingReview state.
+  It shows saved error_code, English explanation, failing stage and the most
+  recent recorded HTTP status if an HTTP attempt actually occurred.
+- **Not yet in the Jobs delivery queue** samples up to 50 records, with up to
+  eight recent examples per AI status and admission reason. Stages distinguish
+  classification, AI extraction, missing structured joblist persistence, original
+  Telegram post date/freshness, and predeployment records requiring explicit
+  backfill. These are *not* Advertio API rejections. Existing admission count
+  columns remain authoritative for the full dataset.
+
+Examples of explanatory wording include "Required job category is missing",
+"Job category '...' is not a supported Advertio value", "City could not be
+matched uniquely in the Advertio Canadian city catalog", and "Advertio returned
+HTTP 400; the exact endpoint and rejected field are not stored". The actual
+field value (if any) is escaped and bounded to 60 characters. The explanation
+is derived from existing stable reason codes and structured fields, never from
+unsanitized server responses.
+
+**Limits:** AdvertioClient intentionally does not retain HTTP error bodies,
+because they may contain applicant information, tokens or copied source text.
+Therefore HTTP 400 cannot reliably identify a specific invalid field unless it
+was already caught by the local validation. Do not infer such a field from the
+HTTP status alone. AI failures without a saved reason receive a generic English
+message. The dashboard presents the *last recorded* remote status, not live
+moderation polling. No schema changes, historical data rewrites or extra
+publication actions are introduced by this diagnostic feature.
+
 ## Environment defaults
 
 | Variable (TELCLAW_ prefix) | Default |

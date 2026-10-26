@@ -85,7 +85,7 @@ def public_origin():
 
 
 def issue_link(admin_id):
-    """Issue a five-minute, single-use link only to approved Telegram admins."""
+    """Issue a one-hour, single-use link only to approved Telegram admins."""
     if int(admin_id) not in ADMIN_USER_IDS:
         raise PermissionError("Not an admin")
     base = public_origin()
@@ -96,7 +96,7 @@ def issue_link(admin_id):
         conn.execute("DELETE FROM backoffice_links WHERE expires_at < ? OR used_at IS NOT NULL",
                      (_now().isoformat(),))
         conn.execute("INSERT INTO backoffice_links VALUES(?,?,?,NULL)",
-                     (_digest(token), int(admin_id), (_now() + timedelta(minutes=5)).isoformat()))
+                     (_digest(token), int(admin_id), (_now() + timedelta(hours=1)).isoformat()))
         conn.commit()
     finally:
         conn.close()

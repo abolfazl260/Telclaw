@@ -51,9 +51,21 @@ redirect to another host.
 The Jobs allow-list/prompt now includes `role`, `job_category`, canonical `job_type`,
 `job_title`, `country_code`, `province`, `city`, `work_arrangement`, `salary`,
 `salary_currency`, `salary_period`, `description`, and `is_job_listing`.
-`is_job_listing` explicitly distinguishes employment from service promotions/spam.
-Unknown facts remain null. A full-time value additionally needs full-time wording
-in cleaned source text; equivalent English and Persian phrases are supported.
+`is_job_listing` includes genuine hiring, people seeking work, and actionable
+requests to engage an individual professional for paid or task-based work, even
+without a formal employment contract. Generic requests for information/referrals,
+standalone service promotions and spam remain excluded. For an identified profession
+outside the active taxonomy (including legal specialties), use `other` with a real
+`job_title`; unknown professions are not silently mapped to `other`.
+
+Jobs employment type follows explicit source text first, contextual AI inference
+second, and `temporary` as the final default. The extractor persists an internal
+`job_type_resolution` (`explicit`, `inferred`, `default`) in an additive SQLite column.
+Delivery applies `temporary` for missing/unsupported legacy job types after genuine
+Jobs intent is verified, without mutating the original extracted value or cleaned
+source description. The former literal employment-type keyword gate is removed;
+other category, location, provenance, safety and Advertio API checks remain.
+`job_type_resolution` is never included in Advertio `attributesJson`.
 
 Existing `employment_type`, company, skills, experience, education, location,
 remote, application method and contact remain in storage. Historical `job_type`

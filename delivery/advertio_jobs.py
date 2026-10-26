@@ -45,12 +45,6 @@ ENUMS = {
 }
 KEYS = set(ENUMS) | {"job_title", "salary"}
 REQUIRED = {"role", "job_category", "job_type"}
-TYPE_EVIDENCE = {
-    "full_time": r"\bfull[ -]?time\b|تمام[‌\s-]*وقت",
-    "part_time": r"\bpart[ -]?time\b|پاره[‌\s-]*وقت|نیمه[‌\s-]*وقت",
-    "contract": r"\bcontract(?:or|ual)?\b|قراردادی|پیمانکاری",
-    "temporary": r"\btemporary\b|\bseasonal\b|موقت|فصلی",
-}
 SCAM_SIGNALS = {
     "upfront_fee": r"(?:application|registration|recruitment|training|equipment)\s+fee|pay.{0,25}(?:to apply|before.{0,12}(?:start|hiring))|هزینه.{0,20}(?:ثبت[‌\s]*نام|استخدام)|پرداخت.{0,20}(?:بیعانه|ودیعه|پیش[‌\s]*پرداخت)",
     "bank_credentials": r"(?:bank(?:ing)?|online bank).{0,25}(?:password|login|credential|PIN)|(?:رمز|پسورد).{0,20}(?:بانک|حساب)|\b(?:OTP|one.time password)\b",
@@ -263,11 +257,24 @@ class AdvertioJobsService:
         attrs = {}
         for key in REQUIRED:
             value = record.get(key)
+            if key == "job_type" and (
+                not isinstance(value, str)
+                or value not in ENUMS["job_type"]
+                or (
+                    record.get("job_type_resolution") == "default"
+                    and value != "temporary"
+                )
+            ):
+                # The verified Jobs message can be delivered when its employment
+                # type was omitted or unsupported. Never apply this to non-Jobs:
+                # is_job_listing and other mandatory checks already ran.
+                value = "temporary"
             if not isinstance(value, str) or value not in ENUMS[key]:
                 raise JobsMappingError("invalid_or_missing_" + key)
             attrs[key] = value
-        if not re.search(TYPE_EVIDENCE[attrs["job_type"]], description, re.I):
-            raise JobsMappingError("employment_type_without_source_evidence")
+        # AI may infer job_type from schedule/task context. A literal keyword
+        # check against source text would incorrectly reject those inferences.
+        # Keep the original cleaned description unchanged.
         if attrs["job_category"] == "other" and not record.get("job_title"):
             raise JobsMappingError("other_requires_identified_occupation")
         schema = self.catalog.schema()

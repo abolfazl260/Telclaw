@@ -16,7 +16,7 @@ def build_classification_prompt(categories=None):
         "Category guide:\n"
         "- housinglist: rental housing, rooms, roommates, properties, apartments, condos, basements, studios.\n"
         "- transferlist: air-cargo, passenger baggage, luggage space, parcel/package carried by airline passenger, flight-based shipping.\n"
-        "- joblist: genuine job offers, hiring, or people seeking employment. Exclude business/service promotions, paid courses, spam and general conversation.\n"
+        "- joblist: genuine hiring, people seeking work, or an actionable request to engage an individual worker or professional for work, a task or consultation, including one-off work without an employment contract. Distinguish a request to engage a worker from a provider advertising services. Exclude standalone business/service promotions, requests for general information or referrals without engagement intent, paid courses, spam and general conversation.\n"
         "- none: irrelevant, unclear, spam, news, discussion, or not a marketplace listing.\n\n"
         "Return ONLY JSON with this exact shape:\n"
         '{"classifications":[{"message_id":101,"category":"housinglist"}]}\n'

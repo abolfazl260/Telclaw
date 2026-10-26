@@ -19,7 +19,7 @@ CATEGORY_FIELDS = {
     ),
     "joblist": (
         "role", "job_category", "country_code", "province", "city",
-        "work_arrangement", "is_job_listing",
+        "work_arrangement", "is_job_listing", "job_type_resolution",
         "job_title", "company", "location", "employment_type", "salary",
         "salary_currency", "salary_period", "experience", "education",
         "skills", "remote", "job_type", "description", "application_method",

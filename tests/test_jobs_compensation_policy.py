@@ -86,8 +86,9 @@ def test_existing_negotiable_text_not_duplicated(env):
 def test_prompt_short_policy():
     prompt = render_prompt("joblist")
     assert "Default salary_currency to CAD" in prompt
-    assert "use your understanding" in prompt
-    assert "listing should display Negotiable" in prompt
+    assert "extract only an actual stated amount" in prompt
+    assert "When no amount is stated" in prompt
+    assert "Never invent an amount or pay period." in prompt
     assert "actual explicit currency only" not in prompt
 
 

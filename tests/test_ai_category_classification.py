@@ -373,3 +373,13 @@ def test_requeue_only_invalid_provider_output_including_exhausted_legacy_errors(
     assert rows[404]["classification_status"] == "failed"
     assert rows[404]["classification_error"] == "rate_limit: provider unavailable"
     assert repo.retry_invalid_provider_output_classifications() == 0
+
+
+def test_jobs_classifier_includes_requests_to_engage_professionals():
+    from ai.category_classifier import build_classification_prompt
+
+    prompt = build_classification_prompt()
+    assert "joblist" in prompt
+    assert "engage an individual worker or professional" in prompt
+    assert "one-off work without an employment contract" in prompt
+    assert "Exclude standalone business/service promotions" in prompt

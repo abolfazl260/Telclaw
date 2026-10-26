@@ -82,3 +82,118 @@ def test_dashboard_explains_original_date_and_backfill_preview(env):
     assert 'original Telegram post date' in html
     assert 'Older than the permitted source-date window' in html
     assert report['backfill_discovery']['counts']['outside_source_date_window']==1
+
+
+def test_jobs_failure_diagnostics_category_city_and_english_stages(env):
+    from backoffice_jobs import jobs_report, jobs_section
+
+    service, client = env
+    category_id = add_post(changes={"job_category": "unlisted_category"})
+    city_id = add_post(message_id=102, changes={"city": "NotACanadianCity"})
+    assert service.deliver_pending()["blocked"] == 2
+    assert not client.sent
+
+    with closing(database.get_connection()) as conn:
+        report = jobs_report(conn)
+    issues = {item["id"]: item for item in report["delivery_issues"]}
+    assert issues[category_id]["stage"] == "Job validation"
+    assert "unlisted_category" in issues[category_id]["reason"]
+    assert "not a supported Advertio value" in issues[category_id]["reason"]
+    assert issues[city_id]["stage"] == "Location validation"
+    assert "NotACanadianCity" in issues[city_id]["reason"]
+    assert "could not be matched uniquely" in issues[city_id]["reason"]
+    assert issues[category_id]["http_status"] is None
+
+    html = jobs_section(report, lambda *a, **kw: "<form></form>", "")
+    assert "Jobs failure diagnostics" in html
+    assert "Failed stage" in html
+    assert "Explanation (English)" in html
+    assert "unlisted_category" in html
+    assert "NotACanadianCity" in html
+    assert "not a supported Advertio value" in html
+
+
+def test_jobs_failure_diagnostics_api_error_does_not_expose_response(env):
+    from backoffice_jobs import jobs_report, jobs_section
+    from delivery.advertio_client import AdvertioError
+
+    service, client = env
+    client.failure = AdvertioError(
+        "SECRET response body containing personal information",
+        status=400,
+        retryable=False,
+    )
+    add_post()
+    assert service.deliver_pending()["rejected"] == 1
+
+    with closing(database.get_connection()) as conn:
+        report = jobs_report(conn)
+    assert report["delivery_issues"][0]["stage"] == "Advertio HTTP / catalog"
+    assert report["delivery_issues"][0]["http_status"] == 400
+    assert "exact endpoint and rejected field are not stored" in report["delivery_issues"][0]["reason"]
+    html = jobs_section(report, lambda *a, **kw: "", "")
+    assert "HTTP 400" in html
+    assert "SECRET" not in html
+    assert config.ADVERTIO_INGEST_KEY not in html
+
+
+def test_jobs_failure_diagnostics_before_queue_and_pending_review(env, monkeypatch):
+    from backoffice_jobs import jobs_report, jobs_section
+
+    service, client = env
+    failed_id = add_post(message_id=201)
+    skipped_id = add_post(message_id=202)
+    missing_id = add_post(message_id=203)
+    historical_id = add_post(message_id=204, age_days=1)
+    with closing(database.get_connection()) as conn:
+        conn.execute(
+            "UPDATE messages SET ai_status='failed',ai_error='invalid_provider_output' WHERE id=?",
+            (failed_id,),
+        )
+        conn.execute(
+            "UPDATE messages SET ai_status='skipped',ai_error='skipped:category_disabled:joblist' WHERE id=?",
+            (skipped_id,),
+        )
+        conn.execute("DELETE FROM joblist WHERE processed_message_id=?", (missing_id,))
+        conn.execute(
+            "UPDATE advertio_jobs_meta SET value=? WHERE key='deployment_watermark'",
+            (str(historical_id),),
+        )
+        conn.commit()
+
+    with closing(database.get_connection()) as conn:
+        report = jobs_report(conn)
+    sample = {item["id"]: item for item in report["prequeue_issues"]}
+    assert sample[failed_id]["stage"] == "AI extraction"
+    assert "invalid or incomplete structured data" in sample[failed_id]["reason"]
+    assert "Jobs AI extraction was disabled" in sample[skipped_id]["reason"]
+    assert sample[missing_id]["stage"] == "AI persistence"
+    assert "no structured Jobs record was saved" in sample[missing_id]["reason"]
+    assert sample[historical_id]["stage"] == "Queue admission"
+    assert "backfill" in sample[historical_id]["reason"]
+
+    # Successful ingestion with remote PendingReview is not an HTTP rejection.
+    monkeypatch.setattr(config, "ADVERTIO_JOBS_BACKFILL_ENABLED", True)
+    assert service.enqueue(limit=1, backfill=True)["enqueued"] == 1
+    client.remote_status = "PendingReview"
+    assert service.deliver_pending()["sent"] == 1
+    with closing(database.get_connection()) as conn:
+        report = jobs_report(conn)
+    review = next(item for item in report["delivery_issues"] if item["id"] == historical_id)
+    assert review["stage"] == "Advertio moderation"
+    assert "not rejected" in review["reason"]
+    html = jobs_section(report, lambda *a, **kw: "", "")
+    assert "Advertio moderation" in html
+
+
+def test_jobs_failure_diagnostics_escapes_field_values(env):
+    from backoffice_jobs import jobs_report, jobs_section
+
+    service, client = env
+    add_post(changes={"job_category": '<script>alert(1)</script>'})
+    assert service.deliver_pending()["blocked"] == 1
+    with closing(database.get_connection()) as conn:
+        report = jobs_report(conn)
+    html = jobs_section(report, lambda *a, **kw: "", "")
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html

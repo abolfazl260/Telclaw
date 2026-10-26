@@ -55,7 +55,7 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    the domain in `TELCLAW_BACKOFFICE_PUBLIC_URL` only if HTTPS has a certificate valid
    for that IP. The public port and local 8787 port serve different purposes.
 4. Restart Telclaw and send `/backoffice` to the bot in a private chat from an
-   authorized Telegram account. The link expires after five minutes and can be
+   authorized Telegram account. The link expires after one hour and can be
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 

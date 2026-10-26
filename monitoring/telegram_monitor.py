@@ -187,7 +187,7 @@ class TelegramMonitor:
             except (RuntimeError, PermissionError) as exc:
                 logger.error("Back office link unavailable: %s", exc)
                 await self._send(chat_id,"Back office link is unavailable; check server configuration."); return
-            await self._send(chat_id,f'<a href="{html.escape(url, quote=True)}">Open private back office</a>\\nThis link expires in 5 minutes and works once.')
+            await self._send(chat_id,f'<a href="{html.escape(url, quote=True)}">Open private back office</a>\\nThis link expires in 1 hour and works once.')
     def _tehran_timestamp(self,value):
         if not value:return "هنوز ثبت نشده"
         try:

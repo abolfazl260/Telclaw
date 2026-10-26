@@ -275,6 +275,39 @@ async def test_backoffice_link_is_admin_only_and_single_use(rule_db, monkeypatch
         await backoffice_web.login(Request())
 
 
+
+@pytest.mark.asyncio
+async def test_backoffice_link_remains_valid_for_one_hour(rule_db, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    issued_at = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(backoffice_web.config, "BACKOFFICE_PUBLIC_URL", "https://office.example.org")
+    monkeypatch.setattr(backoffice_web, "_now", lambda: issued_at)
+    valid_url = backoffice_web.issue_link(1485409432)
+    expired_url = backoffice_web.issue_link(1485409432)
+
+    conn = rule_db()
+    try:
+        stored_expiries = [
+            datetime.fromisoformat(row["expires_at"])
+            for row in conn.execute("SELECT expires_at FROM backoffice_links")
+        ]
+    finally:
+        conn.close()
+    assert stored_expiries == [issued_at + timedelta(hours=1)] * 2
+
+    class Request:
+        def __init__(self, url):
+            self.query = {"token": url.split("token=", 1)[1]}
+
+    monkeypatch.setattr(backoffice_web, "_now", lambda: issued_at + timedelta(minutes=30))
+    with pytest.raises(web.HTTPSeeOther):
+        await backoffice_web.login(Request(valid_url))
+
+    monkeypatch.setattr(backoffice_web, "_now", lambda: issued_at + timedelta(hours=1))
+    with pytest.raises(web.HTTPForbidden):
+        await backoffice_web.login(Request(expired_url))
+
 @pytest.mark.asyncio
 async def test_direct_http_ip_link_allows_new_admin_login(rule_db, monkeypatch):
     config = backoffice_web.config

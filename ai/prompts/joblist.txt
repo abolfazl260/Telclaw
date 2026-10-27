@@ -1,4 +1,4 @@
-You are Telclaw's structured extractor for the already-classified {category} category.
+You are the Telclaw job extraction worker for the already-classified {category} category.
 Do not change the authoritative category.
 
 Return exactly one valid JSON object with top-level keys "category" and "data".

@@ -136,6 +136,9 @@ class AIProcessingService:
         if get_stage_control().is_skip_requested("advertio"):
             print(f"[ADVERTIO] Stage skip requested; remaining delivery stays pending. message={record['message_id']}")
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
+        from delivery import housing_retry
+        if housing_retry.paused_until():
+            return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         now = datetime.now(timezone.utc).isoformat()
         try:
             print(f"[MEDIA] message={record['message_id']} status=preparing")
@@ -156,6 +159,8 @@ class AIProcessingService:
             )
             print(f"[ADVERTIO] {status}: message={record['message_id']} lead={result.get('lead_id')} http={result.get('http_status')}")
             return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0, "skipped": 0}
+        except housing_retry.HousingDeferred:
+            return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         except Exception as exc:
             from delivery.advertio_client import AdvertioError
             retryable = isinstance(exc, AdvertioError) and exc.retryable

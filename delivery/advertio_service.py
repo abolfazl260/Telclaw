@@ -8,6 +8,7 @@ from pathlib import Path
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
+from delivery import housing_retry
 from storage.data_normalizer import availability_rent_period, normalize_housing_area, normalize_housing_availability
 from storage.message_repository import MessageRepository
 
@@ -384,11 +385,21 @@ class AdvertioDeliveryService:
 
     def deliver(self, record, data):
         """Upload media first, then create the lead. 400 is permanent; 429/5xx are retryable."""
-        payload = self.build_payload(record, data)
-        for path in self._media_paths(record)[:10]:
-            key = self.client.upload_media(path, self.source_name)
-            payload["mediaKeys"].append(key)
-        return self.client.create_lead(payload)
+        with housing_retry.SEND_LOCK:
+            housing_retry.check()
+            try:
+                payload = self.build_payload(record, data)
+                for path in self._media_paths(record)[:10]:
+                    housing_retry.check()
+                    key = self.client.upload_media(path, self.source_name)
+                    payload["mediaKeys"].append(key)
+                housing_retry.check()
+                return self.client.create_lead(payload)
+            except housing_retry.HousingDeferred:
+                raise
+            except AdvertioError as exc:
+                housing_retry.defer(exc)
+                raise
 
     def finalize_successful_delivery(self, record, result, *, repository=None, processed_at=None):
         """Persist successful delivery state before releasing local media.
@@ -471,6 +482,9 @@ class AdvertioDeliveryService:
 
     def deliver_pending(self, limit=100, channel_username=None, progress=True, media_downloader=None, before_datetime=None, should_stop=None):
         """Send processed housing records, optionally limited to work predating a cycle cutoff."""
+        pause = housing_retry.paused_until()
+        if pause:
+            return {"found": 0, "sent": 0, "already_existed": 0, "failed": 0, "paused_until": pause}
         if before_datetime is None:
             records = self.repository.get_advertio_pending(
                 limit=limit,
@@ -490,6 +504,7 @@ class AdvertioDeliveryService:
                 stopped = True
                 break
             try:
+                housing_retry.check()
                 self.prepare_media_for_delivery(record, media_downloader=media_downloader)
                 result = self.deliver(record, record["housing_data"])
                 status = self.finalize_successful_delivery(record, result)
@@ -499,6 +514,8 @@ class AdvertioDeliveryService:
                     sent += 1
                 if progress:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']}")
+            except housing_retry.HousingDeferred:
+                break
             except Exception as exc:
                 retryable = isinstance(exc, AdvertioError) and exc.retryable
                 status = "retry" if retryable else "rejected"
@@ -511,9 +528,14 @@ class AdvertioDeliveryService:
                 logger.error("[ADVERTIO DELIVERY ERROR] status=%s message_id=%s channel=%s reason=%s", status, record["message_id"], record["channel_username"], exc)
                 if progress:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']} reason={str(exc)[:300]}")
+                if housing_retry.paused_until():
+                    break
         result = {"found": total, "sent": sent, "already_existed": already_existed, "failed": failed}
         if stopped:
             result["stopped"] = True
+        pause = housing_retry.paused_until()
+        if pause:
+            result["paused_until"] = pause
         return result
 
     def delete_original_post_listing(self, external_id):

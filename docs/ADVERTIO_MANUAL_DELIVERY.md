@@ -75,3 +75,25 @@ This manual menu is a delivery operation only. It must not trigger:
 The source of truth for the Advertio payload is the existing persisted `housinglist` record created during AI processing.
 
 Photo delivery is fail-closed: when a record says `media_type=photo`, Advertio must not receive that lead with an empty `mediaKeys` array merely because the local cache is missing. Media must first be restored successfully or the record remains retryable.
+
+### Housing Retry-After
+
+Housing persists its API cooldown in `advertio_housing_cooldown`. A retryable
+Advertio error with a positive `Retry-After` pauses all Housing sends until that
+UTC time; the numeric and HTTP-date header formats are parsed by the shared
+client. A 429 with no usable positive delay defaults to 60 seconds. A later,
+shorter delay cannot replace an existing longer pause. Other errors without a
+server wait retain their existing retry/permanent-failure behavior.
+
+The same guard applies to manual/scheduled `deliver_pending`, inline Housing
+publication after AI extraction, media uploads and direct service delivery.
+The first limited row retains retry status and media; untouched rows remain
+waiting. During the pause, queue results include `paused_until`, and inline AI
+reports skipped/no delivery attempt while retaining successful extraction.
+The cooldown survives process restart and is checked before the queue resumes;
+no blocking sleep is added. A process-local send lock prevents concurrent Housing
+service instances from starting a new send before the first response's pause
+has been saved. Requests already in flight in another process cannot be recalled.
+Jobs/Cargo policy, source identity, terminal statuses and API payloads are unchanged.
+The cooldown table is created only when a qualifying wait must be saved; normal
+checks do not migrate the database or require a full reinitialization.

@@ -51,3 +51,19 @@ Rollback by reverting the feature commit; saved records and queue states remain.
 
 Reference: https://console.groq.com/docs/structured-outputs and
 https://console.groq.com/docs/api-reference (verified 2026-10-25).
+
+## Reading extraction progress
+
+`status=processed` means structured extraction was saved. It does not assert
+publication eligibility, complete fields, queue admission, or API acceptance.
+`advertio=sent` and `advertio=already_existed` require positive delivery evidence;
+otherwise progress reports `not_attempted`, `skipped`, `failed`, or `unknown`.
+Jobs and Cargo use independent delivery stages: extraction prints
+`advertio=not_attempted`, `delivery_stage=jobs_queue`/`cargo_queue`, and
+`publication_validation=not_checked`. This is routing information, not proof that
+the record is already queued. Jobs also prints the extracted listing-verification
+flag as verified/not_verified/unknown; this flag alone is not publication eligibility.
+The Jobs delivery worker logs local validation failures with their error code and
+`api_attempted=false`; manual progress prints the same blocked outcome. Read the
+actual delivery record/API outcome to determine whether a listing was sent or
+accepted; accepted does not necessarily mean publicly active.

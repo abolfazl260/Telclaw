@@ -165,6 +165,32 @@ class AIProcessingService:
             print(f"[ADVERTIO] {status}: message={record['message_id']} reason={str(exc)[:300]}")
             return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
 
+    @staticmethod
+    def _delivery_progress(category, delivery, data):
+        # Extraction success does not imply eligibility, queue admission or API
+        # acceptance. Only positive delivery evidence can report a send.
+        if delivery.get("failed"):
+            outcome = "failed"
+        elif delivery.get("sent"):
+            outcome = "sent"
+        elif delivery.get("already_existed"):
+            outcome = "already_existed"
+        elif delivery.get("skipped"):
+            outcome = "skipped"
+        elif delivery.get("attempted"):
+            outcome = "unknown"
+        else:
+            outcome = "not_attempted"
+        details = {"advertio": outcome}
+        if category in {"joblist", "transferlist"}:
+            details["delivery_stage"] = "jobs_queue" if category == "joblist" else "cargo_queue"
+            details["publication_validation"] = "not_checked"
+        if category == "joblist":
+            value = data.get("is_job_listing")
+            details["job_listing"] = ("verified" if value in (True, 1, "true") else
+                                      "not_verified" if value in (False, 0, "false") else "unknown")
+        return details
+
     def _process(self, records, *, progress=False, should_stop=None, offset=0):
         total = len(records)
         processed = failed = skipped = 0
@@ -218,7 +244,7 @@ class AIProcessingService:
                 delivery = self._deliver_to_advertio(record, category, data)
                 for key in advertio: advertio[key] += delivery.get(key, 0)
                 processed += 1
-                if progress: self._print_message_status(index, offset + total, record, category, "processed", advertio="ok" if not delivery.get("failed") else "failed")
+                if progress: self._print_message_status(index, offset + total, record, category, "processed", **self._delivery_progress(category, delivery, data))
             except AIExtractionError as exc:
                 self._log_ai_error(record, exc)
                 self.repository.mark_ai_result(

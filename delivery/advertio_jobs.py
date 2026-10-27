@@ -735,6 +735,13 @@ class AdvertioJobsService:
                 except JobsMappingError as exc:
                     self._finish(record, token, "blocked", error=str(exc), flags=flags)
                     result["blocked"] += 1
+                    log.info(
+                        "Jobs delivery id=%s message=%s channel=%s outcome=blocked reason=%s api_attempted=false",
+                        record["message_row_id"], record["message_id"], record["channel_username"], str(exc),
+                    )
+                    if progress:
+                        print(f"[ADVERTIO JOBS] id={record['message_row_id']} message={record['message_id']} "
+                              f"status=blocked reason={exc} api_attempted=false")
                 except AdvertioError as exc:
                     reason = (
                         "http_" + str(exc.status)

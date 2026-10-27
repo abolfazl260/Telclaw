@@ -432,10 +432,16 @@ class BackofficeOperations:
 
         return download
 
-    def start_ai(self, account_name, requested_by=None):
+    def start_ai(self, account_name, requested_by=None, max_messages=100):
         account_name = str(account_name or "").strip()
         if not account_name:
             raise ValueError("Select a Telegram account for AI extraction")
+        try:
+            max_messages = int(max_messages)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AI extraction message limit must be an integer") from exc
+        if not 1 <= max_messages <= 1000:
+            raise ValueError("AI extraction message limit must be between 1 and 1000")
 
         async def operation(stop_event):
             client = await self._connect_account(account_name)
@@ -444,12 +450,13 @@ class BackofficeOperations:
                 return await asyncio.to_thread(
                     self.ai.process_pending_with_stats,
                     should_stop=stop_event.is_set,
+                    max_messages=max_messages,
                 )
 
         return self._start_background(
             "ai",
             requested_by,
-            {"account": str(account_name or "")},
+            {"account": str(account_name or ""), "max_messages": max_messages},
             operation,
         )
 

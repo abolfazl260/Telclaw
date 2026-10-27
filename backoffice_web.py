@@ -1640,12 +1640,23 @@ async def operations_page(request):
 
     categories = []
     channel_groups = []
+
+    def channel_source_cell(item):
+        username = str(item.get("username") or "").strip().lstrip("@")
+        if username:
+            return "@" + _escape(username)
+        invite = str(item.get("invite_link") or "").strip()
+        if re.fullmatch(r"https://t\.me/\+[A-Za-z0-9_-]+", invite):
+            return (f'<a href="{_escape(invite)}" target="_blank" '
+                    'rel="noopener noreferrer">Private invite (not scheduled)</a>')
+        return "Not scheduled (missing username)"
+
     for category, items in channel_data.items():
         categories.append(
             f'<label class="check"><input type="checkbox" name="category" value="{_escape(category)}"> {_escape(category)}</label>'
         )
         rows = "".join(
-            f"<tr><td>@{_escape(item.get('username') or '')}</td><td>{_escape(item.get('name') or '—')}</td>"
+            f"<tr><td>{channel_source_cell(item)}</td><td>{_escape(item.get('name') or '—')}</td>"
             f"<td>{_escape(item.get('description') or '—')}</td></tr>"
             for item in (items or []) if isinstance(item, dict)
         )

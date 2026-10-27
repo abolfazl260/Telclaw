@@ -47,6 +47,48 @@
       "username": "VancouverHiring",
       "country": "Canada",
       "description": "Hiring and job opportunities in Vancouver."
+    },
+    {
+      "name": "Vancouver Iranian Jobs",
+      "username": "VancouverIranian",
+      "country": "Canada",
+      "description": "Jobs and community classifieds for Iranians in Vancouver."
+    },
+    {
+      "name": "Vancouver Employment and Employers",
+      "username": "EmploymentAndEmployersVancouver",
+      "country": "Canada",
+      "description": "Persian-speaking community connecting job seekers and employers in British Columbia."
+    },
+    {
+      "name": "Persian Women Career Ads",
+      "username": "persianwomencareerads",
+      "country": "Canada",
+      "description": "User-submitted career-advertisement source; individual job locations require verification."
+    },
+    {
+      "name": "Montreal Hiring",
+      "username": "MontrealHiring",
+      "country": "Canada",
+      "description": "User-submitted Montreal hiring source; verify individual job advertisements."
+    },
+    {
+      "name": "Jobs for You",
+      "username": "JOBSFOURYOU",
+      "country": "Canada",
+      "description": "User-submitted job opportunity source; verify Canadian locations in individual messages."
+    },
+    {
+      "name": "Uzbek Canada Community News",
+      "username": "UZimiznikilar_News",
+      "country": "Canada",
+      "description": "Uzbek-speaking Canadian community sharing jobs and other classified information."
+    },
+    {
+      "name": "Canada Jobs — Private Invitation (pending resolution)",
+      "country": "Canada",
+      "description": "Invitation-only Telegram source. Not scheduled for crawling until resolved to a stable Telegram username or chat ID.",
+      "invite_link": "https://t.me/+BlviDU3G7OPUZOpuFEEuKg"
     }
   ],
   "Canada_Immigrate": [

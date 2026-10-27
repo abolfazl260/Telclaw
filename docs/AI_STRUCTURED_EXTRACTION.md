@@ -67,3 +67,16 @@ The Jobs delivery worker logs local validation failures with their error code an
 `api_attempted=false`; manual progress prints the same blocked outcome. Read the
 actual delivery record/API outcome to determine whether a listing was sent or
 accepted; accepted does not necessarily mean publicly active.
+
+### Cloudflare account rate-limit failover
+
+Extraction supports up to three Cloudflare account/token/model sets. A retryable
+HTTP failure (including 429) cools down that account before selecting another
+available account, including wrapping from the third back to a recovered first
+or second account. Account failover can try all configured accounts even when
+`AI_RETRY_COUNT` is zero; repeated transitions remain bounded. Positive
+`Retry-After` values are retained, and a missing/zero value uses a positive
+configured cooldown. If all accounts are cooling down, no request is made to
+them; the outer AI retry/failover handler receives the earliest account recovery
+time. Other configured provider types can then be used by the existing manager.
+This is failure-driven routing, not equal traffic distribution or new quota.

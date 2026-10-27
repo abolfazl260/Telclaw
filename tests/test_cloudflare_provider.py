@@ -269,3 +269,67 @@ def test_cloudflare_invalid_structure_exhaustion_uses_manager_fallback(monkeypat
     result = manager.extract("General digest", "joblist")
     assert result["data"]["joblist"]["is_job_listing"] is False
     assert len(calls) == 2
+
+
+def _three_cloudflare_accounts():
+    return CloudflareProvider(providers=[
+        dict(account_id=f'account-{i}', api_token=f'test-token-{i}', model='@cf/test/model')
+        for i in range(1, 4)
+    ], rate_limiter=FakeRateLimiter())
+
+
+def _limited_cloudflare_response(wait):
+    response = Response('')
+    response.ok = False
+    response.status_code = 429
+    response.headers = {'Retry-After': str(wait)}
+    return response
+
+
+@pytest.mark.parametrize('category', CATEGORY_FIELDS)
+@pytest.mark.parametrize('retry_budget', [0, 1, 3])
+def test_cloudflare_extraction_uses_all_three_accounts_then_wraps(monkeypatch, category, retry_budget):
+    import config
+    monkeypatch.setattr(config, 'AI_RETRY_COUNT', retry_budget)
+    clock = [100.0]
+    monkeypatch.setattr('ai.providers.cloudflare.time.monotonic', lambda: clock[0])
+    valid = lambda: Response(json.dumps({'category': category, 'data': {category: {'description': 'source facts'}}}))
+    replies = iter([_limited_cloudflare_response(10), _limited_cloudflare_response(20), valid(),
+                    _limited_cloudflare_response(30), valid()])
+    calls = []
+    def post(url, **kwargs):
+        calls.append(url.split('/accounts/')[1].split('/')[0])
+        return next(replies)
+    monkeypatch.setattr('ai.providers.cloudflare.requests.post', post)
+    provider = _three_cloudflare_accounts()
+    assert provider.extract('source facts', category)['category'] == category
+    assert calls == ['account-1', 'account-2', 'account-3']
+    clock[0] = 111.0  # First recovered, second still cooling, third now limited.
+    assert provider.extract('more source facts', category)['category'] == category
+    assert calls == ['account-1', 'account-2', 'account-3', 'account-3', 'account-1']
+
+
+def test_all_cloudflare_accounts_cool_down_until_earliest_recovery(monkeypatch):
+    import config
+    monkeypatch.setattr(config, 'AI_RETRY_COUNT', 3)
+    clock = [100.0]
+    monkeypatch.setattr('ai.providers.cloudflare.time.monotonic', lambda: clock[0])
+    replies = iter([_limited_cloudflare_response(30), _limited_cloudflare_response(10), _limited_cloudflare_response(60),
+                    Response(json.dumps({'category': 'joblist', 'data': {'joblist': {}}}))])
+    calls = []
+    def post(url, **kwargs):
+        calls.append(url.split('/accounts/')[1].split('/')[0]); return next(replies)
+    monkeypatch.setattr('ai.providers.cloudflare.requests.post', post)
+    provider = _three_cloudflare_accounts()
+    manager = AIProviderManager(provider=provider)
+    with pytest.raises(AIExtractionError) as raised:
+        manager.extract('source facts', 'joblist')
+    assert raised.value.status == 429
+    assert raised.value.retry_after == pytest.approx(10)
+    assert calls == ['account-1', 'account-2', 'account-3']
+    with pytest.raises(AIExtractionError):
+        manager.extract('source facts', 'joblist')
+    assert len(calls) == 3  # Cooling accounts must receive no HTTP calls.
+    clock[0] = 111.0
+    assert manager.extract('source facts', 'joblist')['category'] == 'joblist'
+    assert calls[-1] == 'account-2'

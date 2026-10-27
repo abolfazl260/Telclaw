@@ -91,7 +91,8 @@ class CloudflareProvider(AIProvider):
 
     def _next_available(self):
         now = time.monotonic()
-        for index in range(self.active_index + 1, len(self.providers)):
+        for offset in range(1, len(self.providers)):
+            index = (self.active_index + offset) % len(self.providers)
             if self._unavailable_until[index] <= now:
                 return index
         return None
@@ -133,12 +134,18 @@ class CloudflareProvider(AIProvider):
     def _request(self, messages, *, validator=None):
         attempts = 0
         invalid_output_attempts = 0
-        while attempts <= config.AI_RETRY_COUNT:
+        # Trying another configured account is failover, even with retries=0.
+        attempt_budget = max(config.AI_RETRY_COUNT, len(self.providers) - 1)
+        while attempts <= attempt_budget:
             now = time.monotonic()
             if self._unavailable_until[self.active_index] > now:
                 next_index = self._next_available()
                 if next_index is None:
-                    time.sleep(max(0.0, self._unavailable_until[self.active_index] - now))
+                    raise AIExtractionError(
+                        "All Cloudflare accounts are temporarily unavailable",
+                        provider=self.name, status=429, reason="rate_limit",
+                        retry_after=max(0.0, min(self._unavailable_until) - now),
+                    )
                 else:
                     self.active_index = next_index
             request_messages = list(messages)
@@ -158,7 +165,9 @@ class CloudflareProvider(AIProvider):
             except requests.RequestException as exc:
                 self._unavailable_until[self.active_index] = time.monotonic() + config.AI_COOLDOWN_SECONDS
                 next_index = self._next_available()
-                if next_index is not None:
+                if next_index is not None and attempts < attempt_budget:
+                    logger.warning("Cloudflare account failover: from=%s to=%s reason=network_error",
+                                   self.active_index + 1, next_index + 1)
                     self.active_index = next_index
                     attempts += 1
                     continue
@@ -170,13 +179,24 @@ class CloudflareProvider(AIProvider):
                 reason = self._reason(status)
                 retry_after = self._retry_after(response.headers, detail) if status == 429 else None
                 logger.error("Cloudflare provider error: status=%s model=%s reason=%s", status, self.model, reason)
-                next_index = self._next_available() if status in {401, 403, 429, 500, 502, 503, 504} else None
-                if next_index is not None:
-                    cooldown = retry_after if retry_after is not None else config.AI_COOLDOWN_SECONDS
+                next_index = None
+                if status in {401, 403, 429, 500, 502, 503, 504}:
+                    cooldown = max(1.0, config.AI_COOLDOWN_SECONDS)
+                    if retry_after is not None and retry_after > 0:
+                        cooldown = retry_after
+                    # Mark even the final account before a wrapped search.
                     self._unavailable_until[self.active_index] = time.monotonic() + cooldown
+                    next_index = self._next_available()
+                if next_index is not None and attempts < attempt_budget:
+                    logger.warning("Cloudflare account failover: from=%s to=%s reason=%s",
+                                   self.active_index + 1, next_index + 1, reason)
                     self.active_index = next_index
                     attempts += 1
                     continue
+                if status == 429:
+                    # Let the outer retry/failover policy wait until the first
+                    # account becomes eligible, rather than the last one's delay.
+                    retry_after = max(0.0, min(self._unavailable_until) - time.monotonic())
                 raise AIExtractionError(
                     f"Cloudflare request failed: status={status}; model={self.model}; reason={reason}",
                     provider=self.name, status=status, reason=reason,

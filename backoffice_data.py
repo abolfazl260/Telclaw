@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from storage.database import CATEGORY_TABLES, get_connection
 from storage.data_normalizer import aliasable_fields, normalize_field_value, normalize_structured_field_value
 
-TABLES = ("messages", "transferlist", "housinglist", "joblist")
+TABLES = ("messages", "transferlist", "housinglist", "joblist", "external_category_sources")
 MESSAGE_EDITABLE = frozenset({"text", "raw_text", "cleaned_text", "date", "channel_name",
                               "sender_username", "sender_type", "message_link"})
 PAGE_SIZE = 25
@@ -51,7 +51,7 @@ def _columns(conn, table):
 
 def _editable(table, column, columns):
     return column in columns and (column in MESSAGE_EDITABLE if table == "messages"
-                                  else column in CATEGORY_TABLES[table])
+                                  else column in CATEGORY_TABLES.get(table, {}))
 
 
 def initialize():

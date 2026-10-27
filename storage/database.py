@@ -54,10 +54,10 @@ def _migrate_messages_table(cursor):
     cursor.execute("UPDATE messages SET ai_started_at=NULL WHERE ai_status <> 'processing' OR ai_status IS NULL")
 
 def _create_category_table(cursor,table,fields):
-    columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER NOT NULL UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]
+    columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]
     cursor.execute(f"CREATE TABLE {table} ({', '.join(columns)})")
 
-def _rebuild_category_table(cursor,table,fields,existing_columns):
+def _rebuild_category_table(cursor,table,fields,existing_columns,*,preserve_values=False):
     temp_table=f"{table}_new"
     cursor.execute(f"DROP TABLE IF EXISTS {temp_table}")
     _create_category_table(cursor,temp_table,fields)
@@ -67,7 +67,7 @@ def _rebuild_category_table(cursor,table,fields,existing_columns):
         column_sql=", ".join(copy_columns)
         select_expressions=[]
         for column in copy_columns:
-            if table=="housinglist" and column=="bathrooms":
+            if not preserve_values and table=="housinglist" and column=="bathrooms":
                 select_expressions.append(
                     """CASE
                         WHEN CAST(bathrooms AS REAL) >= 1
@@ -76,7 +76,7 @@ def _rebuild_category_table(cursor,table,fields,existing_columns):
                         ELSE NULL
                     END AS bathrooms"""
                 )
-            elif table=="housinglist" and column=="furnished":
+            elif not preserve_values and table=="housinglist" and column=="furnished":
                 select_expressions.append(
                     """CASE
                         WHEN furnished IS NULL THEN NULL
@@ -115,6 +115,10 @@ def _create_category_tables(cursor):
             )
             if (table=="transferlist" and existing!=desired) or type_mismatch:
                 _rebuild_category_table(cursor,table,fields,existing)
+            elif any(r[1]=="processed_message_id" and r[3] for r in table_info):
+                # Website imports have no Telegram parent. Preserve historical
+                # values exactly when only relaxing this constraint.
+                _rebuild_category_table(cursor,table,fields,existing,preserve_values=True)
             else:
                 for n,d in fields.items():
                     if n not in existing: cursor.execute(f"ALTER TABLE {table} ADD COLUMN {n} {d}")
@@ -123,6 +127,7 @@ def _create_category_tables(cursor):
 def initialize_db():
     conn=get_connection()
     try:
+        conn.execute("BEGIN")
         cursor=conn.cursor(); cursor.execute("""CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, channel_username TEXT NOT NULL, message_id INTEGER NOT NULL, text TEXT, raw_text TEXT, cleaned_text TEXT, date TEXT NOT NULL, media_path TEXT, message_link TEXT, media_reference TEXT, collection_status TEXT NOT NULL DEFAULT 'collected', processing_status TEXT NOT NULL DEFAULT 'pending', ai_status TEXT NOT NULL DEFAULT 'waiting', pipeline_version TEXT, cleaned_at TEXT, ai_category TEXT, ai_processed_at TEXT, ai_error TEXT, channel_id INTEGER, channel_name TEXT, sender_id INTEGER, sender_username TEXT, sender_type TEXT, has_media INTEGER NOT NULL DEFAULT 0, media_type TEXT, file_unique_id TEXT, media_group_id TEXT, media_paths TEXT, advertio_status TEXT NOT NULL DEFAULT 'waiting', advertio_lead_id TEXT, advertio_error TEXT, advertio_processed_at TEXT, classification_status TEXT NOT NULL DEFAULT 'waiting', classification_category TEXT, classification_error TEXT, classification_processed_at TEXT, classification_attempts INTEGER NOT NULL DEFAULT 0, UNIQUE(channel_username,message_id))""")
         _migrate_messages_table(cursor)
         for sql in ("CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date)","CREATE INDEX IF NOT EXISTS idx_messages_channel_date ON messages(channel_username,date)","CREATE INDEX IF NOT EXISTS idx_messages_collection_status ON messages(collection_status)","CREATE INDEX IF NOT EXISTS idx_messages_processing_status ON messages(processing_status)","CREATE INDEX IF NOT EXISTS idx_messages_classification_status ON messages(classification_status)","CREATE INDEX IF NOT EXISTS idx_messages_ai_status ON messages(ai_status)","CREATE INDEX IF NOT EXISTS idx_messages_media_type ON messages(media_type)","CREATE INDEX IF NOT EXISTS idx_messages_media_group_id ON messages(media_group_id)","CREATE INDEX IF NOT EXISTS idx_messages_ai_category ON messages(ai_category)","CREATE INDEX IF NOT EXISTS idx_messages_sender_id ON messages(sender_id)","CREATE INDEX IF NOT EXISTS idx_messages_advertio_status ON messages(advertio_status)"): cursor.execute(sql)
@@ -139,7 +144,17 @@ def initialize_db():
         )""")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_created ON system_activity(created_at DESC)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_kind ON system_activity(kind, created_at DESC)")
-        _create_category_tables(cursor); conn.commit()
+        _create_category_tables(cursor)
+        cursor.execute("""CREATE TABLE IF NOT EXISTS external_category_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT NOT NULL CHECK(category IN ('joblist','housinglist','transferlist')),
+            category_record_id INTEGER NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'website', source_url TEXT NOT NULL,
+            source_date TEXT, raw_text TEXT, imported_by INTEGER NOT NULL,
+            imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(category,source_url), UNIQUE(category,category_record_id)
+        )""")
+        conn.commit()
         from storage.advertio_jobs_queue import initialize_jobs_schema
         initialize_jobs_schema(conn)
     finally: conn.close()

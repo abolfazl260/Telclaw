@@ -7,7 +7,7 @@ import sqlite3
 import time
 
 TABLES = frozenset({
-    'messages', 'housinglist', 'transferlist', 'joblist', 'transfer_locations',
+    'external_category_sources', 'messages', 'housinglist', 'transferlist', 'joblist', 'transfer_locations',
     'advertio_jobs_deliveries', 'advertio_jobs_attempts',
     'advertio_cargo_deliveries', 'advertio_cargo_attempts', 'advertio_request_log',
 })

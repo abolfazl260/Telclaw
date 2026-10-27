@@ -2,6 +2,12 @@
 
 Telclaw is a Telegram data-processing pipeline. Its purpose is to collect information from selected Telegram sources, clean and normalize the data, prepare structured datasets for category-based AI processing, validate AI results, and eventually deliver approved structured outputs to downstream services.
 
+## AI database analysis (MCP)
+
+An optional read-only MCP server lets an AI inspect source text, extracted fields,
+queues and delivery failures, or run bounded analytical SQL. See
+[setup, tools and connection examples](docs/MCP_DATABASE.md).
+
 ## Advertio cargo delivery
 
 Processed passenger-cargo (`transferlist`) ads can also be delivered to the Advertio

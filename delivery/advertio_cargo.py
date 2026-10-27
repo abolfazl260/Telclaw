@@ -87,7 +87,8 @@ def _contact(record):
     match = re.search(r"(?<![A-Za-z0-9_])@([A-Za-z0-9_]{5,32})\b", explicit)
     if match and match.group(1).casefold() != str(record.get("channel_username") or "").lstrip("@").casefold():
         return "@" + match.group(1)
-    if record.get("sender_type") == "user":
+    if record.get("sender_type") in {"user", "admin_forward_text"}:
+        # Text contact from an administrator forward is unverified; never add a poster ID.
         username = str(record.get("sender_username") or "").lstrip("@")
         if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
             return "@" + username

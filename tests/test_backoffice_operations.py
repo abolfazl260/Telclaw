@@ -52,11 +52,13 @@ class FakeAI:
     def __init__(self):
         self.media_downloader = None
         self.repository = FakeAIRepository()
+        self.requested_limits = []
 
     def set_media_downloader(self, downloader):
         self.media_downloader = downloader
 
-    def process_pending_with_stats(self, should_stop=None):
+    def process_pending_with_stats(self, should_stop=None, max_messages=None):
+        self.requested_limits.append(max_messages)
         return {
             "found": 1,
             "processed": 1,
@@ -168,6 +170,29 @@ async def test_backoffice_operations_ai_reuses_selected_terminal_account(monkeyp
     assert operations.state("ai")["status"] == "completed"
     assert console.client_account == "primary"
     assert callable(console.ai_service.media_downloader)
+    assert console.ai_service.requested_limits == [100]
+    assert operations.state("ai")["params"]["max_messages"] == 100
+
+
+@pytest.mark.asyncio
+async def test_manual_ai_extract_limit_is_forwarded_and_logged(monkeypatch):
+    console = FakeConsole()
+    operations = BackofficeOperations(console_ui=console)
+    monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *args, **kwargs: None)
+
+    operations.start_ai("primary", requested_by=8, max_messages=27)
+    await operations._tasks["ai"]
+
+    assert operations.state("ai")["status"] == "completed"
+    assert operations.state("ai")["params"]["max_messages"] == 27
+    assert console.ai_service.requested_limits == [27]
+
+
+@pytest.mark.parametrize("value", [0, -1, 1001, "invalid", None])
+def test_manual_ai_extract_rejects_invalid_message_limit(value):
+    operations = BackofficeOperations(console_ui=FakeConsole())
+    with pytest.raises(ValueError, match="AI extraction message limit"):
+        operations.start_ai("primary", max_messages=value)
 
 
 def test_backoffice_app_exposes_terminal_equivalent_operations_routes():
@@ -292,6 +317,9 @@ async def test_operations_page_renders_terminal_controls(monkeypatch):
     assert "Run Processing" in response.text
     assert "Run Classification" in response.text
     assert "Run AI Extraction" in response.text
+    assert 'name="max_messages"' in response.text
+    assert 'max="1000"' in response.text
+    assert "Total messages for this manual run" in response.text
     assert "Start scheduled crawler" in response.text
     assert "Send eligible ads to Advertio" in response.text
     assert "Test Groq connection" in response.text

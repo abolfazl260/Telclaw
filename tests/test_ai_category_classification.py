@@ -383,3 +383,5 @@ def test_jobs_classifier_includes_requests_to_engage_professionals():
     assert "engage an individual worker or professional" in prompt
     assert "one-off work without an employment contract" in prompt
     assert "Exclude standalone business/service promotions" in prompt
+    assert "Link-only vacancy teasers" in prompt
+    assert "Do not treat recruiters or vacancy feeds as job seekers." in prompt

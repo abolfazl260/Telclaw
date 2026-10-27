@@ -82,6 +82,27 @@ Otherwise use the actual stored post URL, or construct its canonical public URL
 from the known source username and original message ID (needed for legacy
 text-only collector rows). Private `/c/` links must match the stored channel ID.
 
+
+### Evidence-first Jobs AI prompt
+
+The Jobs classification and extraction prompts now distinguish an actual
+recruitment/work request from a third-party link-only vacancy teaser or job-board
+digest. A promoted occupation or an external vacancy URL does not by itself verify
+a specific hiring request; such posts should not create publishable Jobs records.
+The extractor never treats a vacancy feed as an individual looking for work.
+The new instructions do not rely on hard-coded message examples or source-channel
+exceptions.
+
+Jobs `job_type_resolution=explicit` requires directly stated working terms;
+supported contextual evidence can support `inferred`; a verified advertisement
+without those details defaults to `temporary` with `default` provenance.
+The AI may not infer a Canadian city, salary, company or job terms from URL
+slugs, source channel identity or a linked page it has not fetched.
+An actually verifiable Jobs listing with no stated city remains valid Jobs intent
+but still fails delivery location validation. To publish such listings, a separate
+trusted external-page ingestion/enrichment pipeline is needed; editing the prompt
+cannot recover a location absent from the Telegram message.
+
 ## Mandatory attributes and taxonomy
 
 `attributesJson` is serialized once as a JSON **string**. Required values:

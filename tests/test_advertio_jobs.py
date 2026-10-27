@@ -822,8 +822,12 @@ def test_ai_schema_keeps_legacy_and_no_fabricated_currency():
     prompt = render_prompt("joblist")
     assert "NEVER job_type" in prompt and "other" in prompt
     assert "job_type_resolution" in prompt
-    assert "temporary if neither" in prompt
-    assert "professional engagement" in prompt
+    assert "temporary as the required default" in prompt
+    assert "professional" in prompt
+    assert "LISTING VERIFICATION" in prompt
+    assert "a country name is NEVER a city" in prompt
+    assert "Do not derive a job title solely by decoding URL slugs." in prompt
+    assert "Do not treat the source channel" in prompt
     assert "Examples:" not in prompt
     assert "job_type_resolution" in CATEGORY_FIELDS["joblist"]
 

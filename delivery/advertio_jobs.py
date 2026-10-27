@@ -11,6 +11,7 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 from delivery.jobs_discovery import discovery_report
+from ai.category_schemas import normalize_job_location
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
 from storage.database import get_connection
@@ -278,8 +279,11 @@ class AdvertioJobsService:
         if attrs["job_category"] == "other" and not record.get("job_title"):
             raise JobsMappingError("other_requires_identified_occupation")
         schema = self.catalog.schema()
+        # Historical Jobs rows can predate the canonical location normalization.
+        # Fill only supported missing values without rewriting stored records.
+        location = normalize_job_location(record)
         city = self.catalog.city(
-            record.get("country_code"), record.get("province"), record.get("city")
+            location.get("country_code"), location.get("province"), location.get("city")
         )
         # Require the canonical city (or its catalog alias) to appear in original text.
         aliases = [city.get(k) for k in ("name", "nameFa", "code") if city.get(k)]

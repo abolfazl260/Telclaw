@@ -460,6 +460,26 @@ def test_jobs_from_any_collected_source_go_to_advertio_without_approval(env):
     assert client.sent[0]["autoPublish"] is True
 
 
+
+def test_admin_forward_contact_from_text_is_not_claimed_as_verified_telegram_sender(env):
+    service, client = env
+    payload, flags = service.build_payload(record(
+        channel_username="admin-forward:1485409432",
+        channel_id=None,
+        message_link=None,
+        sender_id=None,
+        sender_username="Original_Poster",
+        sender_type="admin_forward_text",
+        sender_is_original=0,
+    ))
+    assert payload["contactHandle"] == "@Original_Poster"
+    assert payload["sourceUrl"] is None
+    assert "posterTelegramUserId" not in payload
+    assert payload["categorySlug"] == "jobs"
+    assert payload["sourceName"].startswith("tg-jobs-")
+    assert flags == []
+
+
 def test_city_must_appear_in_source(env):
     with pytest.raises(JobsMappingError, match="source_evidence"):
         env[0].build_payload(

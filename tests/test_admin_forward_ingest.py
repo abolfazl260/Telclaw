@@ -96,7 +96,7 @@ def test_forwarded_caption_and_idempotent_duplicate(inbox_db):
     ({"message_id": 5, "from": {"id": 1485409432},
       "text": long_post()}, "not_forwarded"),
     (forwarded("one two three four five six seven eight nine @job_owner"), "too_short"),
-    (forwarded(long_post(handle="@aaa") + " @Second_User"), "missing_username"),
+    (forwarded(long_post(handle="@First_User") + " Username: @Second_User"), "missing_username"),
     (forwarded("این پیام فوروارد بیشتر از ده کلمه دارد اما هیچ آیدی تلگرامی ندارد و فقط نمونه است"), "missing_username"),
     ({**forwarded(long_post()), "forward_origin": {"type": "hidden_user"}}, "missing_forward_date"),
 ])

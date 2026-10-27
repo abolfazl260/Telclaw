@@ -37,10 +37,10 @@ if(!response.ok)throw new Error(result.error||'خطا در دریافت پاسخ
 const article=document.createElement('article'), title=document.createElement('h3'), text=document.createElement('pre');
 title.textContent=question;text.textContent=result.answer;article.append(title,text);
 const details=document.createElement('details'), summary=document.createElement('summary'), evidence=document.createElement('pre');
-summary.textContent='مسیر بررسی · '+result.provider;evidence.dir='ltr';evidence.textContent=JSON.stringify(result.evidence,null,2);
+summary.textContent='مسیر بررسی · '+result.provider;evidence.dir='ltr';evidence.textContent=JSON.stringify({evidence:result.evidence,providers:result.diagnostics},null,2);
 details.append(summary,evidence);article.append(details);answers.prepend(article);
 history.push({role:'user',content:question},{role:'assistant',content:result.answer.slice(0,8000)});history=history.slice(-6);
-form.question.value='';status.textContent='بررسی تمام شد؛ پاسخ ممکن است نیاز به تأیید داشته باشد.';
+form.question.value='';status.textContent=result.partial ? 'تحلیل ناقص است: '+result.warning+' · شواهد و وضعیت سرویس را در مسیر بررسی ببین.' : 'بررسی تمام شد؛ پاسخ ممکن است نیاز به تأیید داشته باشد.';
 }catch(error){status.textContent=error.message;}finally{send.disabled=clear.disabled=false;}};
 </script></html>''', content_type='text/html')
 

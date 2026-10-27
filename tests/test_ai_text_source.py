@@ -181,3 +181,55 @@ def test_real_sqlite_classification_and_extraction_preserve_fallback_and_statuse
             assert record["classification_category"] == "none"
             assert record["ai_category"] is None
             assert record["ai_status"] == "skipped"
+
+
+def test_manual_extraction_limit_caps_total_across_batches(ai_db):
+    for message_id in range(201, 206):
+        insert_preclassified_candidate(
+            ai_db, message_id,
+            raw_text="Hiring warehouse helper in Toronto.",
+            text="Hiring warehouse helper in Toronto.",
+            cleaned_text="Hiring warehouse helper in Toronto.",
+        )
+        assert ai_db.mark_classification_result(
+            message_id=message_id,
+            channel_username="source",
+            success=True,
+            category="joblist",
+        )
+    provider = RecordingProvider()
+    extractor = AIProcessingService(repository=ai_db, provider_manager=provider)
+
+    first = extractor.process_pending_with_stats(limit=2, max_messages=3)
+    assert first["found"] == 3
+    assert first["processed"] == 3
+    assert len(provider.extraction_calls) == 3
+
+    remaining = ai_db.get_ai_pending(limit=10)
+    assert len(remaining) == 2
+
+    second = extractor.process_pending_with_stats(limit=2, max_messages=1)
+    assert second["found"] == 1
+    assert second["processed"] == 1
+    assert len(ai_db.get_ai_pending(limit=10)) == 1
+
+
+def test_unbounded_extraction_still_drains_queue(ai_db):
+    for message_id in range(401, 405):
+        insert_preclassified_candidate(
+            ai_db, message_id,
+            raw_text="Hiring warehouse helper in Toronto.",
+            text="Hiring warehouse helper in Toronto.",
+            cleaned_text="Hiring warehouse helper in Toronto.",
+        )
+        assert ai_db.mark_classification_result(
+            message_id=message_id,
+            channel_username="source",
+            success=True,
+            category="joblist",
+        )
+    provider = RecordingProvider()
+    extractor = AIProcessingService(repository=ai_db, provider_manager=provider)
+    stats = extractor.process_pending(limit=2)
+    assert stats["processed"] == 4
+    assert len(ai_db.get_ai_pending(limit=10)) == 0

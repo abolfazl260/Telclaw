@@ -247,13 +247,22 @@ class AIProcessingService:
             return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None}
         return self._process_all_pending(limit=limit, channel_username=channel_username, should_stop=should_stop, progress=False)
 
-    def process_pending_with_stats(self, limit=100, channel_username=None, should_stop=None):
+    def process_pending_with_stats(self, limit=100, channel_username=None, should_stop=None, max_messages=None):
+        """Run extraction; max_messages caps the *whole run*, not each DB batch.
+
+        None preserves the existing drain-until-empty behavior for scheduled work.
+        The Back Office passes an explicit bounded value for manual executions.
+        """
+        if max_messages is not None:
+            max_messages = int(max_messages)
+            if max_messages < 1:
+                raise ValueError("AI extraction max_messages must be positive")
         if not config.AI_EXTRACTION_ENABLED:
             print("[AI] Extraction disabled; skipping AI queue.")
             return {"found": 0, "processed": 0, "failed": 0, "skipped": 0, "stopped": False, "disabled": True, "advertio": None, "remaining": 0}
-        return self._process_all_pending(limit=limit, channel_username=channel_username, should_stop=should_stop, progress=True)
+        return self._process_all_pending(limit=limit, channel_username=channel_username, should_stop=should_stop, progress=True, max_messages=max_messages)
 
-    def _process_all_pending(self, limit, channel_username, should_stop, progress):
+    def _process_all_pending(self, limit, channel_username, should_stop, progress, max_messages=None):
         total_found = processed = failed = skipped = 0
         stopped = False
         advertio = {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 0}
@@ -262,7 +271,12 @@ class AIProcessingService:
             if should_stop and should_stop():
                 stopped = True
                 break
-            records = self.repository.get_ai_pending(limit=limit, channel_username=channel_username)
+            if max_messages is not None and total_found >= max_messages:
+                break
+            fetch_limit = min(limit, max_messages - total_found) if max_messages is not None else limit
+            records = self.repository.get_ai_pending(
+                limit=fetch_limit, channel_username=channel_username
+            )
             if not records:
                 break
             batch_number += 1

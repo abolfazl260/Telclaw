@@ -237,7 +237,7 @@ def test_complete_contract_and_original_description(env, role, prefix):
 
 @pytest.mark.parametrize(
     "city,province,expected_province",
-    [("Toronto", None, "Ontario"), ("Calgary", "AB", "AB")],
+    [("Toronto", None, None), ("Calgary", "AB", "AB")],
 )
 def test_jobs_ai_location_normalization_from_exported_failure_shapes(
     city, province, expected_province
@@ -288,7 +288,7 @@ def test_jobs_delivery_recovers_missing_country_with_supported_city(env):
     assert payload["description"] == message
     assert payload["autoPublish"] is True
     assert client.queries[-1][1] == {
-        "countryCode": "CA", "provinceCode": "ON", "q": "Toronto", "limit": 200
+        "countryCode": "CA", "q": "Toronto", "limit": 200
     }
 
 

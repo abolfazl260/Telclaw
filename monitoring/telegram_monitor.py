@@ -163,7 +163,7 @@ class TelegramMonitor:
         text=(message.get("text") or "").strip().lower()
         command=text.split(maxsplit=1)[0].split("@",1)[0] if text else ""
         # The public directory is the only non-admin command; never expose status or controls.
-        if command == "/aboutus":
+        if command == "/aboutus" and not is_forwarded(message):
             user=message.get("from")
             if chat.get("type") == "private" and isinstance(chat_id,int) and isinstance(user,dict) and user.get("id") == chat_id:
                 await self._send_aboutus(chat_id)

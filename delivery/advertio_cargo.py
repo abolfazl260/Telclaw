@@ -148,6 +148,7 @@ class AdvertioCargoService:
         self._cities = {}
         self._cities_checked_at = {}
         self._ensure_tables()
+        self._recover_stale_sends()
 
     @staticmethod
     def _ensure_tables():
@@ -177,12 +178,31 @@ class AdvertioCargoService:
                 CREATE INDEX IF NOT EXISTS idx_advertio_cargo_attempts_date
                     ON advertio_cargo_attempts(attempted_at);
             """)
-            conn.execute("""
-                UPDATE advertio_cargo_deliveries
-                   SET status='retry', next_attempt_at=NULL
-                 WHERE status='sending' AND updated_at < ?
-            """, ((datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(),))
             conn.commit()
+        finally:
+            conn.close()
+
+    def _recover_stale_sends(self):
+        # One delivery can fetch two city catalogs and then POST the lead.
+        # Keep the historical 30-minute floor, allowing larger client timeouts.
+        timeout = max(config.ADVERTIO_TIMEOUT_SECONDS,
+                      getattr(self.client, "timeout", config.ADVERTIO_TIMEOUT_SECONDS))
+        cutoff = (datetime.now(timezone.utc) - timedelta(
+            seconds=max(1800, 3 * timeout + 120))).isoformat()
+        conn = get_connection()
+        try:
+            # Avoid acquiring a write lock on healthy cycles. The UPDATE still
+            # checks status/time atomically against a concurrent fresh claim.
+            if not conn.execute("""SELECT 1 FROM advertio_cargo_deliveries
+                    WHERE status='sending' AND updated_at<? LIMIT 1""", (cutoff,)).fetchone():
+                return 0
+            cursor = conn.execute("""UPDATE advertio_cargo_deliveries
+                SET status='retry',next_attempt_at=NULL
+                WHERE status='sending' AND updated_at<?""", (cutoff,))
+            conn.commit()
+            if cursor.rowcount:
+                log.info("Recovered %s stale cargo sending records", cursor.rowcount)
+            return cursor.rowcount
         finally:
             conn.close()
 
@@ -436,6 +456,7 @@ class AdvertioCargoService:
 
     def deliver_pending(self, limit=None, channel_username=None, before_datetime=None,
                         should_stop=None, progress=False, row_ids=None):
+        self._recover_stale_sends()
         limit = min(int(limit or config.ADVERTIO_CARGO_BATCH_SIZE), self._remaining_budget())
         result = {"found": 0, "sent": 0, "already_existed": 0,
                   "rejected": 0, "retry": 0, "budget_remaining": self._remaining_budget()}

@@ -627,10 +627,15 @@ def test_http_policy_and_no_tight_retry(env, http, retryable, outcome, caplog):
                 )
 
 
-def test_missing_fields_blocked_controlled_requeue(env):
+def test_missing_fields_blocked_controlled_requeue(env, capsys, caplog):
     s, c = env
     mid = add_post(changes={"job_category": None})
-    assert s.deliver_pending()["blocked"] == 1 and not c.sent
+    import logging
+    caplog.set_level(logging.INFO, logger="telclaw.advertio.jobs")
+    assert s.deliver_pending(progress=True)["blocked"] == 1 and not c.sent
+    output = capsys.readouterr().out
+    assert "status=blocked reason=invalid_or_missing_job_category api_attempted=false" in output
+    assert "outcome=blocked reason=invalid_or_missing_job_category api_attempted=false" in caplog.text
     assert delivery(mid)["error_code"] == "invalid_or_missing_job_category"
     corrected = database.get_category_record(mid, "joblist")
     corrected["job_category"] = "warehouse"

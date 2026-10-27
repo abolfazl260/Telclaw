@@ -1506,8 +1506,15 @@ async def operations_page(request):
     ai_controls = action_form(
         "run_ai",
         "Run AI Extraction",
-        extra=f'<label>Telegram account{ai_account_select}</label>',
-        disabled=pipeline_busy or not account_names,
+        extra=(
+            f'<label>Telegram account{ai_account_select}</label>'
+            '<label>Messages to extract this run'
+            '<input type="number" name="max_messages" min="1" max="1000" '
+            'value="100" required></label>'
+            '<span class="muted">Total messages for this manual run (1–1000). '
+            'The automatic extraction schedule is unchanged.</span>'
+        ),
+        disabled=pipeline_busy or not account_names or not config.AI_EXTRACTION_ENABLED,
     )
     ai_controls += '<details class="ops-recovery"><summary>Retry &amp; recover skipped Jobs</summary><p class="muted">Requeue first, then run AI Extraction. Historical delivery uses Jobs backfill separately.</p>'
     ai_controls += action_form(
@@ -1995,8 +2002,9 @@ async def operations_action(request):
             )
             _operations_redirect(notice=f"Requeued {count} Jobs with missing extraction data. Run AI Extraction, then inspect Jobs admission again.")
         if action == "run_ai":
-            operations.start_ai(data.get("account"), admin_id)
-            _operations_redirect(notice="AI extraction queue started.")
+            max_messages = int(data.get("max_messages") or 100)
+            operations.start_ai(data.get("account"), admin_id, max_messages=max_messages)
+            _operations_redirect(notice=f"AI extraction started (up to {max_messages} messages).")
         if action == "stop_ai":
             if not operations.request_stop("ai"):
                 raise ValueError("AI extraction is not running")

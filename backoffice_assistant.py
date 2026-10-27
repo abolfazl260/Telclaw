@@ -17,7 +17,7 @@ async def assistant_page(request):
 <style>body{font:16px system-ui;background:#f3f6fa;color:#172b46;max-width:1000px;margin:auto;padding:24px}
 nav{display:flex;gap:16px;flex-wrap:wrap}section{background:white;padding:24px;margin-top:20px;border-radius:14px}
 textarea{width:100%;box-sizing:border-box;min-height:100px;font:inherit;padding:12px}button{padding:10px 18px;margin:8px;font:inherit;cursor:pointer}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}article{border-top:1px solid #d8e0ea;padding:12px 0}details{font-size:14px}#status{color:#475569}</style>
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}article{border-top:1px solid #d8e0ea;padding:12px 0}details{font-size:14px}#status{color:#475569}.query-rows{overflow-x:auto;margin:16px 0}table{border-collapse:collapse;min-width:100%;direction:ltr}th,td{border:1px solid #d8e0ea;padding:8px;vertical-align:top;text-align:start}td{white-space:pre-wrap;overflow-wrap:anywhere;min-width:120px;max-width:480px}.query-note{color:#475569}</style>
 <nav><a href="/">انتشار</a><a href="/operations">عملیات</a><a href="/data">دیتابیس</a><a href="/health">سلامت سیستم</a></nav>
 <section><h1>دستیار تحلیل دیتابیس</h1><p>با سرویس‌های AI تنظیم‌شده، پیام‌ها و علت خطاها را بررسی کن. دسترسی فقط‌خواندنی است.
 متن رکوردهای مرتبط به سرویس AI ارسال می‌شود و از سهمیهٔ آن مصرف می‌کند. پاسخ مدل را با شواهد بررسی کن.</p>
@@ -28,6 +28,27 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}article{border-top:
 <script nonce="''' + nonce + '''">
 const form=document.querySelector('#chat'), send=document.querySelector('#send'), clear=document.querySelector('#clear');
 const status=document.querySelector('#status'), answers=document.querySelector('#answers'); let history=[];
+function appendQueryRows(article, entries){
+for(const entry of entries||[]){
+if(entry.action!=='query'||!entry.data||!Array.isArray(entry.data.rows))continue;
+const data=entry.data, section=document.createElement('section'), heading=document.createElement('h4');
+heading.textContent='ردیف‌های واقعی دیتابیس · '+data.rows.length+' ردیف';section.append(heading);
+const note=document.createElement('p');note.className='query-note';
+note.textContent='این جدول مستقیماً از نتیجهٔ ابزار ساخته شده و بازنویسی مدل نیست.';section.append(note);
+if(data.truncated||data.truncated_cells){const warning=document.createElement('p');
+warning.textContent='خروجی ابزار محدود شده است؛ برای ادامه، تعداد رکوردها یا طول متن را محدودتر کن.';section.append(warning);}
+const download=document.createElement('button');download.type='button';download.textContent='دریافت خروجی JSON';
+download.onclick=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json;charset=utf-8'});
+const url=URL.createObjectURL(blob), link=document.createElement('a');link.href=url;link.download='telclaw-query-rows.json';
+document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);};section.append(download);
+const scroll=document.createElement('div');scroll.className='query-rows';
+const table=document.createElement('table'), header=document.createElement('tr');
+for(const column of data.columns){const cell=document.createElement('th');cell.textContent=column;header.append(cell);}table.append(header);
+for(const row of data.rows){const tr=document.createElement('tr');for(const value of row){const td=document.createElement('td');
+td.textContent=value===null?'NULL':String(value);tr.append(td);}table.append(tr);}
+scroll.append(table);section.append(scroll);article.append(section);
+}
+}
 clear.onclick=()=>{history=[];answers.replaceChildren();status.textContent='';form.question.value='';};
 form.onsubmit=async(event)=>{event.preventDefault();const question=form.question.value.trim();if(!question)return;
 send.disabled=clear.disabled=true;status.textContent='در حال بررسی دیتابیس… این کار ممکن است چند دقیقه طول بکشد.';
@@ -35,7 +56,8 @@ try{const data=new URLSearchParams({csrf:form.csrf.value,question,history:JSON.s
 const response=await fetch('/assistant/ask',{method:'POST',body:data});const result=await response.json();
 if(!response.ok)throw new Error(result.error||'خطا در دریافت پاسخ');
 const article=document.createElement('article'), title=document.createElement('h3'), text=document.createElement('pre');
-title.textContent=question;text.textContent=result.answer;article.append(title,text);
+title.textContent=question;text.textContent=result.answer;article.append(title);
+appendQueryRows(article,result.evidence);article.append(text);
 const details=document.createElement('details'), summary=document.createElement('summary'), evidence=document.createElement('pre');
 summary.textContent='مسیر بررسی · '+result.provider;evidence.dir='ltr';evidence.textContent=JSON.stringify({evidence:result.evidence,providers:result.diagnostics},null,2);
 details.append(summary,evidence);article.append(details);answers.prepend(article);

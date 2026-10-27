@@ -77,3 +77,14 @@ provider/phase/attempt/reason codes (HTTP status, malformed output, token limit)
 never provider response bodies, tokens, or credentials. Time-limit and HTTP-attempt
 failures have distinct messages. This makes a quota/auth/model problem visible
 instead of attributing every failure to a question being too broad.
+
+## Direct query results
+
+Every successful SQL query now appears in an open **ردیف‌های واقعی دیتابیس** table
+above the model's answer. Column names, original returned cell values and NULLs
+come directly from the reader evidence, without model rewriting or summarization.
+The table supports horizontal scrolling and preserves text line breaks. A JSON
+download contains the exact bounded query result, including column/row arrays and
+truncation metadata, so admins can share examples for debugging. Empty results
+show zero rows; reader truncation is explicitly flagged. Existing read-only,
+session and CSRF restrictions are unchanged. Downloading does not call AI again.

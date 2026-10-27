@@ -2517,7 +2517,7 @@ async def settings_page(request):
       border-radius:9px;background:#172033;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.22);
       direction:rtl;text-align:right;white-space:normal;font:400 .88rem/1.75 sans-serif;
       opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s ease}}
-    .setting-help:hover::after,.setting-help:focus-visible::after{{opacity:1;visibility:visible}}
+    .setting-help:hover::after,.setting-help:focus::after{{opacity:1;visibility:visible}}
     .setting-help:focus-visible{{outline:2px solid #2563eb;outline-offset:3px}}
     .setting-values{{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.35rem;color:#536479;font-size:.86rem}}
     .source{{display:inline-block;margin-left:.5rem;padding:.12rem .45rem;border-radius:999px;font-size:.75rem}}

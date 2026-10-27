@@ -12,6 +12,7 @@ from services.stage_control import get_stage_control
 from monitoring.error_alerts import ErrorAlertDispatcher
 from monitoring.source_formatter import format_source_messages
 from monitoring.aboutus import build_aboutus_message, aboutus_keyboard
+from monitoring.admin_forward_ingest import ingest_admin_forward, is_forwarded
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
@@ -168,6 +169,25 @@ class TelegramMonitor:
                 await self._send_aboutus(chat_id)
             return
         if not self._is_admin_private_chat(chat,message.get("from")): return
+        if is_forwarded(message):
+            # Only authenticated administrators in their private chat can import.
+            # Import the ORIGINAL forwarded text, not the admin's identity.
+            try:
+                result, detail = await asyncio.to_thread(ingest_admin_forward, message)
+            except Exception:
+                logger.exception("[ADMIN FORWARD IMPORT ERROR] chat_id=%s", chat_id)
+                await self._send(chat_id,"❌ Failed to save the forwarded message. Check system logs.")
+                return
+            if result == "saved":
+                await self._send(chat_id,
+                    f"✅ Forwarded message saved. Extracted username: <code>{html.escape(detail)}</code>.\n"
+                    "Queued for normal processing, classification and AI extraction. "
+                    "The username was read from the text, not verified as the Telegram author.")
+            elif result == "duplicate":
+                await self._send(chat_id,"ℹ️ Forwarded message already imported.")
+            else:
+                await self._send(chat_id,f"⚠️ Forward not imported: {html.escape(detail)}")
+            return
         if command == "/start":
             database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
         elif command == "/stop":

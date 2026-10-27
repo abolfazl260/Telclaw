@@ -316,9 +316,11 @@ for that same channel/group.
 
 ### Import structured website listings
 
-Open **Database → Import CSV** (`/data/import`) and download the template for
-`joblist`, `housinglist`, or `transferlist`. Upload UTF-8 CSV (up to 512 KiB,
-500 rows), review the first five rows, then choose **ثبت در دیتابیس**. Every row
+Open **Database → Import CSV** (`/data/import`). Jobs (`joblist`), Housing
+(`housinglist`) and Cargo (`transferlist`) each have a separate card, template,
+file chooser and upload button. Download the template from the matching card
+and upload one category per UTF-8 CSV (up to 512 KiB, 500 rows). Review the first
+five rows and the destination category, then use that category’s save button. Every row
 is validated before any write. A file with invalid data is rejected entirely;
 a database failure rolls the whole file back. The preview itself writes nothing.
 
@@ -365,3 +367,14 @@ The active section has `aria-current="page"`, keyboard focus is visible, and
 navigation wraps on narrow screens. Keep page-specific layouts scoped so they
 do not replace the shared frame. Import preview, validation errors and saved-row
 results all keep the Import CSV frame.
+
+Category-specific uploads POST to `/data/import/{category}`. Both preview and
+save stay bound to that destination; a conflicting form category is rejected.
+Columns from another category are rejected even if their cells are empty. An
+optional `category` CSV column must equal the destination table name in every
+row; missing or different values reject the complete file. Without this column,
+all rows belong to the card used for uploading. This validates file structure
+and declared category, not semantic content: it does not run AI to classify
+free text. Templates contain only the matching category's columns and shared
+source metadata. The previous POST endpoint remains compatible, using the same
+validation and category-specific preview/save flow.

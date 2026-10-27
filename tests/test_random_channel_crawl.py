@@ -168,3 +168,58 @@ def test_category_selection_still_deduplicates_channels_before_scheduling():
 
     assert jobs == ["scheduled"]
     assert fake_scheduler.calls == [["@alpha", "@beta", "@gamma"]]
+
+
+def test_canada_job_sources_include_user_requested_public_channels_without_duplicates():
+    """Inventory check: source categories stay stable and case-insensitively unique."""
+    from pathlib import Path
+    import json
+
+    file = Path(__file__).resolve().parents[1] / "channels.json"
+    categories = json.loads(file.read_text(encoding="utf-8"))
+    jobs = categories["Canada_Job"]
+    usernames = [row["username"].casefold() for row in jobs if row.get("username")]
+    assert len(usernames) == len(set(usernames))
+    expected = {
+        "torontohiring", "vancouveriranian",
+        "employmentandemployersvancouver", "persianwomencareerads",
+        "montrealhiring", "jobsfouryou", "jobs_toronto_ontario",
+        "uzimiznikilar_news",
+    }
+    assert expected.issubset(set(usernames))
+    assert usernames.count("torontohiring") == 1
+    assert usernames.count("jobs_toronto_ontario") == 1
+    private = [
+        item for item in jobs
+        if item.get("invite_link") == "https://t.me/+BlviDU3G7OPUZOpuFEEuKg"
+    ]
+    assert len(private) == 1
+    assert not private[0].get("username")
+
+
+def test_canada_job_private_invite_is_not_scheduled_for_crawling():
+    from pathlib import Path
+    import json
+
+    categories = json.loads((Path(__file__).resolve().parents[1] / "channels.json").read_text())
+    class Data:
+        def channels_for_category(self, category):
+            return categories[category]
+
+    class FakeScheduler:
+        def __init__(self):
+            self.calls = []
+        def schedule_cycle(self, client, channels, *args, **kwargs):
+            self.calls.append(list(channels))
+            return "scheduled"
+
+    scheduler = FakeScheduler()
+    crawler = CrawlerService(Data(), scheduler)
+    result = crawler.schedule_categories(
+        None, ["Canada_Job"], date.today(), date.today(), channel_interval_minutes=0,
+    )
+    assert result == ["scheduled"]
+    channels = scheduler.calls[0]
+    assert len(channels) == 14
+    assert all(not channel.startswith("https://t.me/+") for channel in channels)
+    assert "VancouverIranian" in channels

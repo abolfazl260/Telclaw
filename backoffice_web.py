@@ -1646,7 +1646,7 @@ async def operations_page(request):
         if username:
             return "@" + _escape(username)
         invite = str(item.get("invite_link") or "").strip()
-        if re.fullmatch(r"https://t\\.me/\\+[A-Za-z0-9_-]+", invite):
+        if re.fullmatch(r"https://t\.me/\+[A-Za-z0-9_-]+", invite):
             return (f'<a href="{_escape(invite)}" target="_blank" '
                     'rel="noopener noreferrer">Private invite (not scheduled)</a>')
         return "Not scheduled (missing username)"

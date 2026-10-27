@@ -99,12 +99,12 @@ Set work_arrangement=on_site, hybrid, remote only when the message supports it;
 otherwise use null.
 
 COMPENSATION
-For salary, extract only an actual amount visibly stated in the message; take
+For salary, extract only an actual stated amount visibly stated in the message; take
 the lower bound of a stated salary range. salary_period is hour, month, year
 or null when unknown. Default salary_currency to CAD only when a salary amount
 is present and no other currency is stated. Preserve explicitly foreign currency
-without conversion. If no amount is given, salary, salary_currency and
-salary_period must all be null. Never invent salary, pay period or benefits.
+without conversion. When no amount is stated, salary, salary_currency and
+salary_period must all be null. Never invent an amount or pay period. Do not fabricate benefits.
 
 SOURCE INTEGRITY
 Preserve only stated company, location, employment_type, experience, education,

@@ -25,6 +25,17 @@ and failover policy remain unchanged. Recoverable Groq JSON generation errors lo
 at WARNING during retries; exhausted records still produce the existing ERROR
 and persist `invalid_provider_output` for explicit retry from Back Office.
 
+Cloudflare extraction also sends an explicit nested output template derived from
+`CATEGORY_FIELDS`. A parseable response with missing/null/scalar category data,
+an ambiguous array, or the wrong category is regenerated through the same
+`TELCLAW_CLOUDFLARE_INVALID_JSON_MAX_RETRIES` budget as malformed JSON (default 1,
+maximum 2). Syntax and structure failures do not receive separate retry budgets.
+Existing singleton-object array normalization remains supported. Null, empty or
+multi-record arrays are not converted into successful empty listings. Every
+regeneration passes through the rate limiter and all extraction validation;
+exhaustion still raises `invalid_provider_output`, allowing the existing alternate
+provider fallback and failed-row retry workflow. Logs do not include raw output.
+
 ## Operator steps
 
 Deploy the feature commit and restart the application. After the running pipeline

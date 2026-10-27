@@ -124,7 +124,7 @@ def test_cloudflare_extraction_returns_real_none_for_null_like_strings(monkeypat
         }],
         rate_limiter=FakeRateLimiter(),
     )
-    monkeypatch.setattr(provider, "_request", lambda _messages: _transfer_payload())
+    monkeypatch.setattr(provider, "_request", lambda _messages, validator: validator(_transfer_payload()))
 
     result = provider.extract("I have a small package to Tehran", category="transferlist")
     data = result["data"]["transferlist"]

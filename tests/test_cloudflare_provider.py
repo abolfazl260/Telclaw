@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from ai.category_schemas import CATEGORY_FIELDS
 from ai.extractor import AIExtractionError
 from ai.provider_manager import AIProviderManager
 from ai.providers.cloudflare import CloudflareProvider
@@ -119,3 +120,152 @@ def test_cloudflare_max_tokens_is_only_sent_when_configured(monkeypatch):
     monkeypatch.setattr(config, "CLOUDFLARE_MAX_TOKENS", 2048)
     provider().classify_batch([{"message_id": 12, "text": "hello"}])
     assert calls[-1]["max_tokens"] == 2048
+
+
+@pytest.mark.parametrize("category", CATEGORY_FIELDS)
+@pytest.mark.parametrize("invalid_data", [None, [], [{}, {}], "not an object", 42, False])
+def test_cloudflare_retries_invalid_category_structure(monkeypatch, category, invalid_data):
+    import config
+
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", 1)
+    expected = {"description": "Original source information"}
+    replies = iter([
+        Response(json.dumps({"category": category, "data": {category: invalid_data}})),
+        Response(json.dumps({"category": category, "data": {category: expected}})),
+    ])
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(kwargs["json"])
+        return next(replies)
+
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    result = provider().extract("Original source information", category)
+    assert result["data"][category]["description"] == expected["description"]
+    assert len(calls) == 2
+    assert calls[1]["messages"][:-1] == calls[0]["messages"]
+    assert "nested object structure" in calls[1]["messages"][-1]["content"]
+    template_message = calls[0]["messages"][-1]["content"]
+    template = json.JSONDecoder().raw_decode(template_message[template_message.index("{"):])[0]
+    assert template == {"category": category, "data": {
+        category: dict.fromkeys(CATEGORY_FIELDS[category]),
+    }}
+
+
+@pytest.mark.parametrize("invalid_result", [
+    [],
+    {"category": "joblist"},
+    {"category": "joblist", "data": None},
+    {"category": "joblist", "data": {}},
+    {"category": "housinglist", "data": {"housinglist": {}}},
+])
+def test_cloudflare_retries_missing_containers_and_wrong_category(monkeypatch, invalid_result):
+    import config
+
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", 1)
+    replies = iter([
+        Response(json.dumps(invalid_result)),
+        Response(json.dumps({"category": "joblist", "data": {
+            "joblist": {"is_job_listing": False, "job_title": None},
+        }})),
+    ])
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", lambda *a, **kw: next(replies))
+    result = provider().extract("General job board digest", "joblist")
+    assert result["data"]["joblist"]["is_job_listing"] is False
+    assert result["data"]["joblist"]["job_title"] is None
+
+
+@pytest.mark.parametrize("retry_limit", [0, 1, 2])
+def test_cloudflare_schema_retry_is_bounded_and_redacts_output(monkeypatch, caplog, retry_limit):
+    import config
+
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", retry_limit)
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(1)
+        return Response(json.dumps({"category": "joblist", "data": {
+            "joblist": "sensitive model output",
+        }}))
+
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    with pytest.raises(AIExtractionError) as raised:
+        provider().extract("sensitive source text", "joblist")
+    assert raised.value.reason == "invalid_provider_output"
+    assert raised.value.provider == "cloudflare"
+    assert "data.joblist must be an object" in str(raised.value.__cause__)
+    assert len(calls) == retry_limit + 1
+    assert "sensitive model output" not in caplog.text + str(raised.value)
+    assert "sensitive source text" not in caplog.text + str(raised.value)
+
+
+@pytest.mark.parametrize("retry_limit", [1, 2])
+def test_cloudflare_syntax_and_schema_share_one_retry_budget(monkeypatch, retry_limit):
+    import config
+
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", retry_limit)
+    replies = iter([
+        Response('{"category":"joblist","data":'),
+        Response('{"category":"joblist","data":{"joblist":null}}'),
+        Response('{"category":"joblist","data":{"joblist":{"is_job_listing":false}}}'),
+    ])
+    calls = []
+    instance = provider()
+    limiter_calls = []
+    monkeypatch.setattr(instance.rate_limiter, "wait", lambda: limiter_calls.append(1))
+
+    def fake_post(*args, **kwargs):
+        calls.append(1)
+        return next(replies)
+
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    if retry_limit == 1:
+        with pytest.raises(AIExtractionError) as raised:
+            instance.extract("Job digest", "joblist")
+        assert raised.value.reason == "invalid_provider_output"
+    else:
+        assert instance.extract("Job digest", "joblist")["data"]["joblist"]["is_job_listing"] is False
+    assert len(calls) == len(limiter_calls) == retry_limit + 1
+
+
+def test_cloudflare_singleton_category_array_still_succeeds_without_retry(monkeypatch):
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(1)
+        return Response(json.dumps({"category": "joblist", "data": {
+            "joblist": [{"job_title": "Developer", "skills": ["Python", "SQL"]}],
+        }}))
+
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    data = provider().extract("Developer wanted", "joblist")["data"]["joblist"]
+    assert data["job_title"] == "Developer"
+    assert data["skills"] == ["Python", "SQL"]
+    assert len(calls) == 1
+
+
+def test_cloudflare_invalid_structure_exhaustion_uses_manager_fallback(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "CLOUDFLARE_INVALID_JSON_MAX_RETRIES", 1)
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append(1)
+        return Response('{"category":"joblist","data":{"joblist":null}}')
+
+    class Alternate:
+        name = "groq"
+
+        def extract(self, text, category):
+            assert text == "General digest"
+            assert category == "joblist"
+            return {"category": category, "data": {category: {"is_job_listing": False}}}
+
+    monkeypatch.setattr("ai.providers.cloudflare.requests.post", fake_post)
+    manager = AIProviderManager(provider=provider())
+    manager.providers.append(Alternate())
+    manager._unavailable_until.append(0.0)
+    result = manager.extract("General digest", "joblist")
+    assert result["data"]["joblist"]["is_job_listing"] is False
+    assert len(calls) == 2

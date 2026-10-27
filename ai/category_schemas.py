@@ -117,6 +117,59 @@ def _infer_housing_location(data):
     return data
 
 
+
+# A missing country is inferred for Jobs only when a known Canadian city is
+# supported by a compatible province, or when the city name is geographically
+# distinctive. Ambiguous names without a province are left for review.
+_DISTINCT_CANADIAN_JOB_CITIES = {
+    "toronto", "calgary", "montreal", "ottawa", "edmonton", "winnipeg",
+    "mississauga", "brampton", "markham", "vaughan", "burnaby",
+    "coquitlam", "gatineau", "saskatoon", "regina", "halifax",
+    "yellowknife", "whitehorse", "iqaluit", "quebec city",
+}
+_CANADIAN_PROVINCE_CODES = {
+    "Alberta": "AB", "British Columbia": "BC", "Manitoba": "MB",
+    "New Brunswick": "NB", "Newfoundland and Labrador": "NL",
+    "Northwest Territories": "NT", "Nova Scotia": "NS",
+    "Nunavut": "NU", "Ontario": "ON", "Prince Edward Island": "PE",
+    "Quebec": "QC", "Saskatchewan": "SK", "Yukon": "YT",
+}
+
+
+def normalize_job_location(data):
+    """Fill only missing Jobs geography corroborated by known Canadian places.
+
+    This cannot override an explicit foreign country, contradictory province,
+    unrecognized city, or missing city. Province is deliberately NOT inferred:
+    live catalog matching must evaluate all candidates before choosing the
+    canonical province and must still reject ambiguous cities. The delivery
+    adapter also verifies city evidence in the original cleaned Telegram text.
+    """
+    if not isinstance(data, dict) or data.get("is_job_listing") not in (True, 1, "true"):
+        return data
+    country = str(data.get("country_code") or "").strip().upper()
+    if country and country != "CA":
+        return data
+    city = str(data.get("city") or "").strip().casefold()
+    expected_province = _CANADIAN_CITY_PROVINCE.get(city)
+    if expected_province is None:
+        return data
+    province = str(data.get("province") or "").strip()
+    if province and province.casefold() not in {
+        expected_province.casefold(),
+        _CANADIAN_PROVINCE_CODES[expected_province].casefold(),
+    }:
+        return data
+    if not country and not province and city not in _DISTINCT_CANADIAN_JOB_CITIES:
+        return data
+    result = data.copy()
+    if not country:
+        result["country_code"] = "CA"
+    # Do not prefill province: the catalog must see all city candidates and
+    # reject any ambiguous match, then provide the province of a unique city.
+    return result
+
+
 def _field_schema(field):
     if field in {"features", "skills"}:
         return {"type": ["array", "null"], "items": {"type": "string"}}
@@ -170,4 +223,6 @@ def validate_result(result):
     normalized = {key: value for key, value in data.items() if key in allowed}
     if category == "housinglist":
         normalized = _infer_housing_location(normalized)
+    elif category == "joblist":
+        normalized = normalize_job_location(normalized)
     return category, normalized

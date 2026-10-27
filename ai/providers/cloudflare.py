@@ -10,7 +10,7 @@ import time
 import requests
 
 import config
-from ai.category_schemas import CATEGORIES, CLASSIFICATION_CATEGORIES, validate_result
+from ai.category_schemas import CATEGORY_FIELDS, CATEGORIES, CLASSIFICATION_CATEGORIES, validate_result
 from ai.category_classifier import build_classification_prompt, validate_classification_result
 from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencies, _normalize_defaults, _normalize_null_like_values, _normalize_selected_category_data, _validate_english_title
 from ai.prompt_loader import render_prompt
@@ -130,9 +130,9 @@ class CloudflareProvider(AIProvider):
                     return json.loads("\n".join(lines[1:-1]).strip())
             raise
 
-    def _request(self, messages):
+    def _request(self, messages, *, validator=None):
         attempts = 0
-        invalid_json_attempts = 0
+        invalid_output_attempts = 0
         while attempts <= config.AI_RETRY_COUNT:
             now = time.monotonic()
             if self._unavailable_until[self.active_index] > now:
@@ -142,10 +142,11 @@ class CloudflareProvider(AIProvider):
                 else:
                     self.active_index = next_index
             request_messages = list(messages)
-            if invalid_json_attempts:
+            if invalid_output_attempts:
                 request_messages.append({"role": "system", "content":
-                    "The previous response was invalid JSON. Regenerate the complete "
-                    "response from the original input. " + JSON_GENERATION_RULES})
+                    "The previous response had invalid JSON or an invalid output structure. "
+                    "Regenerate the complete response from the original input using the "
+                    "required category and nested object structure. " + JSON_GENERATION_RULES})
             payload = {"messages": request_messages, "temperature": 0, "response_format": {"type": "json_object"}}
             if config.CLOUDFLARE_MAX_TOKENS:
                 # Optional: the configured Workers AI model must support this cap.
@@ -186,17 +187,18 @@ class CloudflareProvider(AIProvider):
                 body = response.json()
                 if isinstance(body, dict) and body.get("success") is False:
                     raise ValueError("Cloudflare returned an unsuccessful response")
-                return self._parse_json_candidate(self._extract_json_candidate(body))
+                result = self._parse_json_candidate(self._extract_json_candidate(body))
+                return validator(result) if validator is not None else result
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
-                # A 200 response may still contain a truncated/unclosed JSON
-                # string. Retry the entire inference once rather than trying
-                # to repair incomplete data or store a partial advertisement.
-                if invalid_json_attempts < config.CLOUDFLARE_INVALID_JSON_MAX_RETRIES:
-                    invalid_json_attempts += 1
+                # Syntax and extraction validation share one retry budget.
+                # Regenerate from the source; never invent an empty object or
+                # select an arbitrary record from an ambiguous list.
+                if invalid_output_attempts < config.CLOUDFLARE_INVALID_JSON_MAX_RETRIES:
+                    invalid_output_attempts += 1
                     logger.warning(
-                        "Cloudflare invalid JSON: model=%s retry=%d/%d error_type=%s",
+                        "Cloudflare invalid output: model=%s retry=%d/%d error_type=%s",
                         self.model,
-                        invalid_json_attempts,
+                        invalid_output_attempts,
                         config.CLOUDFLARE_INVALID_JSON_MAX_RETRIES,
                         type(exc).__name__,
                     )
@@ -237,10 +239,10 @@ class CloudflareProvider(AIProvider):
             raise AIExtractionError(f"Invalid authoritative extraction category: {category}", provider=self.name, reason="invalid_category")
         if not isinstance(text, str) or not text.strip():
             raise AIExtractionError("Cannot call Cloudflare with empty text", provider=self.name, reason="invalid_input")
-        result = self._request([{"role": "system", "content": render_prompt(category, text.strip())}])
-        try:
+
+        def validate_extraction(result):
             if not isinstance(result, dict) or result.get("category") != category:
-                raise ValueError(f"Extraction category mismatch: expected={category} received={result.get('category') if isinstance(result, dict) else None}")
+                raise ValueError(f"Extraction category mismatch: expected={category}")
             result = _normalize_selected_category_data(result)
             result = _normalize_null_like_values(result)
             result = _ensure_titles(result, text)
@@ -249,10 +251,18 @@ class CloudflareProvider(AIProvider):
             result = _validate_english_title(result)
             validated_category, validated_data = validate_result(result)
             return {"category": validated_category, "data": {validated_category: validated_data}}
-        except AIExtractionError:
-            raise
-        except (ValueError, TypeError) as exc:
-            raise AIExtractionError(f"Invalid Cloudflare JSON output: {exc}", provider=self.name, reason="invalid_provider_output") from exc
+
+        shape = {"category": category, "data": {
+            category: {field: None for field in CATEGORY_FIELDS[category]},
+        }}
+        return self._request([
+            {"role": "system", "content": render_prompt(category, text.strip())},
+            {"role": "system", "content":
+                "Required JSON structure (replace field nulls only with supported facts): "
+                + json.dumps(shape) + ". The data container and data." + category
+                + " must always be objects, never null, strings or arrays. "
+                "Use null for unknown individual fields, not for the category object."},
+        ], validator=validate_extraction)
 
 
 __all__ = ["CloudflareProvider"]

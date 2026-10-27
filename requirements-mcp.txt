@@ -1,0 +1,2 @@
+# Optional standalone MCP integration; the crawler does not import this package.
+mcp>=1.30,<2

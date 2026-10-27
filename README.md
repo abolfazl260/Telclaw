@@ -2,6 +2,11 @@
 
 Telclaw is a Telegram data-processing pipeline. Its purpose is to collect information from selected Telegram sources, clean and normalize the data, prepare structured datasets for category-based AI processing, validate AI results, and eventually deliver approved structured outputs to downstream services.
 
+## Back-office AI assistant
+
+Open **AI Assistant** in the back office to analyze records using the existing
+Cloudflare/Groq settings. See [usage and limits](docs/BACKOFFICE_AI_ASSISTANT.md).
+
 ## AI database analysis (MCP)
 
 An optional read-only MCP server lets an AI inspect source text, extracted fields,

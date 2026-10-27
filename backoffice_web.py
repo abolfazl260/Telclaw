@@ -2690,7 +2690,7 @@ def create_app(console_ui=None):
                     web.get("/cargo", cargo_page), web.post("/cargo/send", cargo_send),
                     web.post("/operations/action", operations_action),
                     web.get("/data/import", import_page), web.get("/data/import/template", import_template),
-                    web.post("/data/import", import_upload), web.get("/data", data_page), web.get("/data/export", data_export), web.get("/normalization", normalization_page),
+                    web.post("/data/import", import_upload), web.post("/data/import/{category}", import_upload), web.get("/data", data_page), web.get("/data/export", data_export), web.get("/normalization", normalization_page),
                     web.get("/health", health_page), web.get("/settings", settings_page),
                     web.post("/normalization/save", save_normalization_alias),
                     web.post("/normalization/delete", delete_normalization_alias),

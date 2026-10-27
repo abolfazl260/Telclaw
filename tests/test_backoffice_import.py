@@ -190,3 +190,64 @@ async def test_authenticated_preview_apply_and_csrf(import_db):
         assert source.status == 200
     finally:
         await client.close()
+
+
+def test_mixed_category_rows_and_columns_are_rejected_before_writes(import_db):
+    for rows in [
+        [{**listing(), 'job_title': 'Installer', 'bedrooms': '2'}],
+        [{**listing(), 'category': 'joblist'}, {**listing(), 'category': 'housinglist'}],
+        [{**listing(), 'category': 'housinglist'}],
+    ]:
+        with pytest.raises(ValueError):
+            importer.import_csv('joblist', payload(rows), 12)
+        assert backoffice_data.page('joblist')['total'] == 0
+    assert importer.import_csv('joblist', payload([{**listing(), 'category': 'joblist'}]), 12)[0]['status'] == 'imported'
+
+
+@pytest.mark.asyncio
+async def test_separate_category_uploads_previews_and_destinations(import_db):
+    client = TestClient(TestServer(backoffice_web.create_app()))
+    await client.start_server()
+    try:
+        conn = database.get_connection()
+        conn.execute('INSERT INTO backoffice_sessions VALUES(?,?,?,?)',
+                     (backoffice_web._digest('category-session'), 1485409432, 'csrf',
+                      (backoffice_web._now() + timedelta(hours=1)).isoformat()))
+        conn.commit(); conn.close()
+        headers = {'Cookie': 'telclaw_admin=category-session'}
+        page = await (await client.get('/data/import', headers=headers)).text()
+        assert '<select name="category">' not in page
+        fields = {'joblist': ('job_title', 'Installer'), 'housinglist': ('bedrooms', '2'),
+                  'transferlist': ('origin_city', 'Tehran')}
+        templates = {}
+        for category, (field, value) in fields.items():
+            assert f'action="/data/import/{category}#import-{category}"' in page
+            assert f'id="file-{category}"' in page
+            template = await client.get('/data/import/template?category=' + category, headers=headers)
+            templates[category] = next(csv.reader(io.StringIO((await template.text()).lstrip('\ufeff'))))
+            assert field in templates[category]
+            rows = [{**listing(), 'category': category, field: value}]
+            data = payload(rows)
+            form = FormData()
+            form.add_field('csrf', 'csrf'); form.add_field('category', category)
+            form.add_field('file', data, filename='ads.csv', content_type='text/csv')
+            preview = await client.post('/data/import/' + category, data=form, headers=headers)
+            markup = await preview.text()
+            assert preview.status == 200
+            assert f'<bdi>{category}</bdi>' in markup
+            assert backoffice_data.page(category)['total'] == 0
+            encoded = re.search(r'name="payload" value="([^"]+)"', markup)[1]
+            body = dict(csrf='csrf', category=category, action='apply', payload=encoded)
+            wrong = next(c for c in fields if c != category)
+            mismatch = await client.post('/data/import/' + wrong, data=body, headers=headers)
+            assert mismatch.status == 400
+            assert backoffice_data.page(wrong)['total'] == (1 if wrong == 'joblist' and category != 'joblist' else 0)
+            assert (await client.post('/data/import/' + category, data={**body, 'csrf': 'wrong'}, headers=headers)).status == 403
+            saved = await client.post('/data/import/' + category, data=body, headers=headers)
+            assert saved.status == 200
+            assert backoffice_data.page(category)['rows'][0][field] == value
+        assert 'job_title' not in templates['housinglist']
+        assert 'bedrooms' not in templates['joblist']
+        assert 'origin_city' not in templates['joblist']
+    finally:
+        await client.close()

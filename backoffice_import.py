@@ -17,6 +17,7 @@ from storage.database import CATEGORY_TABLES, get_connection
 MAX_BYTES = 512 * 1024
 MAX_ROWS = 500
 METADATA = ('source_url', 'source_date', 'raw_text')
+CATEGORY_LABELS = {'joblist': 'شغل', 'housinglist': 'مسکن', 'transferlist': 'کارگو و مسافر'}
 
 
 def parse_csv(category, payload):
@@ -29,11 +30,11 @@ def parse_csv(category, payload):
     except UnicodeDecodeError as exc:
         raise ValueError('فایل باید CSV با کدگذاری UTF-8 باشد.') from exc
     reader = csv.DictReader(io.StringIO(text, newline=''), strict=True)
-    allowed = {*CATEGORY_TABLES[category], *METADATA}
+    allowed = {*CATEGORY_TABLES[category], *METADATA, 'category'}
     try:
         headers = reader.fieldnames or []
         if not headers or len(set(headers)) != len(headers) or any(h not in allowed for h in headers):
-            raise ValueError('ستون ناشناخته یا تکراری؛ فایل قالب همین دسته را دریافت کن.')
+            raise ValueError('ستون ناشناخته، تکراری یا متعلق به دسته‌ای دیگر؛ فایل قالب همین دسته را دریافت کن. هر فایل فقط یک دسته‌بندی دارد.')
         if not {'source_url', 'description'} <= set(headers):
             raise ValueError('ستون‌های source_url و description الزامی هستند.')
         rows = []
@@ -43,6 +44,8 @@ def parse_csv(category, payload):
             try:
                 if None in raw or any(v is None for v in raw.values()):
                     raise ValueError('تعداد سلول‌ها با ستون‌ها برابر نیست.')
+                if 'category' in raw and raw['category'].strip() != category:
+                    raise ValueError(f'دستهٔ ردیف باید {category} باشد؛ فایل ترکیبی مجاز نیست.')
                 if any(len(v) > 20000 or '\x00' in v for v in raw.values()):
                     raise ValueError('مقدار سلول نامعتبر یا بیشتر از ۲۰۰۰۰ نویسه است.')
                 source = raw['source_url'].strip()
@@ -123,18 +126,36 @@ def import_csv(category, payload, admin_id):
         conn.close()
 
 
-def _page(request, content='', status=200):
+def _page(request, content='', status=200, category=None):
     esc = html.escape
     csrf = esc(request['session']['csrf'], quote=True)
-    options = ''.join(f'<option value="{c}">{c}</option>' for c in CATEGORY_TABLES)
-    templates = ' '.join(f'<a href="/data/import/template?category={c}">{c}</a>' for c in CATEGORY_TABLES)
+    cards = []
+    for key, label in CATEGORY_LABELS.items():
+        columns = ', '.join(CATEGORY_TABLES[key])
+        active = ' import-selected' if key == category else ''
+        result = f'<div class="import-results" aria-live="polite">{content}</div>' if key == category else ''
+        cards.append(f'''<section class="backoffice-panel import-category{active}" id="import-{key}">
+<div class="import-card-header"><h2>ایمپورت {label}</h2><span class="import-table" dir="ltr">{key}</span></div>
+<p>فقط داده‌های {label} را در این فایل قرار بده.</p>
+<a class="import-template" href="/data/import/template?category={key}">دریافت قالب CSV {label}</a>
+<details class="import-columns"><summary>ستون‌های مجاز {label}</summary><p dir="ltr">category, {', '.join(METADATA)}, {columns}</p></details>
+<form class="import-form" method="post" action="/data/import/{key}#import-{key}" enctype="multipart/form-data">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="category" value="{key}">
+<label for="file-{key}">فایل CSV {label}<input id="file-{key}" type="file" name="file" accept=".csv,text/csv" required></label>
+<button>بررسی فایل {label}</button></form>{result}</section>''')
+    general_error = f'<div class="backoffice-panel">{content}</div>' if content and category not in CATEGORY_LABELS else ''
     return web.Response(text=f'''<!doctype html><html lang="fa"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Import CSV</title>
 <style>
-.import-form{{display:grid;grid-template-columns:minmax(160px,1fr) minmax(200px,2fr) auto;gap:1rem;align-items:end}}
+.import-form{{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1rem;align-items:end}}
 .import-form label{{display:grid;gap:.4rem}}.import-form button{{margin:0}}
-.import-templates{{display:flex;gap:.7rem;flex-wrap:wrap;align-items:center}}
-.import-templates a{{padding:.4rem .7rem;border:1px solid #d9e2ee;border-radius:7px;color:#1957b8;text-decoration:none}}
+.import-categories{{display:grid;gap:1rem}}.import-category{{margin:0}}
+.import-card-header{{display:flex;gap:1rem;justify-content:space-between;align-items:center;flex-wrap:wrap}}
+.import-table{{font-size:.85rem;color:#536479;background:#f3f6fb;padding:.3rem .6rem;border-radius:6px}}
+.import-template{{display:inline-block;padding:.45rem .75rem;border:1px solid #d9e2ee;border-radius:7px;color:#1957b8;text-decoration:none}}
+.import-columns{{margin:1rem 0;color:#536479}}.import-columns summary{{cursor:pointer}}
+.import-columns p{{overflow-wrap:anywhere}}.import-category.import-selected{{border-color:#7da7e6}}
+.import-form label{{min-width:0}}.import-form input[type=file]{{width:100%}}
 .import-results{{margin-top:1.2rem}}.import-results li{{margin:.4rem 0}}
 .import-results .scroll{{overflow:auto;max-height:65vh}}
 .import-results table{{border-collapse:separate;border-spacing:0;min-width:100%;direction:ltr}}
@@ -146,17 +167,13 @@ def _page(request, content='', status=200):
 <main class="backoffice-content" dir="rtl">
 <section class="backoffice-panel"><h2>ورود اطلاعات استخراج‌شده از وبسایت</h2>
 <p class="backoffice-muted">فایل CSV با کدگذاری UTF-8؛ حداکثر ۵۰۰ ردیف و ۵۱۲ کیلوبایت.</p>
-<div class="import-templates"><strong>دریافت قالب:</strong> {templates}</div>
+<p><strong>هر فایل فقط برای یک دسته‌بندی است.</strong> قالب را از بخش همان دسته بگیر و فایل را همان‌جا آپلود کن؛ فایل ترکیبی شغل، مسکن و کارگو مجاز نیست.</p>
 <p><bdi>source_url</bdi> و <bdi>description</bdi> الزامی؛ <bdi>source_date</bdi> تاریخ اصلی آگهی به صورت ISO است و اختیاری است. <bdi>raw_text</bdi> متن اصلی اختیاری است.
-نام سایر ستون‌ها باید مطابق قالب باشد. سلول خالی یا NULL مقدار تهی می‌شود. شناسه‌ها را وارد نکن.</p>
+ستون اختیاری <bdi>category</bdi>، در صورت وجود، باید در تمام ردیف‌ها دقیقاً نام جدول همان دسته باشد. نام سایر ستون‌ها باید مطابق قالب باشد. سلول خالی یا NULL مقدار تهی می‌شود. شناسه‌ها را وارد نکن.</p>
 <p class="backoffice-notice">اطلاعات فقط ذخیره می‌شود و خودکار منتشر یا برای AI ارسال نمی‌شود. شناسهٔ پیام و کاربر تلگرام ندارد.
 آدرس تکراری در همان دسته رد می‌شود و رکورد قبلی تغییر نمی‌کند. هر آدرس باید متعلق به یک آگهی باشد.</p>
-<form class="import-form" method="post" action="/data/import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{csrf}">
-<label>دسته‌بندی<select name="category">{options}</select></label>
-<label>فایل CSV<input type="file" name="file" accept=".csv,text/csv" required></label>
-<button>بررسی و پیش‌نمایش</button></form>
-<p><a href="/data?table=external_category_sources">مشاهدهٔ منابع واردشده</a></p>
-<div class="import-results">{content}</div></section></main></body></html>''', content_type='text/html', status=status)
+<p><a href="/data?table=external_category_sources">مشاهدهٔ منابع واردشده</a></p></section>
+{general_error}<div class="import-categories">{''.join(cards)}</div></main></body></html>''', content_type='text/html', status=status)
 
 
 async def import_page(request):
@@ -175,8 +192,11 @@ async def import_template(request):
 
 async def import_upload(request):
     form = await request.post()
-    category = str(form.get('category', ''))
+    route_category = request.match_info.get('category')
+    category = route_category or str(form.get('category', ''))
     try:
+        if route_category and str(form.get('category', route_category)) != route_category:
+            raise ValueError('دستهٔ فایل با بخش آپلود برابر نیست.')
         apply = str(form.get('action', '')) == 'apply'
         if apply:
             encoded = str(form.get('payload', ''))
@@ -196,7 +216,7 @@ async def import_upload(request):
         if apply:
             results = await asyncio.to_thread(import_csv, category, payload, request['session']['admin_id'])
             count = sum(r['status'] == 'imported' for r in results)
-            body = f'<h2>ثبت‌شده: {count} · تکراری: {len(results)-count}</h2><p>این تعداد به معنی انتشار نیست.</p><ul>'
+            body = f'<h3>نتیجهٔ ایمپورت {CATEGORY_LABELS[category]} · <bdi>{category}</bdi></h3><h2>ثبت‌شده: {count} · تکراری: {len(results)-count}</h2><p>این تعداد به معنی انتشار نیست.</p><ul>'
             for row in results:
                 link = f'/data?table={category}&op_id=eq&f_id={row["id"]}'
                 label = 'ثبت شد' if row['status'] == 'imported' else 'تکراری؛ تغییر نکرد'
@@ -204,17 +224,17 @@ async def import_upload(request):
             body += '</ul>'
         else:
             columns = [*METADATA, *CATEGORY_TABLES[category]]
-            body = f'<h2>پیش‌نمایش: {len(rows)} ردیف معتبر</h2><p>تکراری‌ها هنگام ثبت کنار گذاشته می‌شوند.</p><div class="scroll"><table><tr>'
+            body = f'<h3>دستهٔ مقصد: {CATEGORY_LABELS[category]} · <bdi>{category}</bdi></h3><h2>پیش‌نمایش: {len(rows)} ردیف معتبر</h2><p>تکراری‌ها هنگام ثبت کنار گذاشته می‌شوند.</p><div class="scroll"><table><tr>'
             body += ''.join(f'<th>{c}</th>' for c in columns) + '</tr>'
             for row in rows[:5]:
                 values = {**row['data'], **{key: row[key] for key in METADATA}}
                 body += '<tr>' + ''.join(f'<td>{esc(str(values[c])) if values[c] is not None else "NULL"}</td>' for c in columns) + '</tr>'
             body += '</table></div><p>نمایش پنج ردیف اول؛ همهٔ ردیف‌ها بررسی شده‌اند.</p>'
-            body += f'''<form method="post" action="/data/import"><input type="hidden" name="csrf" value="{esc(request['session']['csrf'], quote=True)}">
+            body += f'''<form method="post" action="/data/import/{category}#import-{category}"><input type="hidden" name="csrf" value="{esc(request['session']['csrf'], quote=True)}">
 <input type="hidden" name="category" value="{esc(category, quote=True)}"><input type="hidden" name="action" value="apply">
-<input type="hidden" name="payload" value="{base64.b64encode(payload).decode('ascii')}"><button>ثبت در دیتابیس</button></form>'''
-        return _page(request, body)
+<input type="hidden" name="payload" value="{base64.b64encode(payload).decode('ascii')}"><button>ثبت در دستهٔ {CATEGORY_LABELS[category]}</button></form>'''
+        return _page(request, body, category=category)
     except ValueError as exc:
-        return _page(request, f'<p class="backoffice-error" role="alert">{html.escape(str(exc))}</p>', 400)
+        return _page(request, f'<p class="backoffice-error" role="alert">{html.escape(str(exc))}</p>', 400, category=category)
     except sqlite3.Error:
-        return _page(request, '<p class="backoffice-error" role="alert">ثبت انجام نشد؛ تغییرات این فایل برگشت داده شد. دیتابیس را بررسی کن.</p>', 503)
+        return _page(request, '<p class="backoffice-error" role="alert">ثبت انجام نشد؛ تغییرات این فایل برگشت داده شد. دیتابیس را بررسی کن.</p>', 503, category=category)

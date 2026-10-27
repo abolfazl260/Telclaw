@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone, timedelta
+from contextlib import closing
 
 from storage import database
 from storage.content_duplicate import content_hash
@@ -112,7 +113,7 @@ def ingest_admin_forward(message: dict) -> tuple[str, str]:
     # Existing content_hash fingerprint allows repeat forwards to be idempotent
     # even if a different admin submitted the same exact normalized message.
     fingerprint = content_hash(text)
-    with database.get_connection() as conn:
+    with closing(database.get_connection()) as conn:
         previous = conn.execute(
             "SELECT 1 FROM messages WHERE channel_username LIKE ? "
             "AND content_hash=? LIMIT 1",
@@ -143,7 +144,7 @@ def ingest_admin_forward(message: dict) -> tuple[str, str]:
     if not inserted:
         return "duplicate", "This Telegram message was already imported."
     # The database's existing startup schema supplies content_hash.
-    with database.get_connection() as conn:
+    with closing(database.get_connection()) as conn:
         conn.execute(
             "UPDATE messages SET content_hash=? "
             "WHERE channel_username=? AND message_id=?",

@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from contextlib import closing
 
 from storage import database
-from storage.content_duplicate import content_hash
+from storage.content_duplicate import content_hash, ensure_duplicate_schema
 
 # Deliberately invalid as a public Telegram username: never fabricate t.me links.
 ADMIN_FORWARD_PREFIX = "admin-forward:"
@@ -114,6 +114,12 @@ def ingest_admin_forward(message: dict) -> tuple[str, str]:
     # even if a different admin submitted the same exact normalized message.
     fingerprint = content_hash(text)
     with closing(database.get_connection()) as conn:
+        # The monitor can start before the crawler/repository bootstrap.
+        # Initialize the shared fingerprint column ONLY if absent. Never
+        # re-run the legacy hash backfill on every forwarded message.
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+        if "content_hash" not in columns:
+            ensure_duplicate_schema(conn)
         previous = conn.execute(
             "SELECT 1 FROM messages WHERE channel_username LIKE ? "
             "AND content_hash=? LIMIT 1",

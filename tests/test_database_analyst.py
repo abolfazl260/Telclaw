@@ -38,8 +38,9 @@ def test_analysis_compares_real_records_and_remembers_followup(analysis_db):
     ])
     result = DatabaseAnalyst(lambda:model).analyze('چرا ارسال نشد؟', [{'role':'user','content':'Jobs را بررسی کن'}])
     assert 'رکورد ۱' in result['answer']
-    assert result['evidence'][0]['row_count'] == 1
-    assert result['evidence'][1] == {'action':'inspect','local_id':1}
+    assert result['evidence'][1]['row_count'] == 1
+    assert result['evidence'][2]['local_id'] == 1
+    assert 'Developer Toronto' in result['evidence'][2]['data']
     assert 'Developer Toronto' in model.messages[-1]
     assert 'Jobs را بررسی کن' in model.messages[-1]
 
@@ -48,7 +49,7 @@ def test_destructive_model_action_rejected_without_changes(analysis_db):
     model = ScriptedModel([{'action':'query','sql':'DELETE FROM messages'},
                            {'action':'answer','answer':'درخواست مجاز نبود.'}])
     result = DatabaseAnalyst(lambda:model).analyze('بررسی کن')
-    assert result['evidence'] == [{'action':'rejected'}]
+    assert result['evidence'][-1] == {'action':'rejected'}
     with database.get_connection() as conn:
         assert conn.execute('SELECT count(*) FROM messages').fetchone()[0] == 1
     assert 'Tool rejected' in model.messages[-1]
@@ -62,7 +63,9 @@ def test_analysis_bounds_and_busy(analysis_db):
     analyst.lock.acquire()
     with pytest.raises(AnalysisError, match='Another'): analyst.analyze('ok')
     analyst.lock.release()
-    with pytest.raises(AnalysisError, match='step limit'): analyst.analyze('ok')
+    result = analyst.analyze('ok')
+    assert result['partial'] is True
+    assert result['evidence'][1]['data']['rows'] == [[1]]
     assert not analyst.lock.locked()
 
 
@@ -117,3 +120,77 @@ async def test_backoffice_chat_auth_csrf_and_output(analysis_db):
         assert response.status==400
     finally:
         await client.close()
+
+
+def test_final_answer_reserve_is_used_before_budget_failure(analysis_db):
+    class ReserveModel(ScriptedModel):
+        def should_finish(self):
+            return len(self.messages) >= 1
+    model = ReserveModel([{'action':'query','sql':'SELECT id FROM messages'},
+                          {'action':'answer','answer':'جمع‌بندی بر اساس رکورد ۱'}])
+    result = DatabaseAnalyst(lambda:model).analyze('بررسی')
+    assert not result['partial']
+    assert 'FINAL_ANSWER' in model.messages[-1]
+    assert len(result['evidence']) == 2
+
+
+def test_failed_synthesis_preserves_real_evidence(analysis_db):
+    class FailedModel(ScriptedModel):
+        def complete(self, messages):
+            if self.messages:
+                raise AnalysisError('Analysis time limit reached.')
+            return super().complete(messages)
+    model = FailedModel([{'action':'query','sql':'SELECT id,raw_text FROM messages'}])
+    result = DatabaseAnalyst(lambda:model).analyze('بررسی')
+    assert result['partial']
+    assert 'time limit' in result['warning']
+    assert result['evidence'][1]['data']['rows'] == [[1, 'Developer Toronto']]
+    assert 'کامل نشد' in result['answer']
+
+
+def test_planning_failure_can_still_synthesize(analysis_db):
+    class RecoverModel(ScriptedModel):
+        count = 0
+        def complete(self, messages):
+            self.count += 1
+            if self.count == 1:
+                raise AnalysisError('HTTP attempt limit reached.')
+            assert messages[-1]['content'].startswith('FINAL_ANSWER')
+            return {'action':'answer','answer':'فقط آمار اولیه موجود است؛ علت قطعی مشخص نیست.'}
+    result = DatabaseAnalyst(lambda: RecoverModel([])).analyze('بررسی')
+    assert not result['partial']
+    assert result['evidence'][0]['action'] == 'pipeline_summary'
+
+
+def test_model_reserves_two_attempts_and_reports_safe_diagnostics(monkeypatch):
+    import ai.database_analyst as module
+    monkeypatch.setattr(config,'AI_PROVIDERS',('cloudflare','groq'))
+    monkeypatch.setattr(config,'CLOUDFLARE_PROVIDERS',[
+        {'account_id':'acc','api_token':'SECRET','model':'test'}] * 3)
+    monkeypatch.setattr(config,'GROQ_PROVIDERS',[
+        {'api_key':'SECRET','model':'test'}] * 3)
+    monkeypatch.setattr(module.RateLimiter,'wait',lambda self:None)
+    module._LIMITERS.clear()
+    monkeypatch.setattr(module.requests,'post',lambda *a,**kw: SimpleNamespace(ok=False,status_code=429))
+    model = AnalysisModel()
+    with pytest.raises(AnalysisError, match='attempt limit'):
+        model.complete([{'role':'user','content':'test'}])
+    assert model.calls == 4
+    assert [d['provider'] for d in model.diagnostics] == ['cloudflare','groq'] * 2
+    assert model.should_finish()
+    with pytest.raises(AnalysisError):
+        model.complete([{'role':'system','content':'FINAL_ANSWER: summarize'}])
+    assert model.calls == 6
+    assert all(d['reason']=='http_429' for d in model.diagnostics)
+    assert 'SECRET' not in json.dumps(model.diagnostics)
+
+
+def test_time_limit_has_distinct_reason(monkeypatch):
+    import ai.database_analyst as module
+    monkeypatch.setattr(config,'AI_PROVIDERS',('groq',))
+    monkeypatch.setattr(config,'GROQ_PROVIDERS',[{'api_key':'secret','model':'test'}])
+    model=AnalysisModel()
+    model.deadline=module.time.monotonic()-1
+    with pytest.raises(AnalysisError,match='time limit'):
+        model.complete([{'role':'user','content':'test'}])
+    assert model.calls == 0

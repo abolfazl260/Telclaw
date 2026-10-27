@@ -60,3 +60,20 @@ conversation validation, concurrency/step limits, both provider request formats,
 fallback, session/CSRF enforcement, and safe text rendering. Existing MCP reader
 and protocol tests continue to run. Stop using `/assistant` or revert this change
 to roll back; no migration or persistent conversation data is introduced.
+
+## Incomplete-analysis recovery
+
+The six-attempt and 90-second total budgets are unchanged. Planning reserves two
+HTTP attempts and 25 seconds for final synthesis, and switches to synthesis early
+when time/attempts are running low. Provider credential attempts are interleaved
+so an alternate provider can be reached before exhausting one provider's keys.
+Credentials returning 401/403/404/429/5xx are skipped for the rest of that question.
+Compact schema/history/tool contexts reduce input size.
+
+If the model still cannot answer, the page explicitly labels the result incomplete
+and preserves the actual pipeline counts and successful tool results. It does not
+claim the fallback is an AI diagnosis. The evidence panel includes sanitized
+provider/phase/attempt/reason codes (HTTP status, malformed output, token limit),
+never provider response bodies, tokens, or credentials. Time-limit and HTTP-attempt
+failures have distinct messages. This makes a quota/auth/model problem visible
+instead of attributing every failure to a question being too broad.

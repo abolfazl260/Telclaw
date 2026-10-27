@@ -362,8 +362,11 @@ class AdvertioJobsService:
             and record.get("sender_type") == "user"
         )
         username = str(record.get("sender_username") or "").lstrip("@")
+        # Administrator-forwarded posts may specify a contact in the text.
+        # This does NOT authenticate the author and must never supply a Telegram user ID.
+        text_contact = record.get("sender_type") == "admin_forward_text"
         if (
-            original
+            (original or text_contact)
             and re.fullmatch(r"[A-Za-z0-9_]{5,32}", username)
             and username.casefold()
             != str(record.get("channel_username") or "").lstrip("@").casefold()

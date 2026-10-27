@@ -180,3 +180,8 @@ def test_property_condition_is_not_sent_to_advertio():
     attrs = json.loads(payload["attributesJson"])
     assert "property_condition" not in attrs
     assert "condition" not in attrs
+
+
+def test_forward_first_username_overrides_later_ai_housing_contact():
+    record = {**_record(), 'sender_type': 'admin_forward_text', 'sender_username': 'Helpero_ltd', 'sender_id': None}
+    assert _service().build_payload(record, _housing(contact='@karyabi_canada'))['contactHandle'] == '@Helpero_ltd'

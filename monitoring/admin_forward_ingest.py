@@ -24,7 +24,7 @@ PROFILE_RE = re.compile(
 )
 LABEL_RE = re.compile(
     r"(?i)(?:username|user\s*name|telegram(?:\s*id)?|contact|یوزرنیم|آیدی(?:\s*تلگرام)?|شناسه\s*تلگرام)"
-    r"\s*[:：\-]\s*@?(" + HANDLE + r")(?!\w)"
+    r"\s*[:：\-]\s*@?(" + HANDLE + r")(?![\w@/:]|\.[A-Za-z0-9])"
 )
 
 
@@ -33,24 +33,16 @@ def word_count(text: str) -> int:
 
 
 def extract_text_username(text: str) -> str | None:
-    """Return a single unambiguous Telegram username, or None.
+    """Return the first valid text contact in reading order, or None.
 
-    A labeled contact takes precedence over unrelated mentions in the body;
-    conflicting labeled handles are refused. Otherwise all distinct @mentions
-    and direct Telegram profile links must agree.
+    Mentions, direct profile URLs and explicit labels share one ordering.
+    A later labeled contact never overrides an earlier username.
     """
-    labeled = {m.group(1).lower(): m.group(1) for m in LABEL_RE.finditer(text)}
-    if len(labeled) > 1:
+    matches = [match for regex in (MENTION_RE, PROFILE_RE, LABEL_RE)
+               for match in regex.finditer(text)]
+    if not matches:
         return None
-    if labeled:
-        return "@" + next(iter(labeled.values()))
-    candidates = {}
-    for regex in (MENTION_RE, PROFILE_RE):
-        for match in regex.finditer(text):
-            candidates.setdefault(match.group(1).lower(), match.group(1))
-    if len(candidates) != 1:
-        return None
-    return "@" + next(iter(candidates.values()))
+    return "@" + min(matches, key=lambda match: match.start(1)).group(1)
 
 
 def is_forwarded(message: dict) -> bool:
@@ -94,7 +86,7 @@ def ingest_admin_forward(message: dict) -> tuple[str, str]:
     username = extract_text_username(text)
     if not username:
         return "missing_username", (
-            "Add one unambiguous Telegram username in the forwarded text "
+            "Add a Telegram username in the forwarded text; the first valid username is used "
             "(for example @example_user or Username: @example_user)."
         )
     date_str = _original_forward_date(message)

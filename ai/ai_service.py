@@ -238,6 +238,11 @@ class AIProcessingService:
                 data = result.get("data", {}).get(category)
                 if not isinstance(data, dict):
                     raise AIExtractionError(f"Missing extracted data for classified category: {category}", reason="invalid_provider_output")
+                # Admin-forward imports explicitly select the first text contact.
+                username = str(record.get("sender_username") or "").lstrip("@")
+                if (record.get("sender_type") == "admin_forward_text"
+                        and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", username)):
+                    data = {**data, "contact": "@" + username}
                 data, normalization_changes = normalize_category_data(category, data)
                 if normalization_changes:
                     logger.info(

@@ -12,7 +12,7 @@ import pytest
 import requests
 
 import config
-from ai.category_schemas import CATEGORY_FIELDS, validate_result
+from ai.category_schemas import CATEGORY_FIELDS, validate_result, normalize_job_location
 from ai.extractor import _normalize_defaults
 from ai.prompt_loader import render_prompt
 from backoffice_jobs import jobs_report, jobs_section
@@ -47,6 +47,13 @@ class FakeClient:
                 countryCode="CA",
             ),
             dict(
+                code="calgary",
+                name="Calgary",
+                nameFa="کلگری",
+                provinceCode="AB",
+                countryCode="CA",
+            ),
+            dict(
                 code="vancouver",
                 name="Vancouver",
                 nameFa="ونکوور",
@@ -71,6 +78,7 @@ class FakeClient:
         if path == "locations/provinces":
             return [
                 {"code": "ON", "name": "Ontario", "nameFa": "انتاریو"},
+                {"code": "AB", "name": "Alberta", "nameFa": "آلبرتا"},
                 {"code": "BC", "name": "British Columbia"},
                 {"code": "QC", "name": "Quebec"},
             ]
@@ -224,6 +232,86 @@ def test_complete_contract_and_original_description(env, role, prefix):
     assert c.queries[-1][1] == dict(
         countryCode="CA", provinceCode="ON", q="Toronto", limit=200
     )
+
+
+
+@pytest.mark.parametrize(
+    "city,province,expected_province",
+    [("Toronto", None, "Ontario"), ("Calgary", "AB", "AB")],
+)
+def test_jobs_ai_location_normalization_from_exported_failure_shapes(
+    city, province, expected_province
+):
+    original = {
+        "is_job_listing": True, "role": "employer",
+        "country_code": None, "province": province, "city": city,
+    }
+    category, normalized = validate_result({
+        "category": "joblist", "data": {"joblist": original}
+    })
+    assert category == "joblist"
+    assert normalized["country_code"] == "CA"
+    assert normalized["province"] == expected_province
+    assert original["country_code"] is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"city": "London", "country_code": None, "province": None},
+        {"city": "Toronto", "country_code": "US", "province": None},
+        {"city": "Calgary", "country_code": None, "province": "ON"},
+        {"city": None, "country_code": None, "province": "AB"},
+        {"city": "Unknown", "country_code": None, "province": None},
+        {"city": "Toronto", "country_code": None,
+         "province": None, "is_job_listing": False},
+    ],
+)
+def test_jobs_location_normalization_never_invents_ambiguous_or_conflicting_location(changes):
+    record = {"city": "Toronto", "country_code": "CA", "province": "ON",
+              "is_job_listing": True}
+    record.update(changes)
+    assert normalize_job_location(record) == record
+
+
+def test_jobs_delivery_recovers_missing_country_with_supported_city(env):
+    service, client = env
+    message = "Hiring barista in North York, Toronto. Please contact the author."
+    payload, _ = service.build_payload(record(
+        cleaned_text=message, country_code=None, province=None,
+        job_category="restaurant_food", job_title="Barista",
+        city="Toronto", job_type=None,
+    ))
+    assert payload["countryCode"] == "CA"
+    assert payload["province"] == "ON"
+    assert payload["city"] == "toronto"
+    assert payload["description"] == message
+    assert payload["autoPublish"] is True
+    assert client.queries[-1][1] == {
+        "countryCode": "CA", "provinceCode": "ON", "q": "Toronto", "limit": 200
+    }
+
+
+def test_jobs_delivery_infers_country_from_calgary_and_ab(env):
+    service, _ = env
+    source = "Senior ETL Developer needed in Calgary, AB. Contact recruiter."
+    payload, _ = service.build_payload(record(
+        cleaned_text=source, country_code=None, province="AB",
+        city="Calgary", job_category="it_tech",
+        job_title="Senior ETL Developer",
+    ))
+    assert (payload["countryCode"], payload["province"], payload["city"]) == (
+        "CA", "AB", "calgary",
+    )
+
+
+def test_jobs_delivery_still_requires_source_city_evidence(env):
+    service, _ = env
+    with pytest.raises(JobsMappingError, match="city_without_source_evidence"):
+        service.build_payload(record(
+            cleaned_text="Senior ETL Developer, contact recruiter for details.",
+            country_code=None, province="AB", city="Calgary",
+        ))
 
 
 @pytest.mark.parametrize(

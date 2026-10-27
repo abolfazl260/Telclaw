@@ -4,6 +4,7 @@ import html
 import json
 import sqlite3
 from aiohttp import web
+from backoffice_layout import SHARED_STYLE, page_header
 from ai.database_analyst import AnalysisError, DatabaseAnalyst
 
 ANALYST_KEY = web.AppKey('database_analyst', DatabaseAnalyst)
@@ -12,19 +13,19 @@ ANALYST_KEY = web.AppKey('database_analyst', DatabaseAnalyst)
 async def assistant_page(request):
     csrf = html.escape(request['session']['csrf'], quote=True)
     nonce = html.escape(request['csp_nonce'], quote=True)
-    return web.Response(text='''<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
+    return web.Response(text='''<!doctype html><html lang="fa"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Telclaw · دستیار تحلیل</title>
 <style>body{font:16px system-ui;background:#f3f6fa;color:#172b46;max-width:1000px;margin:auto;padding:24px}
 nav{display:flex;gap:16px;flex-wrap:wrap}section{background:white;padding:24px;margin-top:20px;border-radius:14px}
 textarea{width:100%;box-sizing:border-box;min-height:100px;font:inherit;padding:12px}button{padding:10px 18px;margin:8px;font:inherit;cursor:pointer}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}article{border-top:1px solid #d8e0ea;padding:12px 0}details{font-size:14px}#status{color:#475569}.query-rows{overflow-x:auto;margin:16px 0}table{border-collapse:collapse;min-width:100%;direction:ltr}th,td{border:1px solid #d8e0ea;padding:8px;vertical-align:top;text-align:start}td{white-space:pre-wrap;overflow-wrap:anywhere;min-width:120px;max-width:480px}.query-note{color:#475569}</style>
-<nav><a href="/">انتشار</a><a href="/operations">عملیات</a><a href="/data">دیتابیس</a><a href="/health">سلامت سیستم</a></nav>
-<section><h1>دستیار تحلیل دیتابیس</h1><p>با سرویس‌های AI تنظیم‌شده، پیام‌ها و علت خطاها را بررسی کن. دسترسی فقط‌خواندنی است.
+pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}article{border-top:1px solid #d8e0ea;padding:12px 0}details{font-size:14px}#status{color:#475569}.query-rows{overflow-x:auto;margin:16px 0}table{border-collapse:collapse;min-width:100%;direction:ltr}th,td{border:1px solid #d8e0ea;padding:8px;vertical-align:top;text-align:start}td{white-space:pre-wrap;overflow-wrap:anywhere;min-width:120px;max-width:480px}.query-note{color:#475569}</style>''' + SHARED_STYLE + '''</head><body>''' + page_header('assistant', 'Telclaw · AI Assistant') + '''
+<main class="backoffice-content" dir="rtl">
+<section class="backoffice-panel"><h2>دستیار تحلیل دیتابیس</h2><p>با سرویس‌های AI تنظیم‌شده، پیام‌ها و علت خطاها را بررسی کن. دسترسی فقط‌خواندنی است.
 متن رکوردهای مرتبط به سرویس AI ارسال می‌شود و از سهمیهٔ آن مصرف می‌کند. پاسخ مدل را با شواهد بررسی کن.</p>
 <form id="chat"><input type="hidden" name="csrf" value="''' + csrf + '''">
 <textarea name="question" maxlength="2000" required placeholder="چرا Jobs ارسال نمی‌شود؟ چند نمونه را بررسی کن."></textarea>
 <button id="send">بررسی و پاسخ</button><button type="button" id="clear">گفتگوی جدید</button></form>
-<p id="status" role="status"></p><div id="answers" aria-live="polite"></div></section>
+<p id="status" role="status"></p><div id="answers" aria-live="polite"></div></section></main>
 <script nonce="''' + nonce + '''">
 const form=document.querySelector('#chat'), send=document.querySelector('#send'), clear=document.querySelector('#clear');
 const status=document.querySelector('#status'), answers=document.querySelector('#answers'); let history=[];
@@ -64,7 +65,7 @@ details.append(summary,evidence);article.append(details);answers.prepend(article
 history.push({role:'user',content:question},{role:'assistant',content:result.answer.slice(0,8000)});history=history.slice(-6);
 form.question.value='';status.textContent=result.partial ? 'تحلیل ناقص است: '+result.warning+' · شواهد و وضعیت سرویس را در مسیر بررسی ببین.' : 'بررسی تمام شد؛ پاسخ ممکن است نیاز به تأیید داشته باشد.';
 }catch(error){status.textContent=error.message;}finally{send.disabled=clear.disabled=false;}};
-</script></html>''', content_type='text/html')
+</script></body></html>''', content_type='text/html')
 
 
 async def assistant_ask(request):

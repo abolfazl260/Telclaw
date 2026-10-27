@@ -4,6 +4,7 @@ from urllib.parse import urlencode, urlparse
 from aiohttp import web
 
 import config
+from backoffice_layout import SHARED_STYLE, page_header
 from backoffice_active_cargo import active_cargo_report
 
 
@@ -144,12 +145,8 @@ async def cargo_page(request):
       .table-wrap{{overflow-x:auto}}table{{border-collapse:collapse;width:100%;min-width:930px}}
       th,td{{padding:9px 11px;text-align:left;border-bottom:1px solid #e3e9f2;vertical-align:top}}
       th{{background:#ebf1f9}}td{{max-width:290px;overflow-wrap:anywhere}}.pagination{{padding:14px 0}}
-    </style></head><body>
-    <h1>Active Cargo · Advertio</h1>
-    <nav class="tabs" aria-label="Back Office sections"><a href="/">Publishing</a>
-      <a href="/operations">Operations</a><a class="active" href="/cargo">Active Cargo</a>
-      <a href="/data">Database</a><a href="/normalization">Normalization</a>
-      <a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    </style>{SHARED_STYLE}</head><body>
+    {page_header('cargo', 'Telclaw · Active Cargo · Advertio')}
     <p class="hint"><strong>Two different reports:</strong> the Advertio candidate pool includes future-dated trips and undated posts from the last {int(config.ADVERTIO_CARGO_BACKFILL_DAYS)} days, with no de-duplication.
       Telegram <strong>/transferlive</strong> includes only dated trips departing today or later, requiring both country codes, and removes duplicates by sender, route and date.
       Switch report views below to compare the exact same entries. Neither report verifies Telegram deletion.</p>

@@ -17,6 +17,7 @@ import aiohttp
 
 import config
 import backoffice_data
+from backoffice_layout import SHARED_STYLE, page_header
 from backoffice_import import import_page, import_template, import_upload
 import backoffice_settings
 from storage import data_normalizer
@@ -513,9 +514,7 @@ async def index(request):
     .diag-warning,.diag-danger,.diag-info{{padding:.65rem .75rem;border-radius:9px}}
     .diag-warning{{background:#fff3cd;color:#6d5200}}.diag-danger{{background:#ffe1db;color:#8e291a}}
     .diag-info{{background:#e8f2ff;color:#244e7a}}.diag-status{{max-width:420px;margin:.8rem 0}}
-    </style></head><body><h1>Telclaw · Publishing rules</h1>
-    <nav class="tabs" aria-label="Back office sections"><a href="/" class="active">Publishing</a>
-    <a href="/operations">Operations</a><a href="/cargo">Active Cargo</a><a href="/assistant">AI Assistant</a><a href="/data">Database</a><a href="/data/import">Import CSV</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    </style>{SHARED_STYLE}</head><body>{page_header('publishing', 'Telclaw · Publishing rules')}
     {('<p class="badge">Telegram paused this send; please retry after its rate limit clears.</p>'
       if getattr(request, 'query', {}).get('notice') == 'rate_limited' else '')}
     <p class="hint">Rules run by priority. Unmatched ads are not published. Each rule can use any stored field from its topic table.</p>
@@ -1123,9 +1122,7 @@ async def data_page(request):
     content = f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{csrf}"><title>Telclaw · Database</title>
-    <style>{_DATA_CSS}</style></head><body><h1>Telclaw Back Office</h1>
-    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/operations">Operations</a><a href="/cargo">Active Cargo</a><a href="/assistant">AI Assistant</a><a class="active" href="/data">Database</a><a href="/data/import">Import CSV</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    <style>{_DATA_CSS}</style>{SHARED_STYLE}</head><body>{page_header('data', 'Telclaw Back Office')}
     <p class="muted">Browse and edit ad data. IDs, links between tables and pipeline controls are read only.</p>
     <nav class="table-tabs" aria-label="Data tables">{''.join(nav)}</nav>
     <section data-table="{table}">{text_help}<p>{result['total']} rows · Page {result['page']} of {result['pages']}
@@ -1284,9 +1281,7 @@ async def health_page(request):
     .health-badge.bad{{background:#ffe0da;color:#9b2c1f}}.health-sections{{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:1rem}}
     .health-sections section{{margin:0}}section{{margin:1rem 0}}pre{{white-space:pre-wrap;max-width:560px;margin:0;font:12px/1.45 ui-monospace,monospace}}
     .refresh{{float:right}}@media(max-width:700px){{.health-sections{{grid-template-columns:1fr}}}}
-    </style></head><body><h1>Telclaw · System Health</h1>
-    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/operations">Operations</a><a href="/cargo">Active Cargo</a><a href="/assistant">AI Assistant</a><a href="/data">Database</a><a href="/data/import">Import CSV</a><a href="/normalization">Normalization</a><a class="active" href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    </style>{SHARED_STYLE}</head><body>{page_header('health', 'Telclaw · System Health')}
     <p class="muted"><a class="refresh" href="/health">Refresh</a>Operational metrics shared with Telegram /health; last activity is an actual stage timestamp (UTC), never the source message date.</p>
     <div class="health-grid">{pipeline_cards}</div>
 
@@ -1792,9 +1787,7 @@ async def operations_page(request):
     .ops-links a{{display:inline-block;padding:.5rem .7rem;border-radius:7px;background:#eef4ff;color:#1957b8;text-decoration:none;font-weight:600}}
     @media(max-width:760px){{.ops-form{{grid-template-columns:1fr}}}}
     {OPERATIONS_CSS}
-    </style></head><body data-ops-running="{str(operations.any_running()).lower()}"><h1>Telclaw · Operations</h1>
-    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a><a class="active" href="/operations">Operations</a>
-    <a href="/cargo">Active Cargo</a><a href="/assistant">AI Assistant</a><a href="/data">Database</a><a href="/data/import">Import CSV</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    </style>{SHARED_STYLE}</head><body data-ops-running="{str(operations.any_running()).lower()}">{page_header('operations', 'Telclaw · Operations')}
     {banner}
     <section class="ops-intro" aria-labelledby="ops-guide-title">
       <div><h2 id="ops-guide-title">How to use Operations</h2>
@@ -2284,10 +2277,7 @@ async def normalization_page(request):
     .normalization-notice{{background:#e3f3ff;border:1px solid #b8d9f2;padding:.8rem;border-radius:10px}}
     .normalization-warning{{background:#fff1c8;padding:.8rem;border-radius:10px;color:#6f5200}}
     @media(max-width:700px){{.alias-card form:not(.inline),.new-alias{{grid-template-columns:1fr}}}}
-    </style></head><body><h1>Telclaw · Data Normalization</h1>
-    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/operations">Operations</a><a href="/cargo">Active Cargo</a><a href="/assistant">AI Assistant</a><a href="/data">Database</a><a href="/data/import">Import CSV</a><a class="active" href="/normalization">Normalization</a>
-    <a href="/health">System Health</a><a href="/settings">Settings</a></nav>
+    </style>{SHARED_STYLE}</head><body>{page_header('normalization', 'Telclaw · Data Normalization')}
     <p class="muted">Aliases are exact field-specific mappings for structured category data. Raw Telegram text in
     <code>messages.raw_text</code> is never modified. Matching ignores case and accents, so one Dusseldorf rule also
     catches Düsseldorf. Optional country scope limits a rule when the related country field contains that ISO2 code.</p>
@@ -2541,9 +2531,7 @@ async def settings_page(request):
     .notice{{padding:.8rem 1rem;border-radius:10px}}.notice.ok{{background:#d9f4e5;color:#17633e}}
     @media(max-width:850px){{.setting-row{{grid-template-columns:1fr}}.setting-form input[type=text],
     .setting-form input[type=password],.setting-form input[type=number],.setting-form select{{min-width:180px;flex:1}}}}
-    </style></head><body><h1>Telclaw · Settings</h1>
-    <nav class="tabs" aria-label="Back office sections"><a href="/">Publishing</a>
-    <a href="/operations">Operations</a><a href="/cargo">Active Cargo</a><a href="/assistant">AI Assistant</a><a href="/data">Database</a><a href="/data/import">Import CSV</a><a href="/normalization">Normalization</a><a href="/health">System Health</a><a class="active" href="/settings">Settings</a></nav>
+    </style>{SHARED_STYLE}</head><body>{page_header('settings', 'Telclaw · Settings')}
     <p class="muted">Values from <code>.env</code> are defaults. A saved Back Office value overrides that default and is
     persisted in SQLite. Secret values are never rendered in the page. Settings marked restart required are saved immediately
     but need a Telclaw restart for already-created clients, listeners or workers to rebuild safely.</p>

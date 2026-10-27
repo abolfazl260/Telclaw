@@ -11,6 +11,7 @@ from datetime import datetime
 from urllib.parse import urlsplit
 
 from aiohttp import web
+from backoffice_layout import SHARED_STYLE, page_header
 from storage.database import CATEGORY_TABLES, get_connection
 
 MAX_BYTES = 512 * 1024
@@ -126,19 +127,36 @@ def _page(request, content='', status=200):
     esc = html.escape
     csrf = esc(request['session']['csrf'], quote=True)
     options = ''.join(f'<option value="{c}">{c}</option>' for c in CATEGORY_TABLES)
-    templates = ' · '.join(f'<a href="/data/import/template?category={c}">{c}</a>' for c in CATEGORY_TABLES)
-    return web.Response(text=f'''<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · ورود اطلاعات وبسایت</title><style>body{{font:16px system-ui;max-width:1100px;margin:auto;padding:24px}}
-pre{{white-space:pre-wrap;overflow-wrap:anywhere}}table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ccc;padding:8px}}td{{white-space:pre-wrap;overflow-wrap:anywhere}}button{{padding:10px;margin:12px}}.scroll{{overflow:auto}}</style>
-<nav><a href="/data">دیتابیس</a> · <a href="/data?table=external_category_sources">منابع واردشده</a> · <a href="/">انتشار</a> · <a href="/assistant">دستیار تحلیل</a></nav>
-<h1>ورود اطلاعات استخراج‌شده از وبسایت</h1><p>فایل CSV با کدگذاری UTF-8؛ حداکثر ۵۰۰ ردیف و ۵۱۲ کیلوبایت. دریافت قالب: {templates}</p>
-<p>source_url و description الزامی؛ source_date تاریخ اصلی آگهی به صورت ISO است و اختیاری است. raw_text متن اصلی اختیاری است.
+    templates = ' '.join(f'<a href="/data/import/template?category={c}">{c}</a>' for c in CATEGORY_TABLES)
+    return web.Response(text=f'''<!doctype html><html lang="fa"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Import CSV</title>
+<style>
+.import-form{{display:grid;grid-template-columns:minmax(160px,1fr) minmax(200px,2fr) auto;gap:1rem;align-items:end}}
+.import-form label{{display:grid;gap:.4rem}}.import-form button{{margin:0}}
+.import-templates{{display:flex;gap:.7rem;flex-wrap:wrap;align-items:center}}
+.import-templates a{{padding:.4rem .7rem;border:1px solid #d9e2ee;border-radius:7px;color:#1957b8;text-decoration:none}}
+.import-results{{margin-top:1.2rem}}.import-results li{{margin:.4rem 0}}
+.import-results .scroll{{overflow:auto;max-height:65vh}}
+.import-results table{{border-collapse:separate;border-spacing:0;min-width:100%;direction:ltr}}
+.import-results th,.import-results td{{border-bottom:1px solid #e7edf4;padding:.55rem .7rem;min-width:130px;max-width:340px;vertical-align:top;text-align:start}}
+.import-results th{{position:sticky;top:0;background:#eaf0f9}}
+.import-results td{{white-space:pre-wrap;overflow-wrap:anywhere}}
+@media(max-width:760px){{.import-form{{grid-template-columns:1fr}}}}
+</style>{SHARED_STYLE}</head><body>{page_header('import', 'Telclaw · Import CSV')}
+<main class="backoffice-content" dir="rtl">
+<section class="backoffice-panel"><h2>ورود اطلاعات استخراج‌شده از وبسایت</h2>
+<p class="backoffice-muted">فایل CSV با کدگذاری UTF-8؛ حداکثر ۵۰۰ ردیف و ۵۱۲ کیلوبایت.</p>
+<div class="import-templates"><strong>دریافت قالب:</strong> {templates}</div>
+<p><bdi>source_url</bdi> و <bdi>description</bdi> الزامی؛ <bdi>source_date</bdi> تاریخ اصلی آگهی به صورت ISO است و اختیاری است. <bdi>raw_text</bdi> متن اصلی اختیاری است.
 نام سایر ستون‌ها باید مطابق قالب باشد. سلول خالی یا NULL مقدار تهی می‌شود. شناسه‌ها را وارد نکن.</p>
-<p>اطلاعات فقط ذخیره می‌شود و خودکار منتشر یا برای AI ارسال نمی‌شود. شناسهٔ پیام و کاربر تلگرام ندارد.
+<p class="backoffice-notice">اطلاعات فقط ذخیره می‌شود و خودکار منتشر یا برای AI ارسال نمی‌شود. شناسهٔ پیام و کاربر تلگرام ندارد.
 آدرس تکراری در همان دسته رد می‌شود و رکورد قبلی تغییر نمی‌کند. هر آدرس باید متعلق به یک آگهی باشد.</p>
-<form method="post" action="/data/import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{csrf}">
-<select name="category">{options}</select><input type="file" name="file" accept=".csv,text/csv" required>
-<button>بررسی و پیش‌نمایش</button></form>{content}</html>''', content_type='text/html', status=status)
+<form class="import-form" method="post" action="/data/import" enctype="multipart/form-data"><input type="hidden" name="csrf" value="{csrf}">
+<label>دسته‌بندی<select name="category">{options}</select></label>
+<label>فایل CSV<input type="file" name="file" accept=".csv,text/csv" required></label>
+<button>بررسی و پیش‌نمایش</button></form>
+<p><a href="/data?table=external_category_sources">مشاهدهٔ منابع واردشده</a></p>
+<div class="import-results">{content}</div></section></main></body></html>''', content_type='text/html', status=status)
 
 
 async def import_page(request):
@@ -197,6 +215,6 @@ async def import_upload(request):
 <input type="hidden" name="payload" value="{base64.b64encode(payload).decode('ascii')}"><button>ثبت در دیتابیس</button></form>'''
         return _page(request, body)
     except ValueError as exc:
-        return _page(request, f'<p role="alert">{html.escape(str(exc))}</p>', 400)
+        return _page(request, f'<p class="backoffice-error" role="alert">{html.escape(str(exc))}</p>', 400)
     except sqlite3.Error:
-        return _page(request, '<p role="alert">ثبت انجام نشد؛ تغییرات این فایل برگشت داده شد. دیتابیس را بررسی کن.</p>', 503)
+        return _page(request, '<p class="backoffice-error" role="alert">ثبت انجام نشد؛ تغییرات این فایل برگشت داده شد. دیتابیس را بررسی کن.</p>', 503)

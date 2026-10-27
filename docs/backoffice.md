@@ -353,3 +353,15 @@ On first startup, existing category tables are migrated transactionally to
 allow NULL Telegram parents. Existing IDs, links, values and creation timestamps
 are retained; non-NULL parent uniqueness, foreign keys and cascade deletion stay
 in force. As with other schema changes, retain the deployment's SQLite backup.
+
+### Shared back-office appearance
+
+All nine authenticated sections use `backoffice_layout.py` for the same page
+width, typography, background, form controls, header and navigation. Render
+`SHARED_STYLE` after page-specific styles and `page_header(active, title)` at the
+start of the body. The header stays left-to-right across sections; Persian
+Import CSV and AI Assistant content uses a right-to-left content container.
+The active section has `aria-current="page"`, keyboard focus is visible, and
+navigation wraps on narrow screens. Keep page-specific layouts scoped so they
+do not replace the shared frame. Import preview, validation errors and saved-row
+results all keep the Import CSV frame.

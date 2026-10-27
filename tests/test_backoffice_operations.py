@@ -231,7 +231,11 @@ class FakePageOperations:
         return {"active_jobs": 0, "job_keys": []}
 
     def channel_data(self):
-        return {"transport": [{"username": "source", "name": "Source", "description": "Transport source"}]}
+        return {"transport": [
+            {"username": "source", "name": "Source", "description": "Transport source"},
+            {"name": "Invite-only group", "description": "Awaiting stable username",
+             "invite_link": "https://t.me/+BlviDU3G7OPUZOpuFEEuKg"},
+        ]}
 
     def transfer_status(self):
         return {"total": 4, "sent": 1, "waiting": 2, "failed": 1}
@@ -316,6 +320,8 @@ async def test_operations_page_renders_terminal_controls(monkeypatch):
     assert 'data-ops-running="false"' in response.text
     assert "Run Processing" in response.text
     assert "Run Classification" in response.text
+    assert "Private invite (not scheduled)" in response.text
+    assert 'https://t.me/+BlviDU3G7OPUZOpuFEEuKg' in response.text
     assert "Run AI Extraction" in response.text
     assert 'name="max_messages"' in response.text
     assert 'max="1000"' in response.text

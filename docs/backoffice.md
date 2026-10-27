@@ -313,3 +313,43 @@ Telegram, including after process restarts. If a send is interrupted, it becomes
 With no matching rule, a message is not published. Each message and publishing
 channel/group has its own delivery record, and successful automatic sends are not repeated
 for that same channel/group.
+
+### Import structured website listings
+
+Open **Database → Import CSV** (`/data/import`) and download the template for
+`joblist`, `housinglist`, or `transferlist`. Upload UTF-8 CSV (up to 512 KiB,
+500 rows), review the first five rows, then choose **ثبت در دیتابیس**. Every row
+is validated before any write. A file with invalid data is rejected entirely;
+a database failure rolls the whole file back. The preview itself writes nothing.
+
+Required columns: `source_url` (one public HTTP/HTTPS listing URL per row) and
+`description` (source listing text). Optional `source_date` is the original ISO
+date/datetime, never replaced with today's date; `raw_text` preserves original
+source evidence. All other columns use the selected category's template names.
+Empty cells and `NULL` become SQL NULL. Numeric columns require finite numbers;
+Jobs `remote` and `is_job_listing` accept true/false or 1/0. Unknown columns,
+including Telegram IDs and local database IDs, are rejected. Import does not
+infer locations, verify employment, or call AI or fetch URLs.
+
+Imports are category records with **NULL processed_message_id**, with no invented
+Telegram message, channel, sender, or user. Provenance is recorded in read-only
+`external_category_sources`, including category, category_record_id, source URL,
+original date/text, importing admin and import timestamp. AI database analysis
+can query that table and join `category_record_id` to the selected category's
+`id`, also filtering `category` when joining. The import result links to each
+category row in the editor. Filter `processed_message_id IS NULL` to find imports.
+
+A repeat URL within the same category (ignoring URL fragments) is skipped and
+never overwrites previous data, including repeats within a file. This is URL
+identity checking, not content duplicate detection across different websites.
+
+**Import is storage only, not publication.** Existing Telegram delivery queues
+require a real parent message and do not admit these records. Publishing website
+imports requires a separately designed admission path with source freshness,
+validation, contact and duplicate checks. No such publication path is enabled
+by importing a file. Success reports saved/skipped counts, not sent counts.
+
+On first startup, existing category tables are migrated transactionally to
+allow NULL Telegram parents. Existing IDs, links, values and creation timestamps
+are retained; non-NULL parent uniqueness, foreign keys and cascade deletion stay
+in force. As with other schema changes, retain the deployment's SQLite backup.

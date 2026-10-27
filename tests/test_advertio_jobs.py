@@ -469,6 +469,7 @@ def test_admin_forward_contact_from_text_is_not_claimed_as_verified_telegram_sen
         message_link=None,
         sender_id=None,
         sender_username="Original_Poster",
+        contact="@Later_Contact",
         sender_type="admin_forward_text",
         sender_is_original=0,
     ))

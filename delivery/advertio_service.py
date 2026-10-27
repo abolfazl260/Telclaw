@@ -106,7 +106,8 @@ class AdvertioDeliveryService:
 
     @staticmethod
     def _contact_handle(data, record):
-        candidates = [data.get("contact"), record.get("sender_username")]
+        candidates = ([record.get("sender_username")] if record.get("sender_type") == "admin_forward_text"
+                      else [data.get("contact"), record.get("sender_username")])
         for value in candidates:
             text = str(value or "").strip()
             if re.fullmatch(r"@?[A-Za-z0-9_]{5,64}", text):

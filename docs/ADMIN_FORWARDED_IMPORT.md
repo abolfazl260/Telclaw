@@ -10,11 +10,15 @@ bot endpoint and does not change existing commands.
   forward metadata), not ordinary text containing the word "Forwarded".
 - Forwarded **text or caption must contain more than 10 whitespace-delimited
   words**; 10 exactly is rejected.
-- The ad text must identify **one unambiguous Telegram contact username**,
+- The ad text must identify **at least one valid Telegram contact username**,
   using `@username`, a direct `t.me/username` profile URL, or an explicit
   `Username: @username` / `یوزرنیم: @username` label.
-  A labeled contact takes precedence over other incidental mentions; conflicting
-  labeled contacts or multiple unlabeled contacts are rejected.
+  The **first valid username in text order** is selected across all three
+  formats. Later usernames, even explicitly labeled contacts, do not override
+  it. Raw text is preserved; later handles are ignored for contact selection.
+  Housing, Cargo and Jobs use the imported first contact rather than a later
+  handle chosen by AI. This rule applies only to administrator-forwarded imports,
+  not ordinary crawler messages.
 - Only messages sent by `ADMIN_USER_IDS` from the admin's own private chat
   are handled. Other users and group forwards are ignored.
 - The Bot API must provide the original forwarded message date. The system

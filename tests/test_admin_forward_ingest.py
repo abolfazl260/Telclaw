@@ -46,8 +46,8 @@ def read_rows():
 def test_text_handle_selection():
     assert extract_text_username(long_post("@Job_Owner")) == "@Job_Owner"
     assert extract_text_username("Contact: @Main_User and follow @Promo_Channel") == "@Main_User"
-    assert extract_text_username("username: @First_Person username: @Other_Person") is None
-    assert extract_text_username("See @First_Person and @Second_Person") is None
+    assert extract_text_username("username: @First_Person username: @Other_Person") == "@First_Person"
+    assert extract_text_username("See @First_Person and @Second_Person") == "@First_Person"
     assert extract_text_username("See https://t.me/Job_Owner") == "@Job_Owner"
     assert extract_text_username("Source https://t.me/someChannel/333") is None
     assert extract_text_username("No Telegram username or contact in this text") is None
@@ -96,7 +96,6 @@ def test_forwarded_caption_and_idempotent_duplicate(inbox_db):
     ({"message_id": 5, "from": {"id": 1485409432},
       "text": long_post()}, "not_forwarded"),
     (forwarded("one two three four five six seven eight nine @job_owner"), "too_short"),
-    (forwarded(long_post(handle="@First_User") + " Username: @Second_User"), "missing_username"),
     (forwarded("این پیام فوروارد بیشتر از ده کلمه دارد اما هیچ آیدی تلگرامی ندارد و فقط نمونه است"), "missing_username"),
     ({**forwarded(long_post()), "forward_origin": {"type": "hidden_user"}}, "missing_forward_date"),
 ])
@@ -180,3 +179,69 @@ def test_imported_forward_enters_existing_cleaning_pipeline(inbox_db):
     assert row["classification_status"] == "pending"
     assert row["sender_username"] == "Pipeline_Owner"
 
+
+
+@pytest.mark.parametrize('text, expected', [
+    ('See https://t.me/First_Person then @Second_Person', '@First_Person'),
+    ('See @First_Person then https://t.me/Second_Person', '@First_Person'),
+    ('@First_Person\nUsername: @Second_Person', '@First_Person'),
+    ('Username: first_person\n@Second_Person', '@first_person'),
+    ('email someone@sample.com then @Real_Person', '@Real_Person'),
+    ('Contact: someone@sample.com then @Real_Person', '@Real_Person'),
+    ('Contact: https://t.me/First_Person then @Second_Person', '@First_Person'),
+    ('Source https://t.me/Channel_Name/123 then @Real_Person', '@Real_Person'),
+    ('@bad and @123invalid then @Real_Person', '@Real_Person'),
+])
+def test_first_contact_uses_text_order_across_formats(text, expected):
+    assert extract_text_username(text) == expected
+
+
+HELPERO_POST = '''❌Toronto❌
+استخدام
+به ۴-۵ نفر نیرو جهت همکاری در زمینه‌ی نظافت و ۳-۴ نفر نیروی هندی من ، برای اعزام به منازل مشتریان نیازمندیم.
+ساعت کاری: ۹ صبح تا ۶ عصر
+مقدار و نحوه پرداخت دستمزد: طبق تعرفه شرکت و هر ۲ هفته
+از متقاضیان محترم درخواست می‌شود رزومه یا مشخصات فردی خود را از طریق ایمیل ارسال فرمایند.
+@Helpero_ltd
+@karyabi_canada ✅'''
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('caption', [False, True])
+async def test_real_multi_username_forward_imports_first_contact_and_preserves_source(inbox_db, monkeypatch, caption):
+    from services.processing_service import ProcessingService
+    monitor = TelegramMonitor()
+    replies = []
+    async def send(chat_id, text, reply_markup=None): replies.append(text)
+    monkeypatch.setattr(monitor, '_send', send)
+    await monitor._handle_update({'message': forwarded(HELPERO_POST, mid=77, caption=caption)})
+    row = read_rows()[0]
+    assert row['sender_username'] == 'Helpero_ltd'
+    assert row['raw_text'] == HELPERO_POST and row['sender_id'] is None
+    assert row['sender_type'] == SENDER_TYPE and row['message_link'] is None
+    assert '@Helpero_ltd' in replies[-1] and 'Forward not imported' not in replies[-1]
+    assert ProcessingService().process_pending() == 1
+    assert read_rows()[0]['sender_username'] == 'Helpero_ltd'
+    assert ingest_admin_forward(forwarded(HELPERO_POST, mid=78))[0] == 'duplicate'
+
+
+def test_forward_first_contact_survives_ai_choosing_later_username(inbox_db, monkeypatch):
+    from types import SimpleNamespace
+    from ai.ai_service import AIProcessingService
+    from services.processing_service import ProcessingService
+    from storage.message_repository import MessageRepository
+    monkeypatch.setattr(config, 'ADVERTIO_INGEST_ENABLED', False)
+    monkeypatch.setattr(config, 'AI_EXTRACTION_ENABLED', True)
+    monkeypatch.setitem(config.AI_EXTRACTION_CATEGORY_ENABLED, 'joblist', True)
+    assert ingest_admin_forward(forwarded(HELPERO_POST))[0] == 'saved'
+    assert ProcessingService().process_pending() == 1
+    repo = MessageRepository()
+    repo.mark_classification_result(1, f'{ADMIN_FORWARD_PREFIX}1485409432', category='joblist')
+    provider = SimpleNamespace(provider='fake', extract=lambda *args: {
+        'category': 'joblist', 'data': {'joblist': {'contact': '@karyabi_canada', 'job_title': 'Cleaner'}}})
+    service = AIProcessingService(repository=repo, provider_manager=provider)
+    result = service.process_pending(limit=1)
+    assert result['processed'] == 1
+    row = read_rows()[0]
+    assert database.get_category_record(row['id'], 'joblist')['contact'] == '@Helpero_ltd'
+    assert row['raw_text'] == HELPERO_POST and row['sender_id'] is None

@@ -585,3 +585,13 @@ def test_cargo_recovery_does_not_bypass_pause_or_budget(env, monkeypatch, blocke
     conn.close()
     assert tuple(row) == ('retry', None)
     assert not client.sent
+
+
+def test_forward_first_username_overrides_later_ai_cargo_contact(env):
+    service, _ = env
+    add_post(9971, departure='2099-01-01')
+    record = service.pending()[0]
+    record.update(sender_type='admin_forward_text', sender_username='Helpero_ltd', contact='@karyabi_canada')
+    payload = service.build_payload(record)
+    assert payload['contactHandle'] == '@Helpero_ltd'
+    assert 'posterTelegramUserId' not in payload

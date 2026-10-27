@@ -2487,6 +2487,9 @@ async def settings_page(request):
             source_class = "override" if row["source"] == "Back Office" else "default"
             items.append(f'''<div class="setting-row">
                 <div class="setting-meta"><code>{_escape(spec.key)}</code>
+                <button type="button" class="setting-help"
+                    aria-label="{_escape('راهنمای ' + spec.key + ': ' + backoffice_settings.setting_help_fa(spec.key))}"
+                    data-tooltip="{_escape(backoffice_settings.setting_help_fa(spec.key))}">؟</button>
                 <span class="source {source_class}">{_escape(row["source"])}</span>
                 <div class="setting-values"><span>Effective: <strong>{_setting_display(row["effective"], spec.secret)}</strong></span>
                 <span>.env default: {_setting_display(row["default"], spec.secret)}</span></div></div>
@@ -2505,7 +2508,17 @@ async def settings_page(request):
     <style>{_DATA_CSS}
     body{{max-width:1350px}}.setting-row{{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(420px,1.5fr);
     gap:1rem;padding:1rem 0;border-bottom:1px solid #e3e8ef;align-items:center}}
-    .setting-row:last-child{{border-bottom:0}}.setting-meta code{{font-weight:700}}
+    .setting-row:last-child{{border-bottom:0}}.setting-meta{{position:relative}}.setting-meta code{{font-weight:700}}
+    .setting-help{{display:inline-flex;align-items:center;justify-content:center;vertical-align:middle;
+      width:19px;height:19px;margin-inline-start:.35rem;padding:0;border:1px solid #91a1b5;border-radius:50%;
+      background:#f8fafc;color:#334155;font:600 .78rem/1 sans-serif;cursor:help}}
+    .setting-help::after{{content:attr(data-tooltip);position:absolute;left:0;top:calc(100% + .55rem);
+      z-index:1000;width:min(330px,calc(100vw - 3rem));box-sizing:border-box;padding:.7rem .8rem;
+      border-radius:9px;background:#172033;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.22);
+      direction:rtl;text-align:right;white-space:normal;font:400 .88rem/1.75 sans-serif;
+      opacity:0;visibility:hidden;pointer-events:none;transition:opacity .12s ease}}
+    .setting-help:hover::after,.setting-help:focus-visible::after{{opacity:1;visibility:visible}}
+    .setting-help:focus-visible{{outline:2px solid #2563eb;outline-offset:3px}}
     .setting-values{{display:flex;gap:1rem;flex-wrap:wrap;margin-top:.35rem;color:#536479;font-size:.86rem}}
     .source{{display:inline-block;margin-left:.5rem;padding:.12rem .45rem;border-radius:999px;font-size:.75rem}}
     .source.override{{background:#d9f4e5;color:#17633e}}.source.default{{background:#e8edf4;color:#46576b}}

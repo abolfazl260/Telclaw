@@ -140,9 +140,10 @@ def normalize_job_location(data):
     """Fill only missing Jobs geography corroborated by known Canadian places.
 
     This cannot override an explicit foreign country, contradictory province,
-    unrecognized city, or missing city. The delivery adapter separately verifies
-    the canonical city against the original cleaned Telegram message and the
-    live Advertio location catalog.
+    unrecognized city, or missing city. Province is deliberately NOT inferred:
+    live catalog matching must evaluate all candidates before choosing the
+    canonical province and must still reject ambiguous cities. The delivery
+    adapter also verifies city evidence in the original cleaned Telegram text.
     """
     if not isinstance(data, dict) or data.get("is_job_listing") not in (True, 1, "true"):
         return data
@@ -164,8 +165,8 @@ def normalize_job_location(data):
     result = data.copy()
     if not country:
         result["country_code"] = "CA"
-    if not province:
-        result["province"] = expected_province
+    # Do not prefill province: the catalog must see all city candidates and
+    # reject any ambiguous match, then provide the province of a unique city.
     return result
 
 

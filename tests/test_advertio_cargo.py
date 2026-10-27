@@ -469,3 +469,119 @@ def test_telegram_transferlive_view_empty_is_safe(env):
     assert report["summary"]["transferlive"] == 0
     assert report["total"] == 0
     assert report["rows"] == []
+
+
+def _cargo_clock(monkeypatch):
+    clock = [datetime.now(timezone.utc)]
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
+    monkeypatch.setattr('delivery.advertio_cargo.datetime', Clock)
+    return clock
+
+
+@pytest.mark.parametrize('scheduled', [False, True])
+@pytest.mark.parametrize('already_existed', [False, True])
+def test_fast_restart_cargo_recovers_on_later_cycle_without_second_restart(env, monkeypatch, scheduled, already_existed):
+    service, client = env
+    clock = _cargo_clock(monkeypatch)
+    row_id = add_post(8801, departure='2099-01-01')
+    original_payload = service.build_payload(service.pending()[0])
+    assert service._claim(row_id)  # Worker crashes before recording a result.
+    restarted = AdvertioCargoService(client=client)
+    assert restarted.deliver_pending()['found'] == 0
+    assert not client.sent
+    clock[0] += timedelta(minutes=31)
+    if already_existed:
+        def accept_existing(payload):
+            client.sent.append(payload)
+            return {'lead_id': 'existing-lead', 'already_existed': True}
+        monkeypatch.setattr(client, 'create_lead', accept_existing)
+    kwargs = {'before_datetime': (clock[0] + timedelta(seconds=1)).isoformat()} if scheduled else {'row_ids': [row_id]}
+    result = restarted.deliver_pending(**kwargs)
+    status = 'already_existed' if already_existed else 'sent'
+    assert result[status] == 1
+    assert client.sent == [original_payload]  # Identity is unchanged on recovery.
+    assert restarted.deliver_pending(**kwargs)['found'] == 0
+
+
+def test_cargo_recovery_preserves_active_and_terminal_records(env, monkeypatch):
+    service, client = env
+    clock = _cargo_clock(monkeypatch)
+    snapshots = enumerate(['sending', 'sent', 'already_existed', 'rejected', 'retry'], 8900)
+    for i, status in snapshots:
+        row_id = add_post(i, departure='2099-01-01')
+        stamp = clock[0] if status == 'sending' else clock[0] - timedelta(hours=2)
+        conn = database.get_connection()
+        conn.execute('''INSERT INTO advertio_cargo_deliveries
+            (processed_message_id,status,updated_at,lead_id,attempts,next_attempt_at)
+            VALUES(?,?,?,?,?,?)''', (row_id, status, stamp.isoformat(), 'preserve-me', 3,
+                                  (clock[0] + timedelta(hours=2)).isoformat()))
+        conn.commit(); conn.close()
+    conn = database.get_connection()
+    before = [tuple(r) for r in conn.execute('SELECT * FROM advertio_cargo_deliveries ORDER BY processed_message_id')]
+    conn.close()
+    service.deliver_pending()
+    conn = database.get_connection()
+    after = [tuple(r) for r in conn.execute('SELECT * FROM advertio_cargo_deliveries ORDER BY processed_message_id')]
+    conn.close()
+    assert after == before and not client.sent
+
+
+def test_cargo_two_workers_recover_and_claim_only_once(env, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    service, client = env
+    clock = _cargo_clock(monkeypatch)
+    row_id = add_post(8991, departure='2099-01-01')
+    assert service._claim(row_id)
+    other = AdvertioCargoService(client=client)
+    clock[0] += timedelta(minutes=31)
+    barrier = Barrier(2)
+    for worker in (service, other):
+        claim = worker._claim
+        def synchronized_claim(message_id, claim=claim):
+            barrier.wait(timeout=5)
+            return claim(message_id)
+        monkeypatch.setattr(worker, '_claim', synchronized_claim)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = [pool.submit(worker.deliver_pending) for worker in (service, other)]
+        results = [job.result(timeout=10) for job in jobs]
+    assert sum(r['sent'] for r in results) == 1
+    assert len(client.sent) == 1
+
+
+def test_cargo_recovery_allows_long_configured_request_timeout(env, monkeypatch):
+    service, client = env
+    clock = _cargo_clock(monkeypatch)
+    # A cached client's longer timeout remains relevant after config changes.
+    client.timeout = 3600
+    monkeypatch.setattr(config, 'ADVERTIO_TIMEOUT_SECONDS', 60)
+    row_id = add_post(8992, departure='2099-01-01')
+    assert service._claim(row_id)
+    clock[0] += timedelta(minutes=31)
+    assert service.deliver_pending()['found'] == 0
+    assert not client.sent
+    clock[0] += timedelta(hours=3)
+    assert service.deliver_pending()['sent'] == 1
+
+
+@pytest.mark.parametrize('blocked_by', ['pause', 'budget'])
+def test_cargo_recovery_does_not_bypass_pause_or_budget(env, monkeypatch, blocked_by):
+    service, client = env
+    clock = _cargo_clock(monkeypatch)
+    row_id = add_post(8993, departure='2099-01-01')
+    assert service._claim(row_id)
+    clock[0] += timedelta(minutes=31)
+    if blocked_by == 'pause':
+        service._pause(3600)
+    else:
+        monkeypatch.setattr(config, 'ADVERTIO_CARGO_DAILY_LIMIT', 1)
+        service._record_api_attempt(row_id)
+    service.deliver_pending()
+    conn = database.get_connection()
+    row = conn.execute('SELECT status,next_attempt_at FROM advertio_cargo_deliveries WHERE processed_message_id=?', (row_id,)).fetchone()
+    conn.close()
+    assert tuple(row) == ('retry', None)
+    assert not client.sent

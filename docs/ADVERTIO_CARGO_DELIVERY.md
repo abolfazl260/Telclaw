@@ -63,7 +63,18 @@ It persists API state under:
   daily budget accounting.
 
 The tables are created idempotently at cargo service startup.
-Abandoned `sending` rows older than 30 minutes are reclaimed as `retry`.
+Abandoned `sending` rows are checked at startup and at the start of every
+`deliver_pending` cycle, including scheduled and manual/selected sends. A fast
+restart therefore does not require another restart after the claim expires.
+The expiry is at least 30 minutes and at least three request timeouts plus two
+minutes, using the larger of the configured timeout and the cached client's
+timeout (two city catalog reads plus lead creation). Recovery changes only
+expired `sending` rows to `retry` and clears their retry timer; fresh claims and
+terminal outcomes remain untouched. The atomic status/time predicate and normal
+claim prevent concurrent recovery workers from sending the same row together.
+Recovery still respects source eligibility, cycle cutoff, pauses and budgets;
+it preserves sourceName/externalId so a previously accepted lead is resolved by
+Advertio's existing idempotency contract.
 HTTP 429, 401, 404 and transient failures trigger global cooldown; 400 mapping
 errors are terminal until an operator corrects the source data. A successful
 `alreadyExisted` response is terminal and must not trigger retry.

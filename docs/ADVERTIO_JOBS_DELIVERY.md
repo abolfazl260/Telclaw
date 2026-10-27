@@ -106,6 +106,18 @@ work_arrangement, salary, salary_period. Legacy/internal fields never leak into
 
 ## Geography
 
+Jobs extraction now fills a missing `country_code=CA` when an identified
+Canadian city is distinctive or its stated province matches the known province
+for that city. A missing province is filled only when corroborated by that
+city. For example, a Toronto row can safely obtain Ontario and CA; a Calgary
+row with AB can obtain CA. Unrecognized or ambiguous cities, explicit foreign
+country codes and conflicting provinces are not overridden. This rule applies
+only to verified Jobs listings, never Housing or Cargo. Historical Jobs rows
+are normalized in memory during delivery and can be retried explicitly after
+review; this does not automatically requeue blocked records or overwrite their
+stored extraction. The original cleaned source text must still contain the
+canonical city name or an accepted catalog alias.
+
 Only `countryCode=CA` is accepted locally. The worker caches the live schema,
 countries, provinces and exact city searches for one hour, with bounded cache size.
 It calls `cities?countryCode=CA&q=...&provinceCode=...&limit=200` where province is

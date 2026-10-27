@@ -163,3 +163,20 @@ async def test_admin_plain_text_and_commands_are_not_imported(inbox_db, monkeypa
         }
     })
     assert read_rows() == []
+
+
+def test_imported_forward_enters_existing_cleaning_pipeline(inbox_db):
+    from processing.stages import CleanTextStage
+    from services.processing_service import ProcessingService
+
+    text = long_post("@Pipeline_Owner")
+    assert ingest_admin_forward(forwarded(text))[0] == "saved"
+    processing = ProcessingService(stages=[CleanTextStage()])
+    assert processing.process_pending(limit=10) == 1
+    row = read_rows()[0]
+    assert row["raw_text"] == text
+    assert row["cleaned_text"] is not None
+    assert row["processing_status"] == "processed"
+    assert row["classification_status"] == "pending"
+    assert row["sender_username"] == "Pipeline_Owner"
+

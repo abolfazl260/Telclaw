@@ -113,3 +113,13 @@ def test_cargo_autopublish_override_can_disable_auto_publication(settings_db, mo
     assert backoffice_settings.overrides()[spec.key] == "false"
     backoffice_settings.reset_override(spec.key)
     assert config.ADVERTIO_CARGO_AUTO_PUBLISH is True
+
+
+def test_every_setting_has_persian_hover_help():
+    configured = {spec.key for spec in backoffice_settings.SPECS}
+    documented = set(backoffice_settings.SETTING_HELP_FA)
+
+    assert configured == documented
+    assert all(backoffice_settings.setting_help_fa(key).strip() for key in configured)
+    assert all(any("\u0600" <= char <= "\u06FF" for char in backoffice_settings.setting_help_fa(key))
+               for key in configured)

@@ -189,7 +189,7 @@ class TelegramMonitor:
                 await self._send(chat_id,f"⚠️ Forward not imported: {html.escape(detail)}")
             return
         if command == "/start":
-            database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.")
+            database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.\n\nبرای ثبت آگهی، پیام فورواردشدهٔ بیش از ۱۰ کلمه همراه با یوزرنیم صاحب آگهی در متن را به همین ربات ارسال کنید.")
         elif command == "/stop":
             database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت اعلان خطاها و گزارش‌های Telclaw متوقف شد. برای فعال‌سازی دوباره /start را ارسال کنید.")
         elif command == "/status": await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard())

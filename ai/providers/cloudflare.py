@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -16,6 +17,7 @@ from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencie
 from ai.prompt_loader import render_prompt
 from ai.structured_output import JSON_GENERATION_RULES
 from ai.rate_limiter import RateLimiter
+from ai.provider_cooldown import CooldownState, shared_cooldowns
 from ai.providers.base import AIProvider
 
 logger = logging.getLogger("telclaw.ai.cloudflare")
@@ -28,6 +30,9 @@ class CloudflareProvider(AIProvider):
     API_BASE = "https://api.cloudflare.com/client/v4/accounts"
 
     def __init__(self, account_id=None, api_token=None, model=None, timeout=None, rate_limiter=None, categories=None, providers=None):
+        use_shared_cooldowns = providers is None and all(
+            value is None for value in (account_id, api_token, model)
+        )
         if providers is None and any(value is not None for value in (account_id, api_token, model)):
             providers = [{"account_id": account_id, "api_token": api_token, "model": model}]
         providers = list(providers if providers is not None else config.CLOUDFLARE_PROVIDERS)[:3]
@@ -39,7 +44,21 @@ class CloudflareProvider(AIProvider):
                 raise RuntimeError(f"Cloudflare credential #{index} is incomplete; missing {', '.join(missing)}")
         self.providers = providers
         self.active_index = 0
-        self._unavailable_until = [0.0] * len(providers)
+        # Propagate per-account cooldowns across Classification and Extraction.
+        # The registry only stores credential digests, never actual API tokens.
+        self._cooldowns = (
+            shared_cooldowns(
+                "cloudflare-credentials",
+                (
+                    hashlib.sha256(
+                        (item["account_id"] + ":" + item["api_token"]).encode("utf-8")
+                    ).hexdigest()
+                    for item in providers
+                ),
+            )
+            if use_shared_cooldowns else CooldownState(len(providers))
+        )
+        self._unavailable_until = self._cooldowns.unavailable_until
         self.timeout = timeout if timeout is not None else config.CLOUDFLARE_TIMEOUT_SECONDS
         self.rate_limiter = rate_limiter or RateLimiter(config.CLOUDFLARE_REQUESTS_PER_MINUTE)
         self.categories = tuple(categories or CLASSIFICATION_CATEGORIES)
@@ -163,7 +182,7 @@ class CloudflareProvider(AIProvider):
                 with self.rate_limiter.slot():
                     response = requests.post(self.endpoint, headers={"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json"}, json=payload, timeout=self.timeout)
             except requests.RequestException as exc:
-                self._unavailable_until[self.active_index] = time.monotonic() + config.AI_COOLDOWN_SECONDS
+                self._cooldowns.block(self.active_index, config.AI_COOLDOWN_SECONDS)
                 next_index = self._next_available()
                 if next_index is not None and attempts < attempt_budget:
                     logger.warning("Cloudflare account failover: from=%s to=%s reason=network_error",
@@ -185,7 +204,7 @@ class CloudflareProvider(AIProvider):
                     if retry_after is not None and retry_after > 0:
                         cooldown = retry_after
                     # Mark even the final account before a wrapped search.
-                    self._unavailable_until[self.active_index] = time.monotonic() + cooldown
+                    self._cooldowns.block(self.active_index, cooldown)
                     next_index = self._next_available()
                 if next_index is not None and attempts < attempt_budget:
                     logger.warning("Cloudflare account failover: from=%s to=%s reason=%s",

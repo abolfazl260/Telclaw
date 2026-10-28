@@ -17,6 +17,7 @@ from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencie
 from ai.prompt_loader import render_prompt
 from ai.structured_output import extraction_response_format
 from ai.rate_limiter import RateLimiter
+from ai.groq_token_budget import shared_groq_token_budget
 from ai.provider_cooldown import CooldownState, shared_cooldowns
 from ai.providers.base import AIProvider
 
@@ -29,11 +30,14 @@ class GroqClient:
 
     ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
-    def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None):
+    def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None, token_budget=None):
         self.api_key = api_key or config.GROQ_API_KEY
         self.model = model or config.GROQ_MODEL
         self.timeout = timeout
         self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE)
+        self.token_budget = token_budget or shared_groq_token_budget(
+            config.GROQ_TOKENS_PER_MINUTE, config.GROQ_TPM_HEADROOM_PERCENT
+        )
 
     @staticmethod
     def _provider_reason(status, detail):
@@ -113,6 +117,9 @@ class GroqClient:
 
         try:
             with self.rate_limiter.slot():
+                # Reserve under a process-wide lock before any network traffic.
+                # A synthetic 429 is handled by the normal Cloudflare failover.
+                reserved_tokens = self.token_budget.reserve(payload)
                 response = requests.post(
                     self.ENDPOINT,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
@@ -126,6 +133,7 @@ class GroqClient:
             ) from exc
 
         if not response.ok:
+            self.token_budget.complete(reserved_tokens, response=response)
             detail = response.text.strip()
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
@@ -153,6 +161,8 @@ class GroqClient:
 
         try:
             response_data = response.json()
+            self.token_budget.reconcile_usage(reserved_tokens, response_data)
+            self.token_budget.complete(reserved_tokens, response=response)
             choices = response_data.get("choices", [])
             if not choices:
                 raise ValueError("No choices returned")
@@ -192,11 +202,14 @@ class GroqClient:
 class _GroqBatchClassifier:
     ENDPOINT = GroqClient.ENDPOINT
 
-    def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None, categories=None):
+    def __init__(self, api_key=None, model=None, timeout=60, rate_limiter=None, categories=None, token_budget=None):
         self.api_key = api_key or config.GROQ_API_KEY
         self.model = model or config.GROQ_MODEL
         self.timeout = timeout
         self.rate_limiter = rate_limiter or RateLimiter(requests_per_minute=config.GROQ_REQUESTS_PER_MINUTE)
+        self.token_budget = token_budget or shared_groq_token_budget(
+            config.GROQ_TOKENS_PER_MINUTE, config.GROQ_TPM_HEADROOM_PERCENT
+        )
         self.categories = tuple(categories or CLASSIFICATION_CATEGORIES)
 
     def _request_batch(self, payload_messages):
@@ -242,6 +255,9 @@ class _GroqBatchClassifier:
 
         try:
             with self.rate_limiter.slot():
+                # Reserve under a process-wide lock before any network traffic.
+                # A synthetic 429 is handled by the normal Cloudflare failover.
+                reserved_tokens = self.token_budget.reserve(payload)
                 response = requests.post(
                     self.ENDPOINT,
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
@@ -252,6 +268,7 @@ class _GroqBatchClassifier:
             raise AIExtractionError(f"Groq classification request failed: {exc}", reason="network_error") from exc
 
         if not response.ok:
+            self.token_budget.complete(reserved_tokens, response=response)
             detail = response.text.strip()
             reason = GroqClient._provider_reason(response.status_code, detail)
             retry_after = GroqClient._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
@@ -269,6 +286,8 @@ class _GroqBatchClassifier:
 
         try:
             response_data = response.json()
+            self.token_budget.reconcile_usage(reserved_tokens, response_data)
+            self.token_budget.complete(reserved_tokens, response=response)
             choices = response_data.get("choices", [])
             if not choices:
                 raise ValueError("No choices returned")
@@ -350,9 +369,16 @@ class GroqProvider(AIProvider):
         providers = list(providers if providers is not None else config.GROQ_PROVIDERS)[:3]
         if not providers:
             raise RuntimeError("No Groq AI providers are configured")
-        self.providers = [GroqClient(api_key=item["api_key"], model=item["model"]) for item in providers]
+        # One TPM budget for the organization, across all keys and both stages.
+        self.token_budget = shared_groq_token_budget(
+            config.GROQ_TOKENS_PER_MINUTE, config.GROQ_TPM_HEADROOM_PERCENT
+        )
+        self.providers = [
+            GroqClient(api_key=item["api_key"], model=item["model"], token_budget=self.token_budget)
+            for item in providers
+        ]
         self.classifiers = [
-            _GroqBatchClassifier(api_key=item["api_key"], model=item["model"])
+            _GroqBatchClassifier(api_key=item["api_key"], model=item["model"], token_budget=self.token_budget)
             for item in providers
         ]
         # Credential-level failover must also be visible to the other AI stage.

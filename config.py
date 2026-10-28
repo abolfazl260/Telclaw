@@ -149,6 +149,13 @@ def _build_cloudflare_providers():
 CLOUDFLARE_PROVIDERS = _build_cloudflare_providers()
 GROQ_FAILOVER_THRESHOLD_SECONDS = _float_env("TELCLAW_GROQ_FAILOVER_THRESHOLD_SECONDS", 200, minimum=0)
 GROQ_REQUESTS_PER_MINUTE = _int_env("TELCLAW_GROQ_REQUESTS_PER_MINUTE", 30, minimum=1)
+# A process-wide Groq organization budget shared by all configured keys,
+# Classification and Extraction. Set to the actual Groq console TPM limit.
+GROQ_TOKENS_PER_MINUTE = _int_env("TELCLAW_GROQ_TOKENS_PER_MINUTE", 8000, minimum=1)
+# Guard against approximate prompt tokenization, usage lag, and other clients.
+GROQ_TPM_HEADROOM_PERCENT = _int_env("TELCLAW_GROQ_TPM_HEADROOM_PERCENT", 10, minimum=0)
+if GROQ_TPM_HEADROOM_PERCENT >= 100:
+    raise RuntimeError("TELCLAW_GROQ_TPM_HEADROOM_PERCENT must be below 100")
 GROQ_RATE_LIMIT_MAX_RETRIES = _int_env("TELCLAW_GROQ_RATE_LIMIT_MAX_RETRIES", 5, minimum=0)
 GROQ_RATE_LIMIT_MIN_WAIT_SECONDS = _float_env("TELCLAW_GROQ_RATE_LIMIT_MIN_WAIT_SECONDS", 30, minimum=1)
 GROQ_RATE_LIMIT_MAX_WAIT_SECONDS = _float_env("TELCLAW_GROQ_RATE_LIMIT_MAX_WAIT_SECONDS", 180, minimum=GROQ_RATE_LIMIT_MIN_WAIT_SECONDS)

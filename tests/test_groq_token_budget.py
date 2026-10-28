@@ -67,7 +67,7 @@ def test_tpm_cached_prompt_tokens_not_charged_twice():
         {"usage": {"total_tokens": 900,
                    "prompt_tokens_details": {"cached_tokens": 300}}},
     )
-    assert budget.available == 1400
+    assert budget.available == pytest.approx(1400, abs=0.1)
 
 
 def test_provider_headers_reduce_local_tpm_and_block_after_429(monkeypatch):

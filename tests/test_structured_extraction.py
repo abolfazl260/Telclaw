@@ -6,6 +6,7 @@ from ai.category_schemas import CATEGORY_FIELDS
 from ai.prompt_loader import render_prompt
 from ai.structured_output import extraction_response_format
 from ai.providers.groq import GroqClient
+from ai.groq_token_budget import GroqTokenBudget
 from ai.extractor import AIExtractionError
 from test_cloudflare_provider import provider, Response, FakeRateLimiter
 
@@ -59,7 +60,7 @@ def test_groq_strict_payload_still_rejects_truncation(monkeypatch, finish):
         calls.append(kwargs['json'])
         return Reply()
     monkeypatch.setattr('ai.providers.groq.requests.post', post)
-    client=GroqClient(api_key='test',model='openai/gpt-oss-20b',rate_limiter=FakeRateLimiter())
+    client=GroqClient(api_key='test',model='openai/gpt-oss-20b',rate_limiter=FakeRateLimiter(), token_budget=GroqTokenBudget(100000))
     if finish == 'length':
         with pytest.raises(AIExtractionError) as exc:
             client.extract('Developer wanted', 'joblist')

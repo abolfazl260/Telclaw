@@ -59,6 +59,34 @@ the existing SQLite database. Only Telegram admins `1485409432`, `266809220`, an
    redeemed only once. It establishes a 12-hour browser session. Use **Log out**
    when finished.
 
+## AI Provider Status in Settings
+
+The **Settings → AI Provider Status** panel shows the configured priority,
+credential-set count and non-secret model names for Groq and Cloudflare.
+It also shows which provider is currently selected by an initialized
+Classification or Extraction manager, if those managers exist in this
+Back Office process. "Eligible" means only that no observed cooldown is
+active; it is **not** an external API health check or proof of a valid key.
+
+Groq's **estimated available tokens** and **safe TPM** come directly from
+the process-local shared token budget used by Classification and Extraction
+and by all Groq keys. This is a conservative approximation, not the exact
+Groq console quota and not an independent token balance for each key.
+Until any client creates a local budget, the available value is shown as
+**Unknown**, not as the full configured limit. A configured safe TPM is still
+shown as context. Cloudflare's token balance is **Unknown** because the
+current Workers AI integration does not expose a consistent remaining-token
+counter. Per-account cooldown is shown when observed.
+
+The panel refreshes from an authenticated **GET
+`/settings/ai-providers/status`** endpoint every 15 seconds while the tab
+is visible, with a manual refresh button. It **never sends provider API calls**
+to obtain status or uses provider credentials in the response. All data is
+process-local: separate Telclaw workers, hosts or requests outside Telclaw
+cannot be monitored by this panel. Settings changes requiring service client
+reconstruction still require a restart. Existing database and publication
+behavior are unchanged.
+
 ## SQLite concurrency in the Telegram publisher
 
 The Telegram publisher's stale-delivery recovery probes for old `sending`

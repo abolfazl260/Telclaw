@@ -89,6 +89,23 @@ class GroqTokenBudget:
         )
         self._last_refill = now
 
+    def snapshot(self):
+        """Read-only monitoring view; never contacts Groq or exposes credentials.
+
+        Available tokens are a conservative local estimate, not a live
+        statement of the organization's Groq console quota.
+        """
+        with self._lock:
+            now = time.monotonic()
+            self._refill(now)
+            return {
+                "configured_tpm": self.configured_limit,
+                "safe_tpm": self.capacity,
+                "headroom_percent": self.headroom_percent,
+                "available_estimate": max(0, int(self.available)),
+                "cooldown_seconds": round(max(0.0, self._blocked_until - now), 1),
+            }
+
     def reserve(self, payload):
         """Reserve before network I/O or raise a retryable 429 for outer failover."""
         requested = self.estimate_tokens(payload)
@@ -208,3 +225,10 @@ def shared_groq_token_budget(tokens_per_minute: int, headroom_percent: int):
             budget = GroqTokenBudget(*key)
             _BUDGETS[key] = budget
         return budget
+
+
+def peek_groq_token_budget(tokens_per_minute: int, headroom_percent: int):
+    """Return an existing local budget without creating/resetting quota state."""
+    key = (int(tokens_per_minute), int(headroom_percent))
+    with _REGISTRY_LOCK:
+        return _BUDGETS.get(key)

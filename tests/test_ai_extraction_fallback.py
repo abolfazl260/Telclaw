@@ -5,6 +5,7 @@ import pytest
 import config
 from ai.extractor import AIExtractionError
 from ai.provider_manager import AIProviderManager
+from ai.provider_cooldown import CooldownState
 
 
 class StubProvider:
@@ -28,7 +29,8 @@ def invalid_output():
 def manager_with(primary, alternate):
     manager = AIProviderManager(provider=primary)
     manager.providers = [primary, alternate]
-    manager._unavailable_until = [0.0, 0.0]
+    manager._cooldowns = CooldownState(2)
+    manager._unavailable_until = manager._cooldowns.unavailable_until
     return manager
 
 

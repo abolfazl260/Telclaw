@@ -61,7 +61,7 @@ def test_classification_cooldown_is_observed_by_extraction(monkeypatch):
         [{"message_id": 1, "text": "job"}]
     ) == {1: "joblist"}
     assert [client.calls for client in clients] == [
-        ["classification"], [], [], []
+        ["classification"], ["classification"], [], []
     ]
 
     assert extraction.extract("job", "joblist")["category"] == "joblist"

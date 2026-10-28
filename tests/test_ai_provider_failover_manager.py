@@ -4,6 +4,7 @@ import pytest
 
 from ai.extractor import AIExtractionError
 from ai.provider_manager import AIProviderManager
+from ai.provider_cooldown import CooldownState
 
 
 class Provider:
@@ -29,7 +30,8 @@ class Provider:
 def manager(*providers):
     service = AIProviderManager(provider=providers[0])
     service.providers = list(providers)
-    service._unavailable_until = [0.0] * len(providers)
+    service._cooldowns = CooldownState(len(providers))
+    service._unavailable_until = service._cooldowns.unavailable_until
     return service
 
 

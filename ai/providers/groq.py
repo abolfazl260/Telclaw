@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -16,6 +17,7 @@ from ai.extractor import AIExtractionError, _ensure_titles, _normalize_currencie
 from ai.prompt_loader import render_prompt
 from ai.structured_output import extraction_response_format
 from ai.rate_limiter import RateLimiter
+from ai.provider_cooldown import CooldownState, shared_cooldowns
 from ai.providers.base import AIProvider
 
 logger = logging.getLogger("telclaw.ai")
@@ -344,6 +346,7 @@ class GroqProvider(AIProvider):
     name = "groq"
 
     def __init__(self, providers=None):
+        use_shared_cooldowns = providers is None
         providers = list(providers if providers is not None else config.GROQ_PROVIDERS)[:3]
         if not providers:
             raise RuntimeError("No Groq AI providers are configured")
@@ -352,7 +355,16 @@ class GroqProvider(AIProvider):
             _GroqBatchClassifier(api_key=item["api_key"], model=item["model"])
             for item in providers
         ]
-        self._unavailable_until = [0.0] * len(self.providers)
+        # Credential-level failover must also be visible to the other AI stage.
+        # Hash credential IDs so registry keys never retain plaintext API keys.
+        self._cooldowns = (
+            shared_cooldowns(
+                "groq-credentials",
+                (hashlib.sha256(item["api_key"].encode("utf-8")).hexdigest() for item in providers),
+            )
+            if use_shared_cooldowns else CooldownState(len(providers))
+        )
+        self._unavailable_until = self._cooldowns.unavailable_until
         self.active_index = 0
         self._select_highest_priority_available(announce=True, reason="startup")
 
@@ -387,7 +399,7 @@ class GroqProvider(AIProvider):
         return None
 
     def _mark_unavailable(self, index, wait_seconds):
-        self._unavailable_until[index] = time.monotonic() + max(0.0, float(wait_seconds))
+        self._cooldowns.block(index, wait_seconds)
 
     def _switch_to_next_available(self):
         now = time.monotonic()
@@ -402,7 +414,14 @@ class GroqProvider(AIProvider):
 
     def _call_with_rotation(self, operation, *args, **kwargs):
         while True:
-            self._select_highest_priority_available(reason="recovery")
+            if self._select_highest_priority_available(reason="recovery") is None:
+                # Shared deadlines can leave every Groq credential cooling.
+                # Never send a request through the previously active key.
+                raise AIExtractionError(
+                    "All Groq credentials are temporarily unavailable",
+                    status=429, reason="rate_limit",
+                    retry_after=max(0.0, min(self._unavailable_until) - time.monotonic()),
+                )
             try:
                 return operation(self.active_index, *args, **kwargs)
             except AIExtractionError as exc:

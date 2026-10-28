@@ -7,6 +7,7 @@ import time
 
 import config
 from ai.extractor import AIExtractionError
+from ai.provider_cooldown import CooldownState, shared_cooldowns
 from ai.providers.factory import create_provider
 
 
@@ -27,7 +28,15 @@ class AIProviderManager:
             if not self.providers:
                 raise RuntimeError("No AI providers are configured")
             self.active_index = 0
-        self._unavailable_until = [0.0] * len(self.providers)
+        # Share provider-level deadlines across the independently constructed
+        # Classification and Extraction managers. Explicitly injected providers
+        # remain isolated for callers and unit tests.
+        self._cooldowns = (
+            CooldownState(len(self.providers))
+            if provider is not None
+            else shared_cooldowns("ai-providers", names)
+        )
+        self._unavailable_until = self._cooldowns.unavailable_until
         self._last_recovery_check = 0.0
         self._last_failover_error = None
         self._select_highest_priority_available(force=True)
@@ -74,7 +83,7 @@ class AIProviderManager:
 
     def _mark_unavailable(self, index, cooldown=None):
         seconds = config.AI_COOLDOWN_SECONDS if cooldown is None else max(0.0, float(cooldown))
-        self._unavailable_until[index] = time.monotonic() + seconds
+        self._cooldowns.block(index, seconds)
 
     def _next_available(self):
         """Return the next available provider, wrapping to the first provider."""

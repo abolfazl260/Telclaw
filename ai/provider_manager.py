@@ -7,7 +7,7 @@ import time
 
 import config
 from ai.extractor import AIExtractionError
-from ai.provider_cooldown import CooldownState, shared_cooldowns
+from ai.provider_cooldown import CooldownState, cooldown_cause, shared_cooldowns
 from ai.providers.factory import create_provider
 
 
@@ -81,9 +81,9 @@ class AIProviderManager:
             "rate_limit", "server_error", "network_error", "provider_error",
         } or getattr(exc, "status", None) in {401, 403, 429, 500, 502, 503, 504}
 
-    def _mark_unavailable(self, index, cooldown=None):
+    def _mark_unavailable(self, index, cooldown=None, *, cause=None):
         seconds = config.AI_COOLDOWN_SECONDS if cooldown is None else max(0.0, float(cooldown))
-        self._cooldowns.block(index, seconds)
+        self._cooldowns.block(index, seconds, cause=cause)
 
     def _next_available(self):
         """Return the next available provider, wrapping to the first provider."""
@@ -159,7 +159,7 @@ class AIProviderManager:
                     cooldown = getattr(alternate_error, "retry_after", None) if getattr(alternate_error, "status", None) == 429 else None
                     if cooldown is not None and float(cooldown) <= 0:
                         cooldown = None
-                    self._mark_unavailable(index, cooldown)
+                    self._mark_unavailable(index, cooldown, cause=cooldown_cause(alternate_error))
                 # Do not mask a real 429/network/permission error as invalid JSON;
                 # the service layer applies its existing bounded retry policy.
                 raise
@@ -189,7 +189,7 @@ class AIProviderManager:
                 cooldown = getattr(exc, "retry_after", None) if getattr(exc, "status", None) == 429 else None
                 if cooldown is not None and float(cooldown) <= 0:
                     cooldown = None  # Prevent a 429 with retry_after=0 from hot-looping.
-                self._mark_unavailable(current_index, cooldown)
+                self._mark_unavailable(current_index, cooldown, cause=cooldown_cause(exc))
 
                 # Mark the failing provider BEFORE finding the next one, so a
                 # wrapped search cannot immediately pick the same provider.

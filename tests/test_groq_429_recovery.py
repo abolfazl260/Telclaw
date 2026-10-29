@@ -77,7 +77,8 @@ def test_groq_tpm_body_is_used_when_retry_header_is_missing(monkeypatch):
     budget = GroqTokenBudget(8000, 10)
     reserved = budget.reserve(request())
     budget.complete(reserved, response=Denied({}))
-    assert budget.snapshot()["cooldown_seconds"] == pytest.approx(4.77)
+    # Monitoring snapshots round cooldown seconds to one decimal place.
+    assert budget.snapshot()["cooldown_seconds"] == pytest.approx(4.8)
 
 
 @pytest.mark.parametrize("body", [

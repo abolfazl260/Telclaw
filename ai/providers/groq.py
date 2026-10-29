@@ -138,7 +138,10 @@ class GroqClient:
             request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
             reason = self._provider_reason(response.status_code, detail)
             retry_after = self._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            log = logger.warning if reason == "invalid_provider_output" else logger.error
+            # Recoverable 429s are expected control-flow for the provider
+            # manager (Retry-After / Cloudflare failover); only the queue's
+            # final unrecovered failure is an ERROR alert.
+            log = logger.warning if reason in {"rate_limit", "invalid_provider_output"} else logger.error
             log(
                 "Groq provider error: provider=groq status=%s model=%s reason=%s request_id=%s retry_after=%s response=%s",
                 response.status_code, self.model, reason, request_id or "<none>", retry_after if retry_after is not None else "<none>", detail[:4000] or "<empty>",
@@ -272,7 +275,10 @@ class _GroqBatchClassifier:
             detail = response.text.strip()
             reason = GroqClient._provider_reason(response.status_code, detail)
             retry_after = GroqClient._parse_retry_after(response.headers, detail) if response.status_code == 429 else None
-            logger.error(
+            # Avoid sending a Telegram ERROR for 429s which may be recovered
+            # through the existing cooldown / failover / retry mechanisms.
+            log = logger.warning if reason == "rate_limit" else logger.error
+            log(
                 "Groq classification error: status=%s model=%s reason=%s response=%s",
                 response.status_code, self.model, reason, detail[:4000],
             )

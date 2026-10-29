@@ -34,6 +34,9 @@ class GroqTokenBudget:
         self.available = float(self.capacity)
         self._last_refill = time.monotonic()
         self._blocked_until = 0.0
+        # On real Groq 429s the Requested token count may exceed our
+        # tokenizer-free estimate; calibrate subsequent admission conservatively.
+        self._estimate_multiplier = 1.0
         self._lock = threading.Lock()
 
     def _safe_capacity(self, limit):
@@ -104,12 +107,13 @@ class GroqTokenBudget:
                 "headroom_percent": self.headroom_percent,
                 "available_estimate": max(0, int(self.available)),
                 "cooldown_seconds": round(max(0.0, self._blocked_until - now), 1),
+                "estimate_multiplier": round(self._estimate_multiplier, 3),
             }
 
     def reserve(self, payload):
         """Reserve before network I/O or raise a retryable 429 for outer failover."""
-        requested = self.estimate_tokens(payload)
         with self._lock:
+            requested = math.ceil(self.estimate_tokens(payload) * self._estimate_multiplier)
             now = time.monotonic()
             self._refill(now)
             if requested > self.capacity:
@@ -138,6 +142,31 @@ class GroqTokenBudget:
             retry_after=max(0.01, wait),
         )
 
+    @staticmethod
+    def _tpm_rejection(body):
+        """Read only the numeric TPM diagnostics from a Groq 429 JSON response.
+
+        Ignore RPM, TPD, arbitrary messages, and malformed provider output.
+        """
+        try:
+            error = json.loads(body or "{}").get("error", {})
+            message = error.get("message", "") if isinstance(error, dict) else ""
+        except (ValueError, TypeError, AttributeError):
+            return None
+        match = re.search(
+            r"on tokens per minute\s*\(TPM\):\s*Limit\s+(\d+),\s*"
+            r"Used\s+(\d+),\s*Requested\s+(\d+)",
+            message,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        limit, used, requested = (int(value) for value in match.groups())
+        if limit <= 0 or used < 0 or requested <= 0:
+            return None
+        retry = re.search(r"try again in\s+(\d+(?:\.\d+)?)s", message, re.IGNORECASE)
+        return limit, used, requested, (float(retry.group(1)) if retry else None)
+
     def complete(self, reserved, *, response=None, error=False):
         """Reconcile an HTTP response; on 429 no tokens should be charged.
 
@@ -154,8 +183,28 @@ class GroqTokenBudget:
             headers = getattr(response, "headers", {}) or {}
 
             if status == 429:
+                # The denied request did not consume tokens, but the
+                # organization's consumption can differ from local estimates.
                 self.available = min(self.capacity, self.available + reserved)
                 retry = self._seconds(self._header(headers, "retry-after"))
+                rejection = self._tpm_rejection(getattr(response, "text", ""))
+                if rejection is not None:
+                    limit, used, provider_requested, detail_retry = rejection
+                    # Groq's "Requested" is the authoritative admission size,
+                    # which may exceed our UTF-8 approximation.
+                    if reserved > 0:
+                        self._estimate_multiplier = min(
+                            4.0,
+                            max(self._estimate_multiplier, provider_requested / reserved * 1.05),
+                        )
+                    new_capacity = self._safe_capacity(min(self.configured_limit, limit))
+                    self.capacity = min(self.capacity, new_capacity)
+                    self.available = min(
+                        self.available,
+                        max(0.0, limit - used - (limit - new_capacity)),
+                    )
+                    if retry is None:
+                        retry = detail_retry
                 if retry is not None:
                     self._blocked_until = max(self._blocked_until, now + retry)
 

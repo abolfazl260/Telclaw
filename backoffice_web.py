@@ -20,6 +20,8 @@ import backoffice_data
 from backoffice_layout import SHARED_STYLE, page_header
 from backoffice_import import import_page, import_template, import_upload
 import backoffice_settings
+import backoffice_ai_providers
+from backoffice_ai_providers_ui import render as render_ai_provider_status
 from storage import data_normalizer
 import backoffice_health
 from backoffice_assistant import ANALYST_KEY, assistant_page, assistant_ask
@@ -2485,6 +2487,11 @@ def _setting_input(row, csrf):
         <button class="secondary" {"disabled" if row["override"] is None else ""}>Use .env default</button></form></div>'''
 
 
+async def ai_provider_status(request):
+    """Authenticated, passive local AI provider status refresh."""
+    return web.json_response(backoffice_ai_providers.snapshot(request.app["operations"]))
+
+
 async def settings_page(request):
     csrf = _escape(request["session"]["csrf"])
     grouped = {}
@@ -2508,6 +2515,13 @@ async def settings_page(request):
                 {_setting_input(row, csrf)}
             </div>''')
         sections.append(f'<section><h2>{_escape(group)}</h2>{"".join(items)}</section>')
+
+    monitor_html = render_ai_provider_status(
+        backoffice_ai_providers.snapshot(
+            request.app["operations"] if hasattr(request, "app") else None
+        ),
+        request["csp_nonce"],
+    )
 
     notice = request.query.get("notice", "")
     notice_html = {
@@ -2547,6 +2561,7 @@ async def settings_page(request):
     persisted in SQLite. Secret values are never rendered in the page. Settings marked restart required are saved immediately
     but need a Telclaw restart for already-created clients, listeners or workers to rebuild safely.</p>
     {notice_html}
+    {monitor_html}
     {"".join(sections)}
     </body></html>'''
     return web.Response(text=content, content_type="text/html")
@@ -2703,6 +2718,7 @@ def create_app(console_ui=None):
                     web.get("/data/import", import_page), web.get("/data/import/template", import_template),
                     web.post("/data/import", import_upload), web.post("/data/import/{category}", import_upload), web.get("/data", data_page), web.get("/data/export", data_export), web.get("/normalization", normalization_page),
                     web.get("/health", health_page), web.get("/settings", settings_page),
+                    web.get("/settings/ai-providers/status", ai_provider_status),
                     web.post("/normalization/save", save_normalization_alias),
                     web.post("/normalization/delete", delete_normalization_alias),
                     web.post("/normalization/apply", apply_normalization),

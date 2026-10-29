@@ -18,7 +18,7 @@ from ai.prompt_loader import render_prompt
 from ai.structured_output import extraction_response_format
 from ai.rate_limiter import RateLimiter
 from ai.groq_token_budget import shared_groq_token_budget
-from ai.provider_cooldown import CooldownState, shared_cooldowns
+from ai.provider_cooldown import CooldownState, cooldown_cause, shared_cooldowns
 from ai.providers.base import AIProvider
 
 logger = logging.getLogger("telclaw.ai")
@@ -65,6 +65,20 @@ class GroqClient:
         if status >= 500:
             return "server_error"
         return "provider_error"
+
+    @staticmethod
+    def _cooldown_cause_for_response(status, detail):
+        """Report a sanitized rate-limit scope; never expose provider text."""
+        if status != 429:
+            return None
+        message = str(detail or "").lower()
+        if "tokens per minute (tpm)" in message:
+            return "tpm_limit"
+        if "requests per minute (rpm)" in message:
+            return "rpm_limit"
+        if "tokens per day (tpd)" in message or "requests per day (rpd)" in message:
+            return "daily_quota"
+        return "rate_limit"
 
     @staticmethod
     def _parse_retry_after(headers, detail):
@@ -160,6 +174,7 @@ class GroqClient:
                 reason=reason,
                 stop_queue=response.status_code == 403,
                 retry_after=retry_after,
+                cooldown_cause=self._cooldown_cause_for_response(response.status_code, detail),
             )
 
         try:
@@ -288,6 +303,7 @@ class _GroqBatchClassifier:
                 reason=reason,
                 stop_queue=response.status_code == 403,
                 retry_after=retry_after,
+                cooldown_cause=GroqClient._cooldown_cause_for_response(response.status_code, detail),
             )
 
         try:
@@ -430,8 +446,8 @@ class GroqProvider(AIProvider):
                 return index
         return None
 
-    def _mark_unavailable(self, index, wait_seconds):
-        self._cooldowns.block(index, wait_seconds)
+    def _mark_unavailable(self, index, wait_seconds, *, cause=None):
+        self._cooldowns.block(index, wait_seconds, cause=cause)
 
     def _switch_to_next_available(self):
         now = time.monotonic()
@@ -459,7 +475,7 @@ class GroqProvider(AIProvider):
             except AIExtractionError as exc:
                 if exc.status != 429 or exc.retry_after is None or exc.retry_after <= config.GROQ_FAILOVER_THRESHOLD_SECONDS:
                     raise
-                self._mark_unavailable(self.active_index, exc.retry_after)
+                self._mark_unavailable(self.active_index, exc.retry_after, cause=cooldown_cause(exc))
                 if self._switch_to_next_available():
                     continue
                 raise

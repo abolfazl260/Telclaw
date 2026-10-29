@@ -67,16 +67,21 @@ def _cooldown_rows(owner, now, count):
 def _last_cooldown(rows):
     """Show the cause of the current block, else the most recent past block."""
     blocked = [row for row in rows if row["wait"] > 0]
-    candidates = [row for row in blocked if row["at"]] or [
-        row for row in rows if row["at"]
-    ]
-    if candidates:
+    if blocked:
+        # Never attach a historical cause to a current cooldown whose
+        # provenance is unavailable (for example a test/legacy injected state).
+        candidates = [row for row in blocked if row["at"]]
+        if candidates:
+            event = max(candidates, key=lambda row: row["at"])
+            cause, at = event["cause"], event["at"]
+        else:
+            cause, at = None, None
+    else:
+        candidates = [row for row in rows if row["at"]]
+        if not candidates:
+            return None
         event = max(candidates, key=lambda row: row["at"])
         cause, at = event["cause"], event["at"]
-    elif blocked:
-        cause, at = None, None
-    else:
-        return None
     return {
         "code": cause or "unknown",
         "label": CAUSE_LABELS.get(cause or "unknown", CAUSE_LABELS["unknown"]),

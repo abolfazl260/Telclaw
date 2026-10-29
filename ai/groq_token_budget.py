@@ -154,8 +154,8 @@ class GroqTokenBudget:
         except (ValueError, TypeError, AttributeError):
             return None
         match = re.search(
-            r"on tokens per minute\\s*\\(TPM\\):\\s*Limit\\s+(\\d+),\\s*"
-            r"Used\\s+(\\d+),\\s*Requested\\s+(\\d+)",
+            r"on tokens per minute\s*\(TPM\):\s*Limit\s+(\d+),\s*"
+            r"Used\s+(\d+),\s*Requested\s+(\d+)",
             message,
             re.IGNORECASE,
         )
@@ -164,7 +164,7 @@ class GroqTokenBudget:
         limit, used, requested = (int(value) for value in match.groups())
         if limit <= 0 or used < 0 or requested <= 0:
             return None
-        retry = re.search(r"try again in\\s+(\\d+(?:\\.\\d+)?)s", message, re.IGNORECASE)
+        retry = re.search(r"try again in\s+(\d+(?:\.\d+)?)s", message, re.IGNORECASE)
         return limit, used, requested, (float(retry.group(1)) if retry else None)
 
     def complete(self, reserved, *, response=None, error=False):

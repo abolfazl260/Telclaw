@@ -1,340 +1,248 @@
 # Telclaw
 
-Telclaw is a Telegram data-processing pipeline. Its purpose is to collect information from selected Telegram sources, clean and normalize the data, prepare structured datasets for category-based AI processing, validate AI results, and eventually deliver approved structured outputs to downstream services.
-
-## Back-office AI assistant
-
-Open **AI Assistant** in the back office to analyze records using the existing
-Cloudflare/Groq settings. See [usage and limits](docs/BACKOFFICE_AI_ASSISTANT.md).
-
-## AI database analysis (MCP)
-
-An optional read-only MCP server lets an AI inspect source text, extracted fields,
-queues and delivery failures, or run bounded analytical SQL. See
-[setup, tools and connection examples](docs/MCP_DATABASE.md).
-
-## Advertio cargo delivery
-
-Processed passenger-cargo (`transferlist`) ads can also be delivered to the Advertio
-Ingest API, **independently** of the existing Telegram cargo publisher and the
-Housing Advertio adapter. Historical records are backfilled when still eligible;
-see [Cargo delivery, configuration, rollback, and limitations](docs/ADVERTIO_CARGO_DELIVERY.md).
-
-## System Goals
-
-Telclaw is being developed around the following business and technical goals:
-
-1. **Collect Telegram data** from configured channels/groups using managed Telegram sessions.
-2. **Preserve raw information** so the original collected data remains available for reprocessing when cleaning rules or AI logic change.
-3. **Clean and normalize data** using deterministic processing such as text cleaning, metadata normalization, duplicate detection, validation, and noise removal.
-4. **Create a structured dataset** that is consistent and suitable for automated processing and analysis.
-5. **Classify data** using configurable rules/categories before AI processing where deterministic classification is sufficient.
-6. **Process categorized data with AI** using category-specific parameters, prompts, and output schemas to extract the information required by the business.
-7. **Validate AI output** before it is accepted as processed data. Invalid or low-confidence results must be retryable or rejectable rather than silently passing through.
-8. **Apply business rules** to determine which processed records should continue to downstream delivery.
-9. **Deliver structured results** to external services through reliable APIs/integrations with retry, timeout, status tracking, and error handling.
-10. **Maintain traceability** for every record across the pipeline: collected → cleaned → classified → AI processed → validated → delivered.
-
-The current development focus is the first part of this pipeline: **collection, cleaning/normalization, and reliable storage**. AI processing and downstream delivery are planned as separate layers and should not be tightly coupled to the crawler.
-
-## End-to-End Pipeline
-
-```text
-Telegram
-   ↓
-Collection
-   ↓
-Raw Storage
-   ↓
-Cleaning
-   ↓
-Normalization
-   ↓
-AI Category Classification
-   ↓
-Category-specific AI Extraction
-   ↓
-Validation
-   ↓
-Category Table
-   ↓
-Business Rules
-   ↓
-Delivery
-   ↓
-External Service
-```
-
-Each stage should have a clear responsibility, a defined input/output contract, error handling, and a persisted processing status where appropriate.
-
-## System Structure
-
-The target architecture is organized into independent layers:
+## Project Structure
 
 ```text
 Telclaw/
-├── main.py                         # Application entry point
-├── config.py                       # Environment/runtime configuration
-├── ui.py                           # Console interaction layer
-│
-├── collection/
-│   ├── crawler.py                  # Telegram data collection
-│   ├── channel_manager.py          # Source/channel configuration
-│   └── ...
-│
-├── telegram/
-│   └── sessions_manager.py         # Telegram sessions and clients
-│
-├── processing/
-│   ├── cleaner.py                  # Data cleaning
-│   ├── normalizer.py               # Data normalization
-│   ├── duplicate_detector.py       # Duplicate detection
-│   ├── classifier.py               # Rule/category classification
-│   └── validator.py                # Data/result validation
-│
+├── .github/
+│   └── workflows/
+│       └── branch-review.yml
 ├── ai/
-│   ├── processor.py                # AI orchestration
-│   ├── prompts.py                  # Prompt construction
-│   ├── schemas.py                  # Structured AI output schemas
-│   └── category_configs.py         # Category-specific parameters
-│
+│   ├── prompts/
+│   │   ├── housinglist.txt
+│   │   ├── joblist.txt
+│   │   └── transferlist.txt
+│   ├── providers/
+│   │   ├── __init__.py
+│   │   ├── base.py
+│   │   ├── cloudflare.py
+│   │   ├── factory.py
+│   │   └── groq.py
+│   ├── __init__.py
+│   ├── ai_service.py
+│   ├── category_classifier.py
+│   ├── category_schemas.py
+│   ├── classification_service.py
+│   ├── database_analyst.py
+│   ├── extraction_service.py
+│   ├── extractor.py
+│   ├── groq_connection_test.py
+│   ├── groq_token_budget.py
+│   ├── prompt_loader.py
+│   ├── provider_cooldown.py
+│   ├── provider_failover.py
+│   ├── provider_manager.py
+│   ├── rate_limiter.py
+│   ├── run_ai_processing.py
+│   ├── structured_output.py
+│   └── text_source.py
+├── collection/
+│   ├── __init__.py
+│   ├── collector_service.py
+│   ├── crawler.py
+│   └── media_downloader.py
 ├── delivery/
-│   ├── client.py                   # External service integration
-│   ├── queue.py                    # Delivery jobs/retry handling
-│   └── ...
-│
+│   ├── __init__.py
+│   ├── advertio_cargo.py
+│   ├── advertio_client.py
+│   ├── advertio_jobs.py
+│   ├── advertio_service.py
+│   ├── advertio_transport.py
+│   ├── housing_retry.py
+│   ├── jobs_discovery.py
+│   ├── telegram_transfer_publisher.py
+│   └── telegram_transfer.py
+├── docs/
+│   ├── integrations/
+│   │   ├── advertio-ingest-api.md
+│   │   └── README.md
+│   ├── ADMIN_FORWARDED_IMPORT.md
+│   ├── ADVERTIO_CARGO_DELIVERY.md
+│   ├── ADVERTIO_INGEST_INTEGRATION.md
+│   ├── ADVERTIO_JOBS_DELIVERY.md
+│   ├── ADVERTIO_MANUAL_DELIVERY.md
+│   ├── AI_CODING_CONTEXT.md
+│   ├── AI_STRUCTURED_EXTRACTION.md
+│   ├── ai-processing.md
+│   ├── architecture.md
+│   ├── BACKOFFICE_AI_ASSISTANT.md
+│   ├── backoffice.md
+│   ├── development-roadmap.md
+│   ├── MCP_DATABASE.md
+│   ├── REPOSITORY_INITIALIZATION_PERFORMANCE.md
+│   ├── SYSTEM_STRUCTURE_MAP.md
+│   ├── TEXT_LIFECYCLE_AUDIT.md
+│   ├── TRANSFER_CITY_NORMALIZATION_AUDIT.md
+│   └── TRANSFER_PROVINCE_NORMALIZATION.md
+├── integrations/
+│   ├── __init__.py
+│   ├── database_reader.py
+│   └── mcp_server.py
+├── monitoring/
+│   ├── aboutus.py
+│   ├── admin_forward_ingest.py
+│   ├── error_alerts.py
+│   ├── source_formatter.py
+│   ├── telegram_monitor.py
+│   └── transfer_live.py
+├── processing/
+│   ├── __init__.py
+│   ├── classifier.py
+│   ├── cleaner.py
+│   ├── contracts.py
+│   ├── normalizer.py
+│   ├── processing_service.py
+│   ├── property_extractor.py
+│   ├── run_processing.py
+│   └── stages.py
+├── scripts/
+│   ├── audit_message_text_columns.py
+│   ├── rebuild_transfer_locations.py
+│   └── reconcile_message_text.py
+├── services/
+│   ├── __init__.py
+│   ├── account_service.py
+│   ├── channel_service.py
+│   ├── crawl_job_service.py
+│   ├── crawler_service.py
+│   ├── health_metrics.py
+│   ├── message_service.py
+│   ├── processing_runner.py
+│   ├── processing_service.py
+│   ├── scheduler_service.py
+│   └── stage_control.py
 ├── storage/
-│   ├── database.py                 # SQLite access/repositories
-│   └── migrations.py               # Database schema migrations
-│
-└── tests/
-    ├── collection/
-    ├── processing/
-    ├── ai/
-    └── delivery/
+│   ├── __init__.py
+│   ├── advertio_jobs_queue.py
+│   ├── content_duplicate.py
+│   ├── data_normalizer.py
+│   ├── database.py
+│   ├── location_normalizer.py
+│   ├── message_repository.py
+│   ├── transfer_city_aliases.py
+│   └── transfer_province_map.py
+├── TelegramProcessor/
+│   ├── config/
+│   │   └── categories.json
+│   ├── modules/
+│   │   ├── classifier.py
+│   │   ├── cleaner.py
+│   │   ├── duplicate_detector.py
+│   │   ├── exporter.py
+│   │   └── logger.py
+│   ├── main.py
+│   ├── Property Information.txt
+│   └── requirements.txt
+├── tests/
+│   ├── fixtures/
+│   │   └── advertio_jobs_schema.json
+│   ├── conftest.py
+│   ├── test_admin_error_notifications.py
+│   ├── test_admin_forward_ingest.py
+│   ├── test_advertio_automatic_retry.py
+│   ├── test_advertio_cargo.py
+│   ├── test_advertio_contract.py
+│   ├── test_advertio_jobs.py
+│   ├── test_advertio_media_cleanup.py
+│   ├── test_advertio_retry_media.py
+│   ├── test_ai_advertio_media_cleanup.py
+│   ├── test_ai_category_classification.py
+│   ├── test_ai_delivery_progress.py
+│   ├── test_ai_extraction_fallback.py
+│   ├── test_ai_extraction_normalization.py
+│   ├── test_ai_media_downloader_wiring.py
+│   ├── test_ai_null_normalization.py
+│   ├── test_ai_provider_config.py
+│   ├── test_ai_provider_failover_manager.py
+│   ├── test_ai_provider_manager.py
+│   ├── test_ai_shared_cooldown.py
+│   ├── test_ai_status_migration.py
+│   ├── test_ai_text_source.py
+│   ├── test_album_media.py
+│   ├── test_assistant_query_rows.py
+│   ├── test_backoffice_account_registration.py
+│   ├── test_backoffice_active_cargo.py
+│   ├── test_backoffice_ai_provider_status.py
+│   ├── test_backoffice_data.py
+│   ├── test_backoffice_filtered_export.py
+│   ├── test_backoffice_health.py
+│   ├── test_backoffice_import.py
+│   ├── test_backoffice_normalization.py
+│   ├── test_backoffice_operations.py
+│   ├── test_backoffice_rules.py
+│   ├── test_backoffice_settings.py
+│   ├── test_backoffice_text_edit_safety.py
+│   ├── test_category_specific_extraction.py
+│   ├── test_cloudflare_provider.py
+│   ├── test_content_duplicate.py
+│   ├── test_crawl_raw_text_contract.py
+│   ├── test_crawler_forwarded_channel.py
+│   ├── test_crawler_minimum_text.py
+│   ├── test_crawler_reconnect.py
+│   ├── test_data_normalization.py
+│   ├── test_database_analyst.py
+│   ├── test_database_mcp.py
+│   ├── test_delivery_text_compatibility.py
+│   ├── test_groq_429_recovery.py
+│   ├── test_groq_token_budget.py
+│   ├── test_health_metrics_consistency.py
+│   ├── test_housing_retry_after.py
+│   ├── test_jobs_compensation_policy.py
+│   ├── test_jobs_discovery.py
+│   ├── test_legacy_text_interfaces.py
+│   ├── test_message_text_audit.py
+│   ├── test_message_text_reconciliation.py
+│   ├── test_processing_text_mirror.py
+│   ├── test_provider_failover.py
+│   ├── test_queue_recovery.py
+│   ├── test_random_channel_crawl.py
+│   ├── test_recover_missing_jobs.py
+│   ├── test_repository_bootstrap_performance.py
+│   ├── test_requeue_disabled_jobs.py
+│   ├── test_source_rich_text.py
+│   ├── test_stage_control.py
+│   ├── test_structured_extraction.py
+│   ├── test_telegram_aboutus.py
+│   ├── test_telegram_database_download.py
+│   ├── test_telegram_monitor_access.py
+│   ├── test_terminal_q.py
+│   ├── test_text_lifecycle_integration.py
+│   ├── test_transfer_city_aliases.py
+│   ├── test_transfer_country.py
+│   ├── test_transfer_live_display.py
+│   ├── test_transfer_province_fill.py
+│   ├── test_transfer_title_publishing.py
+│   └── test_transferlist_schema.py
+├── .env.example
+├── .gitignore
+├── advertio_client.py
+├── backoffice_active_cargo.py
+├── backoffice_ai_providers_ui.py
+├── backoffice_ai_providers.py
+├── backoffice_assistant.py
+├── backoffice_cargo_page.py
+├── backoffice_data.py
+├── backoffice_health.py
+├── backoffice_import.py
+├── backoffice_jobs.py
+├── backoffice_layout.py
+├── backoffice_operations_ui.py
+├── backoffice_operations.py
+├── backoffice_settings.py
+├── backoffice_web.py
+├── channels.json
+├── config.py
+├── database.py
+├── error_handler.py
+├── main.py
+├── README.md
+├── requirements-mcp.txt
+├── requirements.txt
+├── routed_publisher.py
+├── routing_rules.py
+├── scheduler.py
+├── sessions_manager.py
+├── system_ui.py
+├── terminal_input.py
+└── ui.py
 ```
-
-The current repository still contains some of these responsibilities in the existing top-level modules. The structure above is the **target architecture**, to be reached incrementally rather than through a single large rewrite.
-
-## Data Storage Strategy
-
-SQLite is the primary persistence layer for new data.
-
-```text
-Telegram
-   ↓
-Collector
-   ↓
-SQLite
-   ├── raw messages
-   ├── cleaned/normalized records
-   ├── classifications
-   ├── AI results
-   ├── processing status
-   └── delivery status
-```
-
-CSV is not the primary database. Existing legacy CSV files do **not** need to be migrated. If CSV output is needed later, it should be generated as an export from SQLite.
-
-The database must provide deterministic duplicate protection and indexes appropriate for the expected query patterns.
-
-## AI Processing Model
-
-AI processing is configuration-driven. Each category can define:
-
-- category name and description
-- required fields
-- optional fields
-- extraction parameters
-- batch classification instructions
-- prompt/instructions
-- output schema
-- validation rules
-- confidence threshold
-- retry policy
-
-Example:
-
-```text
-Category: Job
-
-Required:
-- title
-- company
-- location
-
-Optional:
-- salary
-- employment_type
-- experience
-- skills
-- deadline
-
-AI output:
-JSON matching the category schema
-```
-
-AI output must never be sent directly to an external service without validation.
-
-## Development Roadmap
-
-### Phase 1 — Collection Foundation
-
-- Stabilize Telegram session management.
-- Separate collection logic from UI logic.
-- Store all new collected messages in SQLite.
-- Implement reliable duplicate protection.
-- Define raw message schema.
-- Add indexes for channel/message/date queries.
-- Add basic collection tests.
-
-### Phase 2 — Cleaning & Normalization
-
-- Move cleaning into independent processing modules.
-- Define a deterministic cleaned-data schema.
-- Implement text normalization and metadata normalization.
-- Improve duplicate/noise detection.
-- Persist processing status and errors.
-- Add unit tests for each cleaner.
-
-### Phase 3 — Category & Rule Engine
-
-- Define category configuration files/schema.
-- Add rule-based pre-classification.
-- Define category-specific required/optional parameters.
-- Route records to the correct processing pipeline.
-
-### Phase 4 — AI Processing
-
-- Add an AI provider abstraction so the application is not tied to one model/provider.
-- Implement category-specific prompts.
-- Enforce structured output schemas.
-- Add validation, confidence thresholds, retry, and failure handling.
-- Store prompts/model/version/result metadata for traceability.
-
-### Phase 5 — Business Rules & Delivery
-
-- Define rules for accepting/rejecting AI results.
-- Build an outbound delivery abstraction.
-- Implement authentication, timeout, retry, rate limiting, and delivery status.
-- Make delivery idempotent so a record is not sent twice unintentionally.
-
-### Phase 6 — Monitoring & Operations
-
-- Add structured logs.
-- Add pipeline metrics.
-- Track failures by stage.
-- Add reprocessing tools.
-- Add operational dashboards/reports.
-- Add backup and recovery procedures.
-
-### Administrator error notifications
-
-The existing Telegram monitoring bot sends application `ERROR` and `CRITICAL`
-log events **by default to every administrator on `ADMIN_USER_IDS`** (not
-only those who used `/start`). This includes worker-thread processing
-failures, crawler and storage errors, AI classification/extraction errors,
-Advertio delivery failures, Back Office operation failures, and terminal
-queue exceptions. Alerts contain the component/source, error message and
-Tehran-local timestamp.
-
-Set `TELCLAW_TELEGRAM_BOT_TOKEN` to enable monitoring (the
-`TELCLAW_TELEGRAM_MONITOR_ENABLED` setting defaults to `true`; setting it
-explicitly to `false` disables it). Restart Telclaw after updating settings.
-No `/start` subscription is required to receive error alerts; an administrator
-can send `/stop` **even before `/start`** to opt out of both error alerts
-and ordinary subscribed reports, and `/start` to enable them again.
-Ordinary pipeline reports and transfer-live summaries remain opt-in via
-`/start`, as before; this default-on behavior only applies to system errors.
-
-**Telegram platform limitation:** the bot cannot send a message to an admin
-who has never initiated a private conversation with the bot, or has blocked
-it. Those admins must open the bot at least once to permit delivery; this is
-a Telegram requirement, not a Telclaw subscription requirement. Unauthorized
-users and group chats never receive the alerts.
-
-The notifier uses a bounded asynchronous queue, safely accepts Python logging
-events from worker threads, redacts configured API credentials, and limits
-identical (or per-message-ID equivalent) notifications to one per five minutes.
-The next alert after the quiet period includes a suppressed-count summary.
-Original records continue through existing Python log handlers. When the
-monitoring bot is disabled or Telegram is unreachable, remote delivery is
-not guaranteed; local logging remains available.
-
-### Phase 7 — Scale & Optimization
-
-- Introduce job queues where required.
-- Parallelize independent processing safely.
-- Optimize database indexes and batch operations.
-- Add retention/archive strategies.
-- Move components to separate services only when actual scale requires it.
-
-## Configuration
-
-Telegram API credentials are loaded from environment variables and are never committed to source control.
-
-1. Copy `.env.example` to `.env`.
-2. Set `TELEGRAM_API_ID` and `TELEGRAM_API_HASH`.
-
-### Structured data normalization
-
-The Back Office **Normalization** tab manages exact, field-specific alias rules
-for structured category data. Raw Telegram source text is preserved. New AI
-extractions are normalized before persistence and publishing, manual Database-tab
-edits use the same rules, and existing rows can be re-normalized explicitly after
-reviewing the affected counts. Alias matching is case- and accent-insensitive and
-can optionally be scoped by an ISO2 country code. A rule may also map an ambiguous
-value to SQL NULL.
-
-Built-in transfer aliases cover common variants such as Dusseldorf/Düsseldorf,
-Frankfurt (Main)/Frankfurt, LA/Los Angeles and Imam Airport/Tehran. Multi-city
-values such as Dusseldorf/Wuppertal are treated as ambiguous rather than guessed.
-
-### Back Office settings precedence
-
-The Back Office **Settings** tab exposes the configuration keys documented in
-`.env.example`. Values in `.env` remain the defaults. Saving a value in Back
-Office creates a persistent SQLite override; **Use .env default** removes that
-override. Secrets are masked in the web UI.
-
-On startup Telclaw loads `.env`, opens the bootstrap SQLite database, applies
-saved Back Office overrides, and only then initializes the main services. Settings
-that bind listeners or construct long-lived clients are marked **restart required**.
-`TELCLAW_DB_NAME` remains a bootstrap-only `.env` setting because the database
-must be known before stored overrides can be read.
-3. Install dependencies.
-4. Start Telclaw.
-
-```bash
-cp .env.example .env
-python -m pip install -r requirements.txt
-python main.py
-```
-
-For production, environment variables may be supplied directly by the process manager instead of using `.env`.
-
-## Runtime Storage
-
-Crawler messages are stored in `telclaw.db` using SQLite. Session files, the database, generated CSV files, and crawler logs are runtime data and are ignored by Git.
-
-## Security
-
-If a Telegram API hash has ever been committed to a repository, rotate the credential in Telegram before deploying this branch. Removing it from the current source does not remove it from Git history.
-
-## Current Architecture
-
-The current implementation is intentionally smaller than the target architecture:
-
-```text
-main.py
-  ↓
-ConsoleUI
-  ↓
-Session Manager ──→ Telethon
-  ↓
-Crawler
-  ↓
-SQLite
-```
-
-The target pipeline and development roadmap above describe where the project is going. New features should be added in a way that moves the code toward those boundaries instead of increasing coupling between UI, crawler, storage, AI, and delivery layers.

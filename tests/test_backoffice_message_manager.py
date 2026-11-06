@@ -127,3 +127,47 @@ async def test_register_channel_does_not_create_ad_rule(mm,monkeypatch):
         assert target['mm_eligible'] and not target['enabled']
         with mm.repo.connection() as c:
             assert c.execute('SELECT COUNT(*) FROM publishing_rules').fetchone()[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_tabs_separate_editor_channels_imports_and_empty_state(mm,monkeypatch):
+    async with TestClient(TestServer(app_for(mm,monkeypatch))) as client:
+        response = await client.get('/message-manager',cookies=COOKIES)
+        html = await response.text()
+        assert 'Create your first message' in html and 'Next 100</a>' not in html
+        assert 'id="message-editor"' not in html
+        for view, present, absent in [('editor','id="message-editor"','name="namespace"'),('channels','Register a new channel','id="message-editor"'),('imports','name="namespace"','id="message-editor"')]:
+            response = await client.get('/message-manager?view='+view,cookies=COOKIES)
+            html = await response.text()
+            assert response.status == 200 and present in html and absent not in html
+        response = await client.get('/message-manager?view=editor',cookies=COOKIES)
+        html = await response.text()
+        assert 'id="button-builder"' in html and 'id="live-preview"' in html
+        assert 'type="hidden" id="asset-key"' in html
+
+
+@pytest.mark.asyncio
+async def test_live_preview_uses_validated_content_and_never_saves(mm,monkeypatch):
+    async with TestClient(TestServer(app_for(mm,monkeypatch))) as client:
+        data = {'csrf':'mm-csrf','title':'Test','text':'<b>سلام</b>','fragment':'yes','buttons':'[[{"text":"Open","url":"https://example.com"}]]'}
+        response = await client.post('/message-manager/preview',data=data,cookies=COOKIES)
+        assert response.status == 200
+        payload = await response.json()
+        assert '<b>سلام</b>' in payload['html'] and 'https://example.com' in payload['html']
+        assert mm.repo.list_messages() == [] and not mm.sender.sent
+        data['text'] = '<img src=x onerror=alert(1)>'
+        response = await client.post('/message-manager/preview',data=data,cookies=COOKIES)
+        assert response.status == 400
+        data['csrf'] = 'wrong'
+        response = await client.post('/message-manager/preview',data=data,cookies=COOKIES)
+        assert response.status == 403
+
+
+@pytest.mark.asyncio
+async def test_manual_preview_marks_saved_editor_as_unsaved(mm,monkeypatch):
+    mid = mm.service.save({'title':'Original','text':'Saved text'},42)
+    async with TestClient(TestServer(app_for(mm,monkeypatch))) as client:
+        response = await client.post('/message-manager/preview',data={'csrf':'mm-csrf','id':str(mid),'title':'Original','text':'Edited preview'},cookies=COOKIES)
+        html = await response.text()
+        assert response.status == 200 and 'data-unsaved="true"' in html
+        assert mm.repo.get_message(mid)['content']['text'] == 'Saved text'

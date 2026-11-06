@@ -194,13 +194,16 @@ class TelegramTransferPublisher:
 
     @classmethod
     def _contact_button(cls, record):
+        buttons = []
         username = cls._telegram_username(record)
-        if not username:
-            return None
-        # The ad owner's username determines the destination. The UTF-8
-        # Persian message is only a draft; sending remains the reader's choice.
-        url = f"https://t.me/{username}?text={quote(TRANSFER_CONTACT_DRAFT, safe='')}"
-        return {"inline_keyboard": [[{"text": f"👤 @{username}", "url": url}]]}
+        if username:
+            # The ad owner's username determines the destination. The UTF-8
+            # Persian message is only a draft; sending remains the reader's choice.
+            url = f"https://t.me/{username}?text={quote(TRANSFER_CONTACT_DRAFT, safe='')}"
+            buttons.append({"text": f"👤 @{username}", "url": url})
+        # The Main Mini App receives start_param=create to open ad creation.
+        buttons.append({"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot?startapp=create"})
+        return {"inline_keyboard": [buttons]}
 
     @classmethod
     def format_ad(cls, record, data):

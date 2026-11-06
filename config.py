@@ -215,7 +215,8 @@ ADVERTIO_JOBS_CLAIM_TIMEOUT_SECONDS = _int_env("TELCLAW_ADVERTIO_JOBS_CLAIM_TIME
 ADVERTIO_DAILY_REQUEST_LIMIT = _int_env("TELCLAW_ADVERTIO_DAILY_REQUEST_LIMIT", 1000, minimum=1)
 
 # Administrator-authored messages are isolated from crawler/AI ad publishing.
-MESSAGE_MANAGER_ENABLED = os.getenv("TELCLAW_MESSAGE_MANAGER_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+# Available automatically; keep an explicit operator opt-out for rollback.
+MESSAGE_MANAGER_ENABLED = os.getenv("TELCLAW_MESSAGE_MANAGER_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 MESSAGE_MANAGER_POLL_SECONDS = _float_env("TELCLAW_MESSAGE_MANAGER_POLL_SECONDS", 2, minimum=0.5)
 MESSAGE_MANAGER_BATCH_SIZE = min(_int_env("TELCLAW_MESSAGE_MANAGER_BATCH_SIZE", 25, minimum=1), 100)
 MESSAGE_MANAGER_MAX_ATTEMPTS = min(_int_env("TELCLAW_MESSAGE_MANAGER_MAX_ATTEMPTS", 3, minimum=1), 10)

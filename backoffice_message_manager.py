@@ -153,7 +153,12 @@ def form_error(request, data, command, error, field=None):
                      asset_key=asset, buttons=keyboard, buttons_raw=data.get('buttons') or '[]')
     values = {key: data.getall(key) for key in data if key != 'csrf' and isinstance(data.get(key), str)}
     feedback = dict(action=command, values=values, errors={field:error})
-    body = render(mm, request['session']['csrf'], request['csp_nonce'], query, message, draft,
+    batch = None
+    try:
+        if data.get('batch_id'): batch = mm.excel.batch(data['batch_id'])
+    except ValueError:
+        pass
+    body = render(mm, request['session']['csrf'], request['csp_nonce'], query, message, draft, batch,
                   error=error, feedback=feedback)
     return web.Response(text=body, content_type='text/html', status=400)
 

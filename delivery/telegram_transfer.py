@@ -386,6 +386,7 @@ def format_transfer_ad(record):
         lines.append(f"📅 Departure Date: {_format_departure_date(record['departure_date'])}")
     if record.get("arrival_date"):
         lines.append(f"📅 Arrival Date: {_format_departure_date(record['arrival_date'])}")
+    lines.append("🪪 Identity Verification: Not Verified")
     if record.get("price") is not None:
         currency = str(record.get("currency") or "").strip()
         suffix = f" {currency}" if currency else ""

@@ -65,9 +65,9 @@ def test_aboutus_html_has_all_registry_assets_and_fits_telegram_message():
 
 def test_aboutus_member_counts_and_each_link_is_on_its_own_line():
     text = build_aboutus_message()
-    assert "کانال‌های مسکن | 5K عضو" in text
+    assert "کانال‌های مسکن | 8K عضو" in text
     assert "<b>ارسال بار، پرواز و ویزا</b>" in text
-    assert "• <a href=\"https://t.me/advertio_cargo\">ارسال بار و مدارک</a> | 9K عضو" in text
+    assert "• <a href=\"https://t.me/advertio_cargo\">ارسال بار و مدارک</a> | 12K عضو" in text
     assert "۳ لینک" not in text and "۵ گروه" not in text
     assert "حدود" not in text
     assert "✨ <b>Advertio | ادورتیو</b>" in text

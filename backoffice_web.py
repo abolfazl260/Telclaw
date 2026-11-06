@@ -19,6 +19,7 @@ import config
 import backoffice_data
 from backoffice_layout import SHARED_STYLE, page_header
 from backoffice_import import import_page, import_template, import_upload
+from backoffice_manual_crawl import manual_crawl_page, manual_crawl_submit
 import backoffice_settings
 import backoffice_ai_providers
 from backoffice_ai_providers_ui import render as render_ai_provider_status
@@ -1819,7 +1820,7 @@ async def operations_page(request):
     <nav class="ops-sidebar" aria-label="Operations sections">
       <h2>Prepare</h2><a href="#pipeline">Processing &amp; AI</a>
       <h2>Deliver</h2><a href="#advertio-jobs">Jobs</a><a href="#advertio-delivery">Housing</a><a href="#advertio-cargo">Cargo</a>
-      <h2>Manage</h2><a href="#crawler">Scheduled crawler</a><a href="#accounts">Telegram accounts</a>
+      <h2>Manage</h2><a href="#crawler">Scheduled crawler</a><a href="/crawl/manual">Manual Crawl</a><a href="#accounts">Telegram accounts</a>
       <a href="#channels">Source channels</a><a href="#unsent-transfer-ads">Transfer queue</a>
       <a href="#diagnostics">Diagnostics</a><a href="#settings">Settings &amp; health</a><a href="#activity">Operation history</a>
     </nav>
@@ -1930,7 +1931,8 @@ async def operations_page(request):
     <section class="ops-section" id="crawler"><h2>5. Scheduled Crawler</h2>
       <p>Active jobs: <strong>{int(crawler_status.get('active_jobs') or 0):,}</strong> · Connected account:
       <strong>{_escape(connected_account or 'none')}</strong></p>
-      {crawl_form}<div class="op-actions">{stop_crawler}</div></section>
+      {crawl_form}<div class="op-actions">{stop_crawler}</div>
+      <p><a href="/crawl/manual">Crawl a single Telegram post by ID or link</a></p></section>
 
     <section class="ops-section" id="accounts"><h2>6. Telegram Accounts</h2>
       {f'<p class="ops-error">{_escape(account_error)}</p>' if account_error else ''}
@@ -2704,6 +2706,7 @@ def create_app(console_ui=None):
     data_normalizer.initialize()
     app = web.Application(middlewares=[_security], client_max_size=2 * 1024 * 1024)
     app["operations"] = BackofficeOperations(console_ui=console_ui)
+    app["manual_crawl_lock"] = asyncio.Lock()
     app[ANALYST_KEY] = DatabaseAnalyst()
 
     async def cleanup_operations(application):
@@ -2712,6 +2715,7 @@ def create_app(console_ui=None):
     app.on_cleanup.append(cleanup_operations)
     app.add_routes([web.get("/login", login), web.get("/", index),
                     web.get("/operations", operations_page),
+                    web.get("/crawl/manual", manual_crawl_page), web.post("/crawl/manual", manual_crawl_submit),
                     web.get("/assistant", assistant_page), web.post("/assistant/ask", assistant_ask),
                     web.get("/cargo", cargo_page), web.post("/cargo/send", cargo_send),
                     web.post("/operations/action", operations_action),

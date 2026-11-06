@@ -106,6 +106,30 @@ async def _iter_messages_with_reconnect(client, entity, channel_username):
             await _retry_telegram_connection(client, channel_username, retries, exc)
 
 
+async def _get_selected_message_with_reconnect(client, entity, channel_username, message_id):
+    """Fetch exactly one Telegram post; never iterate over the channel history."""
+    retries = 0
+    while True:
+        try:
+            if not _client_is_connected(client):
+                raise ConnectionError("Telegram client is disconnected")
+            return await client.get_messages(entity, ids=message_id)
+        except (ConnectionError, OSError, asyncio.TimeoutError) as exc:
+            if retries >= MAX_RECONNECT_ATTEMPTS:
+                raise ConnectionError(
+                    f"Message lookup failed after {MAX_RECONNECT_ATTEMPTS} reconnect attempts"
+                ) from exc
+            retries += 1
+            await _retry_telegram_connection(client, channel_username, retries, exc)
+
+
+async def _selected_messages(client, entity, channel_username, message_id):
+    """Expose the single-message lookup through the normal collection loop."""
+    yield await _get_selected_message_with_reconnect(
+        client, entity, channel_username, message_id
+    )
+
+
 async def _forward_origin_kind(client, message):
     """Classify a forwarded origin as human user, bot, channel, or unknown."""
     forward_header = getattr(message, "fwd_from", None)
@@ -235,8 +259,9 @@ async def crawl_channel(
     to_date,
     crawl_mode=CRAWL_MODE_ALL,
     should_stop=None,
+    message_id=None,
 ):
-    """Collect messages whose dates fall inclusively inside ``from_date..to_date``."""
+    """Collect a date range, or exactly one specified Telegram message."""
     channel_username = normalize_channel_username(channel_username)
     crawl_mode = (crawl_mode or CRAWL_MODE_ALL).strip().lower()
     if crawl_mode not in VALID_CRAWL_MODES:
@@ -244,12 +269,18 @@ async def crawl_channel(
             f"Unsupported crawl mode: {crawl_mode}. "
             f"Use one of: {', '.join(sorted(VALID_CRAWL_MODES))}"
         )
-    if from_date > to_date:
+    if message_id is not None:
+        if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+            raise ValueError("message_id must be a positive integer")
+    elif from_date is None or to_date is None or from_date > to_date:
         raise ValueError("from_date cannot be later than to_date")
 
     print(f"\n{Fore.CYAN}{'=' * 50}")
     print(f"📡 STARTING CRAWL: {Fore.YELLOW}{channel_username}")
-    print(f"📅 DATE RANGE: {Fore.YELLOW}{from_date} → {to_date}")
+    if message_id is not None:
+        print(f"🔎 SINGLE MESSAGE: {Fore.YELLOW}{message_id}")
+    else:
+        print(f"📅 DATE RANGE: {Fore.YELLOW}{from_date} → {to_date}")
     print(f"🔎 MODE: {Fore.YELLOW}{crawl_mode}")
     print(f"👤 USERNAME REQUIRED: {Fore.YELLOW}yes")
     print(f"🖼️ MEDIA DOWNLOAD: {Fore.YELLOW}deferred until AI validation")
@@ -268,29 +299,37 @@ async def crawl_channel(
     weak_text_count = 0
     media_metadata_count = 0
     stopped = False
+    missing_message = False
     duplicate_conn = None
     try:
         repository.initialize()
         duplicate_conn = get_connection()
 
         entity = await _get_input_entity_with_reconnect(client, channel_username)
-        await asyncio.sleep(random.randint(30, 60))
+        if message_id is None:
+            await asyncio.sleep(random.randint(30, 60))
+            messages = _iter_messages_with_reconnect(client, entity, channel_username)
+        else:
+            messages = _selected_messages(client, entity, channel_username, message_id)
 
-        async for message in _iter_messages_with_reconnect(client, entity, channel_username):
+        async for message in messages:
             if should_stop and should_stop():
                 stopped = True
                 print(f"\n⏭ [CRAWL-SKIPPED] Operator requested stage skip; remaining messages were not checked.")
                 break
             if not message:
+                if message_id is not None:
+                    missing_message = True
                 skipped_count += 1
                 continue
 
             msg_date = message.date.date()
-            if msg_date > to_date:
-                continue
-            if msg_date < from_date:
-                print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
-                break
+            if message_id is None:
+                if msg_date > to_date:
+                    continue
+                if msg_date < from_date:
+                    print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
+                    break
 
             forward_origin_kind = await _forward_origin_kind(client, message)
             if forward_origin_kind == "channel":
@@ -408,7 +447,8 @@ async def crawl_channel(
                 logger.error("[CRAWL STORAGE ERROR] channel=%s message_id=%s error=%s", channel_username, message.id, exc)
                 print(f"   ⚠️ [RAW-ERROR] Storage error: {exc}")
 
-            await asyncio.sleep(random.uniform(0.3, 1.0))
+            if message_id is None:
+                await asyncio.sleep(random.uniform(0.3, 1.0))
 
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
         print(f"📅 Range: {from_date} → {to_date}")
@@ -424,7 +464,7 @@ async def crawl_channel(
         print(f"❓ Unverifiable forwarded posts skipped: {forwarded_unknown_skipped_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")
-        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "forwarded_bot_skipped": forwarded_bot_skipped_count, "forwarded_unknown_skipped": forwarded_unknown_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
+        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "forwarded_bot_skipped": forwarded_bot_skipped_count, "forwarded_unknown_skipped": forwarded_unknown_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "not_found" if missing_message else "completed", "from_date": str(from_date) if from_date is not None else None, "to_date": str(to_date) if to_date is not None else None}
     except errors.ChannelInvalidError:
         logger.error("[CRAWL ERROR] Invalid channel: %s", channel_username)
         print(f"\n❌ Invalid channel: {channel_username}")
@@ -444,3 +484,16 @@ async def crawl_channel(
 
 async def start_crawler(client, channel_username, from_date, to_date, crawl_mode=CRAWL_MODE_ALL, should_stop=None):
     return await crawl_channel(client, channel_username, from_date, to_date, crawl_mode=crawl_mode, should_stop=should_stop)
+
+
+async def crawl_message(client, channel_username, message_id):
+    """Run the existing collection filters/persistence for one exact message ID.
+
+    Collection only: downstream processing, AI extraction and delivery remain
+    controlled by their normal queues and schedules.
+    """
+    if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+        raise ValueError("message_id must be a positive integer")
+    return await crawl_channel(
+        client, channel_username, None, None, message_id=message_id
+    )

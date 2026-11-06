@@ -409,4 +409,4 @@ validation and category-specific preview/save flow.
 
 ## Message Manager
 
-Administrator-authored messages have a dedicated, disabled-by-default module with multi-channel delivery, Tehran-time recurring schedules, private media and XLSX draft import. See [Message Manager operator guide](MESSAGE_MANAGER.md) for activation, delivery safety, configuration and rollback.
+Administrator-authored messages have a dedicated module enabled by default with multi-channel delivery, Tehran-time recurring schedules, private media and XLSX draft import. The Message Manager tab and runtime worker need no manual feature activation. See [Message Manager operator guide](MESSAGE_MANAGER.md) for delivery safety, configuration and rollback.

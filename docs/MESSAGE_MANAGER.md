@@ -1,11 +1,11 @@
 # Message Manager
 
-Message Manager publishes only drafts explicitly created/imported by a Back Office administrator. It uses its own `mm_*` tables and independent worker, never reads crawler messages or AI queues, and does not create publishing rules or change existing ad deliveries. It is disabled by default.
+Message Manager publishes only drafts explicitly created/imported by a Back Office administrator. It uses its own `mm_*` tables and independent worker, never reads crawler messages or AI queues, and does not create publishing rules or change existing ad deliveries. It is enabled by default: the tab and worker are available automatically, with no feature activation step.
 
 ## Enable and operate
 
 1. Back up the SQLite database and install `requirements.txt`.
-2. Configure `TELCLAW_MESSAGE_MANAGER_ENABLED=true`, the existing bot token, and a private `TELCLAW_MESSAGE_MANAGER_MEDIA_PATH` outside any web server's static root. Give the service account read/write access. Only authenticated media routes serve these files; never expose the directory through a reverse proxy.
+2. Keep the existing bot token configured and use a private `TELCLAW_MESSAGE_MANAGER_MEDIA_PATH` outside any web server's static root. Give the service account read/write access. Only authenticated media routes serve these files; never expose the directory through a reverse proxy. No `TELCLAW_MESSAGE_MANAGER_ENABLED` setting is required; an explicit `false` remains an operator opt-out for rollback.
 3. Restart `python main.py`. Additive schema creation happens at startup. The Message Manager worker starts even when Back Office is disabled or fails to bind. Serving only `create_app()` without the normal runtime does **not** start a worker.
 4. Open the existing administrator link from Telegram and select **Message Manager**. Select **Check and enable** for existing destinations, or register a new channel. The bot must be a channel administrator with posting permission. New channels are registered with automatic ad publishing disabled. Message Manager eligibility is independent of the ad-publishing `enabled` flag.
 5. Create and save a draft. Use **Preview**, choose destinations, and explicitly confirm **Queue Publish Now** or **Activate schedule**. These actions enqueue work; HTTP handlers do not send publications. Publishing uses the saved draft, so save edits first.
@@ -61,7 +61,7 @@ This import is independent of the existing external-ad CSV importer.
 
 | Environment variable | Default / bound |
 | --- | --- |
-| `TELCLAW_MESSAGE_MANAGER_ENABLED` | `false` |
+| `TELCLAW_MESSAGE_MANAGER_ENABLED` | `true`; no setting required, explicit `false` disables the module |
 | `TELCLAW_MESSAGE_MANAGER_POLL_SECONDS` | `2`, minimum `0.5` |
 | `TELCLAW_MESSAGE_MANAGER_BATCH_SIZE` | `25`, capped at `100` |
 | `TELCLAW_MESSAGE_MANAGER_MAX_ATTEMPTS` | `3`, capped at `10` |

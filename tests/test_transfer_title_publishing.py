@@ -66,7 +66,9 @@ def test_transfer_description_uses_cleaned_extracted_text_not_raw_source():
 
     text = TelegramTransferPublisher.format_ad(record, record)
 
-    assert "📝 Description: مبدا: چین" in text
+    assert text.endswith("\n\nمبدا: چین\nتوضیحات : پذیرش و ارسال بار مسافری تا ۶۰ کیلو")
+    assert "Description:" not in text
+    assert "📝" not in text
     assert "توضیحات : پذیرش و ارسال بار مسافری تا ۶۰ کیلو" in text
     assert "#پذیرش_بار" not in text
     assert "#RAW_SHOULD_NOT_PUBLISH" not in text
@@ -75,6 +77,31 @@ def test_transfer_description_uses_cleaned_extracted_text_not_raw_source():
     assert "⚖️ Weight: 60 kilogram" in text
     assert "📅 Date: 10/10/2026" in text
     assert "📝 توضیحات:" not in text
+
+
+def test_realistic_transfer_description_is_the_final_plain_text_block():
+    message = "پرواز از تهران به برلین ۱۳ نوامبر قبول مدارک و بار قانونی و قابل رویت تا ۱۵ کیلو"
+    record = _record(
+        ad_number=10397,
+        title="Tehran to Berlin 13 November",
+        origin_city="Tehran",
+        origin_country="IR",
+        destination_city="Berlin",
+        destination_country="DE",
+        cargo_type="legal cargo",
+        weight=15,
+        weight_unit="kg",
+        departure_date="2026-11-13",
+        description=message,
+    )
+
+    text = TelegramTransferPublisher.format_ad(record, record)
+
+    assert text.startswith("TR-010397\n\n📌 Title: Tehran to Berlin 13 November")
+    assert "📅 Date: 13/11/2026 | 22/08/1405" in text
+    assert text.endswith("\n\n" + message)
+    assert "Description:" not in text
+    assert "📝" not in text
 
 
 def test_legacy_transfer_formatter_uses_cleaned_extracted_description():
@@ -94,7 +121,9 @@ def test_legacy_transfer_formatter_uses_cleaned_extracted_description():
     assert "🇮🇷 Destination: Iran" in text
     assert "📦 Cargo Type: passenger cargo" in text
     assert "⚖️ Weight: 60 kilogram" in text
-    assert "📝 Description:\nمتن اصلاح شده کاربر" in text
+    assert text.endswith("\n\nمتن اصلاح شده کاربر")
+    assert "Description:" not in text
+    assert "📝" not in text
     assert "#پذیرش_بار" not in text
     assert "#raw" not in text
     assert "✅" not in text

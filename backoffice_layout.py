@@ -4,6 +4,7 @@ from html import escape
 SECTIONS = (
     ('publishing', '/', 'Publishing'),
     ('operations', '/operations', 'Operations'),
+    ('manual_crawl', '/crawl/manual', 'Manual Crawl'),
     ('cargo', '/cargo', 'Active Cargo'),
     ('assistant', '/assistant', 'AI Assistant'),
     ('data', '/data', 'Database'),

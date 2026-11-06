@@ -1,0 +1,154 @@
+"""Authenticated routes; publishing is queued, never performed by HTTP handlers."""
+import asyncio
+import sqlite3
+from urllib.parse import unquote
+
+from aiohttp import web
+import aiohttp
+from message_manager.telegram_sender import PreflightRetry
+import config
+import routing_rules
+from backoffice_message_manager_ui import render
+from message_manager.validation import ValidationError
+
+MM_KEY = web.AppKey('message_manager', object)
+
+
+def actor(request):
+    return int(request['session']['admin_id'])
+
+
+def confirmed(form):
+    return form.get('confirmed') == 'yes'
+
+
+def redirect(message_id=None, batch_id=None):
+    location = '/message-manager'
+    if message_id:
+        location += '?id=' + str(int(message_id))
+    elif batch_id:
+        location += '?batch=' + str(batch_id)
+    raise web.HTTPSeeOther(location)
+
+
+async def page(request, *, draft=None, error=''):
+    mm = request.app[MM_KEY]
+    try:
+        message = mm.repo.get_message(request.query['id']) if request.query.get('id') else None
+        batch = mm.excel.batch(request.query['batch']) if request.query.get('batch') else None
+        body = render(mm, request['session']['csrf'], request['csp_nonce'], request.query, message, draft, batch, error)
+    except (ValueError, TypeError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    return web.Response(text=body, content_type='text/html')
+
+
+async def action(request):
+    mm, command = request.app[MM_KEY], request.match_info['action']
+    data = await request.post()
+    admin = actor(request)
+    try:
+        mid = int(data['id']) if data.get('id') else None
+        if command == 'save':
+            redirect(mm.service.save(data, admin))
+        elif command == 'preview':
+            payload = mm.service.payload(data)
+            payload['title'] = str(data.get('title') or '')
+            # Render current draft data without saving or publishing it.
+            query = {'id': str(mid)} if mid else {}
+            message = mm.repo.get_message(mid) if mid else None
+            return web.Response(text=render(mm, request['session']['csrf'], request['csp_nonce'], query, message, payload), content_type='text/html')
+        elif command in {'publish', 'schedule'}:
+            await mm.service.activate(mid, data, data.getall('targets', []), admin, confirmed(data),
+                immediate=command == 'publish', replace_id=int(data['replace_id']) if data.get('replace_id') else None)
+            redirect(mid)
+        elif command == 'duplicate':
+            redirect(mm.service.duplicate(mid, admin))
+        elif command == 'archive':
+            if not confirmed(data):
+                raise ValidationError('Confirm archiving and cancellation')
+            mm.repo.archive(mid, admin)
+            redirect(mid)
+        elif command == 'schedule-action':
+            mm.repo.schedule_action(int(data['schedule_id']), data.get('action'), admin)
+            redirect(mid)
+        elif command == 'retry':
+            mm.repo.manual_retry(int(data['delivery_id']), admin, confirmed(data))
+            redirect(mid)
+        elif command == 'target':
+            target_id = int(data['target_id']) if data.get('target_id') else None
+            enabled = data.get('enabled', 'yes') == 'yes'
+            if target_id is None:
+                routing_rules.save_target(str(data.get('label',''))[:200], str(data.get('chat_id','')), enabled=False)
+                target_id = next(t['id'] for t in mm.repo.targets() if t['chat_id'] == data['chat_id'].strip())
+            target = next((t for t in mm.repo.targets() if t['id'] == target_id), None)
+            if not target:
+                raise ValidationError('Unknown destination')
+            if enabled:
+                detail = await mm.sender.check_target(target)
+                routing_rules.update_target_connection(target_id, 'connected', detail)
+            mm.repo.eligible(target_id, enabled, admin)
+            redirect()
+        elif command == 'import':
+            upload = data.get('workbook')
+            if not isinstance(upload, web.FileField) or not upload.filename.lower().endswith('.xlsx'):
+                raise ValidationError('Select an XLSX file')
+            raw = upload.file.read(config.MESSAGE_MANAGER_XLSX_MAX_BYTES + 1)
+            batch_id, _ = await asyncio.to_thread(mm.excel.preview, raw, str(data.get('namespace','')), admin)
+            redirect(batch_id=batch_id)
+        elif command == 'import-confirm':
+            await asyncio.to_thread(mm.excel.confirm, data.get('batch_id'), admin, confirmed(data))
+            redirect(batch_id=data.get('batch_id'))
+        elif command == 'import-activate':
+            await mm.excel.activate(data.get('batch_id'), admin, confirmed(data))
+            redirect(batch_id=data.get('batch_id'))
+        else:
+            raise web.HTTPNotFound()
+    except (aiohttp.ClientError, TimeoutError, PreflightRetry) as exc:
+        raise web.HTTPBadRequest(text="Telegram permission check unavailable; try again later") from exc
+    except (ValueError, TypeError, KeyError, sqlite3.IntegrityError) as exc:
+        raise web.HTTPBadRequest(text=str(exc)[:2000]) from exc
+
+
+async def upload_media(request):
+    # Security middleware verifies header CSRF before the streaming body is consumed.
+    mm = request.app[MM_KEY]
+    if request.content_length and request.content_length > mm.media.max_bytes:
+        raise web.HTTPRequestEntityTooLarge(max_size=mm.media.max_bytes, actual_size=request.content_length)
+    try:
+        asset = await mm.media.upload(unquote(request.headers.get('X-File-Name','')), request.content_type,
+            request.content.iter_chunked(65536), actor(request))
+    except ValidationError as exc:
+        raise web.HTTPBadRequest(text=str(exc)) from exc
+    return web.json_response({'asset_key': asset['asset_key'], 'sha256': asset['sha256'], 'kind': asset['kind']})
+
+
+async def media_file(request):
+    mm = request.app[MM_KEY]
+    try:
+        asset = mm.repo.media(request.match_info['key'])
+        path = mm.media.path(asset)
+    except ValidationError as exc:
+        raise web.HTTPNotFound(text=str(exc)) from exc
+    response = web.FileResponse(path)
+    response.content_type = asset['mime']
+    response.headers['Content-Disposition'] = ('inline' if asset['kind'] in {'photo','video'} else 'attachment') + '; filename="' + asset['filename'] + '"'
+    return response
+
+
+async def download(request):
+    from message_manager.excel_service import template
+    name = request.match_info['name']
+    payload = await asyncio.to_thread(template if name == 'template' else request.app[MM_KEY].excel.export)
+    return web.Response(body=payload, content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="message-manager-{name}.xlsx"'})
+
+
+def install(app, runtime=None):
+    if not config.MESSAGE_MANAGER_ENABLED:
+        return
+    from message_manager.runtime import build_runtime
+    app[MM_KEY] = runtime or build_runtime()
+    app.add_routes([web.get('/message-manager', page),
+        web.post('/message-manager/media', upload_media), web.get('/message-manager/media/{key}', media_file),
+        web.get('/message-manager/{name:template|status}.xlsx', download),
+        web.post('/message-manager/{action}', action)])

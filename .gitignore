@@ -36,3 +36,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Private Message Manager uploads
+private/message-manager/

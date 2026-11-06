@@ -47,6 +47,12 @@ async def _run():
     # Office so queue locks, crawler jobs and the active Telegram session agree.
     system_ui = SystemConsoleUI()
 
+    message_manager = None
+    message_manager_task = None
+    if config.MESSAGE_MANAGER_ENABLED:
+        from message_manager.runtime import build_runtime
+        message_manager = build_runtime()
+
     backoffice_runner = None
     backoffice_ready = False
     if config.BACKOFFICE_ENABLED:
@@ -61,7 +67,7 @@ async def _run():
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
                 ssl_context.load_cert_chain(config.BACKOFFICE_TLS_CERT, config.BACKOFFICE_TLS_KEY)
-            backoffice_runner = web.AppRunner(create_app(console_ui=system_ui))
+            backoffice_runner = web.AppRunner(create_app(console_ui=system_ui, message_manager=message_manager))
             await backoffice_runner.setup()
             await web.TCPSite(backoffice_runner, config.BACKOFFICE_HOST, config.BACKOFFICE_PORT, ssl_context=ssl_context).start()
             backoffice_ready = True
@@ -95,9 +101,19 @@ async def _run():
         except TransferTelegramPublishError as exc:
             logger.error("Telegram transfer publisher disabled: %s", exc)
 
+    if message_manager:
+        message_manager_task = asyncio.create_task(message_manager.worker.run(), name="message-manager")
+        logger.info("Message Manager independent worker started")
+
     try:
         await system_ui.run()
     finally:
+        if message_manager_task:
+            message_manager_task.cancel()
+            try:
+                await message_manager_task
+            except asyncio.CancelledError:
+                pass
         if transfer_task:
             transfer_task.cancel()
             try:

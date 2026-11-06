@@ -5,3 +5,6 @@ colorama==0.4.6
 python-dotenv==1.1.1
 requests>=2.31,<3
 aiohttp>=3.9,<4
+openpyxl>=3.1.5,<4
+Pillow>=11.3,<14
+defusedxml>=0.7.1,<1

@@ -406,3 +406,7 @@ and declared category, not semantic content: it does not run AI to classify
 free text. Templates contain only the matching category's columns and shared
 source metadata. The previous POST endpoint remains compatible, using the same
 validation and category-specific preview/save flow.
+
+## Message Manager
+
+Administrator-authored messages have a dedicated, disabled-by-default module with multi-channel delivery, Tehran-time recurring schedules, private media and XLSX draft import. See [Message Manager operator guide](MESSAGE_MANAGER.md) for activation, delivery safety, configuration and rollback.

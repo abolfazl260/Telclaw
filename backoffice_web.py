@@ -132,8 +132,14 @@ async def _security(request, handler):
                 raise web.HTTPUnauthorized(text="Open a new back-office link from the Telegram bot")
             request["session"] = session
             if request.method == "POST":
-                form = await request.post()
-                if not secrets.compare_digest(str(form.get("csrf", "")), session["csrf"]):
+                if config.MESSAGE_MANAGER_ENABLED and request.path == "/message-manager/media":
+                    # Only this authenticated upload endpoint consumes a bounded stream.
+                    # Do not let request.post() spool an enlarged multipart body first.
+                    supplied_csrf = request.headers.get("X-CSRF-Token", "")
+                else:
+                    form = await request.post()
+                    supplied_csrf = str(form.get("csrf", ""))
+                if not secrets.compare_digest(supplied_csrf, session["csrf"]):
                     raise web.HTTPForbidden(text="Invalid form token")
         response = await handler(request)
     except web.HTTPException as exc:
@@ -142,7 +148,7 @@ async def _security(request, handler):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Content-Security-Policy"] = ("default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; "
-        f"script-src 'nonce-{request['csp_nonce']}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+        f"img-src 'self'; media-src 'self'; script-src 'nonce-{request['csp_nonce']}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
     return response
 
 
@@ -2696,7 +2702,7 @@ async def _check_target_connection(target):
     routing_rules.update_target_connection(target_id, status, detail)
 
 
-def create_app(console_ui=None):
+def create_app(console_ui=None, message_manager=None):
     routing_rules.initialize()
     initialize_auth()
     backoffice_data.initialize()
@@ -2735,4 +2741,6 @@ def create_app(console_ui=None):
                     web.post("/rule/resend", resend_selected),
                     web.post("/retry", retry_delivery), web.post("/target/check", check_target),
                     web.post("/logout", logout)])
+    from backoffice_message_manager import install as install_message_manager
+    install_message_manager(app, message_manager)
     return app

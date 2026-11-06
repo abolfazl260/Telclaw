@@ -128,3 +128,37 @@ def test_legacy_transfer_formatter_uses_cleaned_extracted_description():
     assert "#raw" not in text
     assert "✅" not in text
     assert "نوع بار:" not in text
+
+def test_identity_verification_appears_directly_after_date():
+    record = _record(
+        departure_date="2026-11-08",
+        description="Лечу лично Москва - Дубай",
+    )
+    text = TelegramTransferPublisher.format_ad(record, record)
+
+    assert "📅 Date: 08/11/2026 | 17/08/1405\n🪪 Identity Verification: Not Verified" in text
+    assert text.count("🪪 Identity Verification: Not Verified") == 1
+    assert text.endswith("\n\nЛечу лично Москва - Дубай")
+
+
+def test_identity_verification_is_present_when_date_is_missing():
+    record = _record(departure_date=None)
+    text = TelegramTransferPublisher.format_ad(record, record)
+
+    assert "📅 Date:" not in text
+    assert "🪪 Identity Verification: Not Verified" in text
+    assert text.index("Destination: Toronto") < text.index("🪪 Identity Verification:")
+    assert text.endswith("\n\nSmall package available.")
+
+
+def test_legacy_transfer_formatter_places_identity_after_dates():
+    text = format_transfer_ad({
+        "origin_city": "Moscow",
+        "destination_city": "Dubai",
+        "departure_date": "2026-11-08",
+        "arrival_date": "2026-11-10",
+        "description": "Лечу лично Москва - Дубай",
+    })
+
+    assert text.index("📅 Departure Date:") < text.index("📅 Arrival Date:") < text.index("🪪 Identity Verification: Not Verified")
+    assert text.count("🪪 Identity Verification: Not Verified") == 1

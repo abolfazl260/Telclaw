@@ -85,3 +85,11 @@ Run `TELEGRAM_API_ID=12345 TELEGRAM_API_HASH=test python -m pytest -q tests`. Ne
 For initial rollout, enable the module on a staging database and test bot/channel, create a short one-time schedule and verify message ID/link and one attached file in Telegram. Real bot permissions, file acceptance, proxy behavior and Telegram client rendering require this deployment smoke test.
 
 To stop new dispatch, set `TELCLAW_MESSAGE_MANAGER_ENABLED=false` and restart all runtime processes. The tab/routes/worker disappear; existing crawler/AI/ad publishing continues. No tables or records are dropped. Stop processes before restoring a matched database/media backup. Re-enabling applies missed-event policy and recovers expired sending leases as uncertain; verify those manually. Do not reset uncertain deliveries to waiting with SQL. Avoid reverting to a database snapshot while leaving newer Telegram sends unverified, since Telegram cannot roll them back or deduplicate them.
+
+## Organized workspace
+
+Message Manager has four internal tabs: **Messages**, **Create message**, **Channels**, and **Excel and reports**. The list starts with an empty-state action when no messages exist and shows pagination only when needed. Opening a saved message selects the editor; import previews and confirmations open in the Excel tab. Channel actions return to Channels.
+
+The responsive editor places the Telegram preview alongside the form on desktop and below it on mobile. Write the text, attach a file, and add button text/URLs with row numbers. Raw keyboard JSON is available under Advanced keyboard JSON. Bold, italic and link tools insert supported Telegram HTML around the selected text. The preview is validated by the server and never queues a publication. Uploaded attachments are identified by filename with a protected media preview, and can be removed from the draft.
+
+Save the draft before choosing destinations or activating a schedule. Publication uses saved content; the editor warns and blocks publication when local changes have not been saved. Without JavaScript, the server-rendered tabs, advanced JSON field, manual Preview and Save actions remain available.

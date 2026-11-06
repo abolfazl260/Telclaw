@@ -22,10 +22,12 @@ def confirmed(form):
     return form.get('confirmed') == 'yes'
 
 
-def redirect(message_id=None, batch_id=None):
+def redirect(message_id=None, batch_id=None, view=None):
     location = '/message-manager'
     if message_id:
         location += '?id=' + str(int(message_id))
+    elif view:
+        location += "?view=" + view
     elif batch_id:
         location += '?batch=' + str(batch_id)
     raise web.HTTPSeeOther(location)
@@ -54,7 +56,10 @@ async def action(request):
             payload = mm.service.payload(data)
             payload['title'] = str(data.get('title') or '')
             # Render current draft data without saving or publishing it.
-            query = {'id': str(mid)} if mid else {}
+            if data.get('fragment') == 'yes':
+                from backoffice_message_manager_ui import preview
+                return web.json_response({'html': preview(payload, mm.repo)})
+            query = {'id': str(mid)} if mid else {'view': 'editor'}
             message = mm.repo.get_message(mid) if mid else None
             return web.Response(text=render(mm, request['session']['csrf'], request['csp_nonce'], query, message, payload), content_type='text/html')
         elif command in {'publish', 'schedule'}:
@@ -87,7 +92,7 @@ async def action(request):
                 detail = await mm.sender.check_target(target)
                 routing_rules.update_target_connection(target_id, 'connected', detail)
             mm.repo.eligible(target_id, enabled, admin)
-            redirect()
+            redirect(view='channels')
         elif command == 'import':
             upload = data.get('workbook')
             if not isinstance(upload, web.FileField) or not upload.filename.lower().endswith('.xlsx'):
@@ -119,7 +124,7 @@ async def upload_media(request):
             request.content.iter_chunked(65536), actor(request))
     except ValidationError as exc:
         raise web.HTTPBadRequest(text=str(exc)) from exc
-    return web.json_response({'asset_key': asset['asset_key'], 'sha256': asset['sha256'], 'kind': asset['kind']})
+    return web.json_response({'asset_key': asset['asset_key'], 'sha256': asset['sha256'], 'kind': asset['kind'], 'name': asset['original_name']})
 
 
 async def media_file(request):

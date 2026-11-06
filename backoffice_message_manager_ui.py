@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from backoffice_layout import SHARED_STYLE, page_header
 from message_manager import recurrence
 from message_manager.validation import content
+from backoffice_message_manager_assets import STYLE, SCRIPT
 
 
 def e(value):
@@ -47,6 +48,10 @@ def preview(payload, repo):
 
 def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, error=''):
     repo = runtime.repo
+    active = query.get('view') or ('editor' if message or draft else 'imports' if batch else 'messages')
+    if active not in {'messages', 'editor', 'channels', 'imports'}:
+        active = 'messages'
+    sections = {}
     rows = repo.list_messages(query.get('q', ''), query.get('status', ''), query.get('target', ''),
         query.get('schedule', ''), query.get('from', ''), query.get('to', ''), offset=int(query.get('offset', 0)))
     destinations = repo.targets()
@@ -71,32 +76,53 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
         ''.join(f'<option value="{t["id"]}" {"selected" if query.get("target")==str(t["id"]) else ""}>{e(t["label"])}</option>' for t in destinations),
         ''.join(f'<option {"selected" if query.get("schedule")==s else ""}>{s}</option>' for s in ['active','paused','completed','cancelled']), e(query.get('from','')), e(query.get('to','')))
     page_query = dict(query)
-    page_query['offset'] = max(0, int(query.get('offset', 0))) + 100
+    page_query.pop('id', None)
+    page_query['view'] = 'messages'
+    offset = max(0, int(query.get('offset', 0)))
+    page_query['offset'] = offset + 100
+    next_link = f'<a href="/message-manager?{e(urlencode(page_query))}">Next 100</a>' if len(rows) == 100 else ''
+    previous_query = dict(page_query, offset=max(0, offset - 100))
+    previous_link = f'<a href="/message-manager?{e(urlencode(previous_query))}">Previous</a>' if offset else ''
+    empty = '<div class="mm-empty"><h3>No messages found</h3><p>Create your first message, or adjust the filters.</p><a class="mm-primary" href="/message-manager?view=editor">Create your first message</a></div>' if not rows else ''
     body = f'''<section class="backoffice-panel"><h2>Messages</h2>{filters}
-      <table><thead><tr><th>Title</th><th>Draft state</th><th>Updated · Tehran</th><th>Next publication · Tehran</th></tr></thead><tbody>{table}</tbody></table>
-      <a href="/message-manager?{e(urlencode(page_query))}">Next 100</a> · <a href="/message-manager">New draft / reset filters</a></section>'''
-    body += f'''<section class="backoffice-panel"><h2>{'Edit draft #' + str(mid) if mid else 'Create draft'}</h2>
-      <form method="post" action="/message-manager/save">{hidden('csrf',csrf)}{hidden('id',mid)}{hidden('version',message['version'] if message else '')}
-      <label>Title <input name="title" value="{e(title)}" maxlength="200" required></label>
+      {empty}<div class="mm-table"><table><thead><tr><th>Title</th><th>Draft state</th><th>Updated · Tehran</th><th>Next publication · Tehran</th></tr></thead><tbody>{table}</tbody></table></div>
+      <div class="mm-actions">{previous_link} {next_link}<a href="/message-manager?view=editor">New draft</a> · <a href="/message-manager">Reset filters</a></div></section>'''
+    if not rows:
+        body = body.replace('<div class="mm-table"><table>', '<div class="mm-table" hidden><table>', 1)
+    sections['messages'] = body
+    body = ''
+    body += f'''<div class="mm-editor-grid"><section class="backoffice-panel"><h2>{'Edit draft #' + str(mid) if mid else 'Create draft'}</h2>
+      <form id="message-editor" data-unsaved="{'true' if draft else 'false'}" method="post" action="/message-manager/save">{hidden('csrf',csrf)}{hidden('id',mid)}{hidden('version',message['version'] if message else '')}
+      <fieldset><legend>1. Write your message</legend><label>Title <input name="title" value="{e(title)}" maxlength="200" required></label>
       <label>Formatting <select name="parse_mode"><option {'selected' if payload['parse_mode']=='HTML' else ''}>HTML</option><option {'selected' if payload['parse_mode']=='plain' else ''}>plain</option></select></label>
-      <label>Message / caption <textarea name="text" rows="8" required>{e(payload['text'])}</textarea></label>
-      <p class="backoffice-muted">HTML supports b, i, u, s, a, code, pre, blockquote and tg-spoiler. Text: 4096 units; media caption: 1024.</p>
-      <label>Primary media asset key <input id="asset-key" name="asset_key" value="{e(payload.get('asset_key',''))}"></label>
-      <label>URL keyboard JSON (array of rows) <textarea name="buttons" rows="3">{e(json.dumps(payload['buttons'],ensure_ascii=False))}</textarea></label>
-      <p class="backoffice-muted">Example: [[{{"text":"Open", "url":"https://t.me/example"}}]]</p>
-      <button formaction="/message-manager/preview">Preview</button> <button>Save draft</button></form>
-      <label>Upload private media <input type="file" id="media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.txt,.zip,.docx,.xlsx"></label>
-      <button id="upload" type="button">Upload</button><p id="upload-result" role="status"></p>'''
+      <div class="mm-toolbar" role="group" aria-label="Text formatting"><button type="button" data-format="b"><b>Bold</b></button><button type="button" data-format="i"><i>Italic</i></button><button type="button" data-format="a">Link</button></div>
+      <label>Message / caption <textarea dir="auto" id="message-text" name="text" rows="8" required>{e(payload['text'])}</textarea></label>
+      <p class="backoffice-muted">Text: 4096 units; media caption: 1024. Select text and use the formatting buttons.</p></fieldset><fieldset><legend>2. Add a file (optional)</legend>
+      <input type="hidden" id="asset-key" name="asset_key" value="{e(payload.get('asset_key',''))}">
+      <label>Photo, video or document<input type="file" id="media-file" accept=".jpg,.jpeg,.png,.mp4,.pdf,.txt,.zip,.docx,.xlsx"></label>
+      <div class="mm-actions"><button id="upload" type="button">Upload</button><button id="remove-media" type="button">Remove attachment</button></div>
+      <p id="upload-result" role="status">{e(repo.media(payload['asset_key'])['original_name']) if payload.get('asset_key') else 'No file attached'}</p></fieldset>
+      <fieldset><legend>3. Add buttons (optional)</legend><div id="button-builder"></div><button id="add-button" type="button">Add button</button>
+      <details><summary>Advanced keyboard JSON</summary>
+      <label>URL keyboard JSON (array of rows) <textarea id="keyboard-json" name="buttons" rows="3">{e(json.dumps(payload['buttons'],ensure_ascii=False))}</textarea></label>
+      <p class="backoffice-muted">Array of rows containing text and URL objects.</p></details></fieldset>
+      <div class="mm-actions"><button formaction="/message-manager/preview">Preview</button> <button>Save draft</button></div>
+      <p id="save-status" role="status">Save changes before publishing.</p></form></section>
+      <aside class="backoffice-panel mm-preview-panel"><h2>Telegram preview</h2><p class="backoffice-muted">Preview updates while you write.</p><div id="live-preview">'''
     if payload['text']:
-        body += '<h3>Telegram preview</h3>' + preview(payload, repo)
-    body += '</section>'
+        body += preview(payload, repo)
+    else:
+        body += '<p class="mm-empty">Your message preview will appear here.</p>'
+    body += '</div><p id="preview-status" role="status"></p></aside></div>'
+    if not message:
+        body += '<section class="backoffice-panel"><h2>4. Destinations and timing</h2><p>Save your draft to select channels and choose Publish Now or a schedule.</p></section>'
     if message:
         fields = hidden('id', mid)
-        body += '<section class="backoffice-panel"><h2>Publish and schedule</h2>'
+        body += '<section class="backoffice-panel mm-publish"><h2>4. Publish and schedule</h2><p>These actions publish the saved draft shown above. Save any edits first.</p>'
         if message['state'] == 'draft':
             selectors = f'<label>Destinations (select multiple)<select multiple size="5" name="targets" required>{options}</select></label>'
             body += form(csrf, 'publish', 'Queue Publish Now', fields + selectors, 'Publish this saved draft now to all selected channels')
-            body += '<h3>Schedule / reschedule saved draft</h3>' + form(csrf, 'schedule', 'Activate schedule', fields + selectors + '''
+            body += '<details class="mm-schedule"><summary>Schedule instead / reschedule</summary>' + form(csrf, 'schedule', 'Activate schedule', fields + selectors + '''
              <label>Start date · Tehran (Gregorian)<input name="date" type="date" required></label>
              <label>Time · Tehran<input name="time" type="time" required></label>
              <label>Recurrence<select name="recurrence"><option value="once">One time</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="days">Every N days</option><option value="weeks">Every N weeks</option></select></label>
@@ -104,11 +130,12 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
              <label>Selected weekdays (0=Mon … 6=Sun; comma separated)<input name="weekdays" placeholder="0,2,4"></label>
              <label>Optional end date<input name="end_date" type="date"></label>
              <label>Optional total occurrences<input name="end_count" type="number" min="1" max="100000"></label>
-             <label>Replace active/paused schedule ID (optional)<input name="replace_id" type="number" min="1"></label>''', 'Activate this schedule for all selected channels')
+             <label>Replace active/paused schedule ID (optional)<input name="replace_id" type="number" min="1"></label>''', 'Activate this schedule for all selected channels') + '</details>'
+        body += '<details><summary>More actions</summary>'
         body += form(csrf, 'duplicate', 'Duplicate as new draft', fields)
-        body += form(csrf, 'archive', 'Archive and cancel pending publications', fields, 'Archive this message and cancel its pending deliveries')
+        body += form(csrf, 'archive', 'Archive and cancel pending publications', fields, 'Archive this message and cancel its pending deliveries') + '</details>'
         schedules, deliveries, attempts = repo.details(mid)
-        body += '<h3>Schedules</h3>'
+        body += '<details><summary>Schedules and delivery history</summary><h3>Schedules</h3>'
         for s in schedules:
             body += f'<p>#{s["id"]} · {e(s["state"])} · next {e(local(s["next_due"]))} · <code>{e(s["spec_json"])}</code></p>'
             sf = hidden('id', mid) + hidden('schedule_id', s['id'])
@@ -123,12 +150,20 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
         body += '</table><details><summary>Attempt history (latest 500)</summary><table><tr><th>Delivery</th><th>Attempt</th><th>Started · Tehran</th><th>Finished · Tehran</th><th>Outcome</th><th>Error / Telegram ID</th></tr>'
         for a in attempts:
             body += f'<tr><td>{a["delivery_id"]}</td><td>{a["number"]}</td><td>{e(local(a["started_at"]))}</td><td>{e(local(a["finished_at"]))}</td><td>{e(a["outcome"])}</td><td>{e(a["error"])} {e(a["telegram_message_id"])}</td></tr>'
-        body += '</table></details></section>'
-    body += '<section class="backoffice-panel"><h2>Message Manager destinations</h2><p>Eligibility is independent of automatic ad rules. Channel permissions are checked on activation and again before sending.</p>'
+        body += '</table></details></details></section>'
+    sections['editor'] = body
+    body = '<section class="backoffice-panel"><h2>Channels</h2><p>Check channel permissions before enabling a destination.</p><div class="mm-table"><table><thead><tr><th>Channel</th><th>Message Manager</th><th>Connection</th><th>Action</th></tr></thead><tbody>'
     for t in destinations:
-        body += f'<p>{e(t["label"])} · {e(t["chat_id"])} · {"Eligible" if t["mm_eligible"] else "Not eligible"} · {e(t["connection_status"])}</p>'
-        body += form(csrf, 'target', 'Disable' if t['mm_eligible'] else 'Check and enable', hidden('target_id',t['id']) + hidden('enabled','no' if t['mm_eligible'] else 'yes'))
-    body += form(csrf, 'target', 'Register, check and enable channel', '<label>Label<input name="label" maxlength="200" required></label><label>@channel / negative ID<input name="chat_id" required></label>') + '</section>'
+        state = 'Eligible' if t['mm_eligible'] else 'Not eligible'
+        connection = t['connection_status']
+        badge = 'good' if t['mm_eligible'] else 'neutral'
+        connection_badge = 'good' if connection == 'connected' else 'bad' if connection == 'disconnected' else 'neutral'
+        body += f'<tr><td><strong>{e(t["label"])}</strong><br>{e(t["chat_id"])}</td><td><span class="mm-badge {badge}">{state}</span></td><td><span class="mm-badge {connection_badge}">{e(connection)}</span></td><td>'
+        body += form(csrf, 'target', 'Disable' if t['mm_eligible'] else 'Check and enable', hidden('target_id',t['id']) + hidden('enabled','no' if t['mm_eligible'] else 'yes')) + '</td></tr>'
+    body += '</tbody></table></div><details><summary>Register a new channel</summary>'
+    body += form(csrf, 'target', 'Register, check and enable channel', '<label>Label<input name="label" maxlength="200" required></label><label>@channel / negative ID<input name="chat_id" required></label>') + '</details></section>'
+    sections['channels'] = body
+    body = ''
     body += f'''<section class="backoffice-panel"><h2>XLSX import / delivery export</h2><p><a href="/message-manager/template.xlsx">Download XLSX template</a> · <a href="/message-manager/status.xlsx">Export latest 10,000 deliveries</a></p>
       <form method="post" action="/message-manager/import" enctype="multipart/form-data">{hidden('csrf',csrf)}
       <label>Import namespace<input name="namespace" maxlength="64" required></label><input type="file" name="workbook" accept=".xlsx" required><button>Validate and preview</button></form>
@@ -150,11 +185,19 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
     body += '<details><summary>Recent imports</summary>'
     for b in recent_batches:
         body += f'<p><a href="/message-manager?batch={e(b["id"])}">{e(b["namespace"])} · {e(b["id"])}</a> · {e(b["state"])} · activated {e(local(b["activated_at"]))}</p>'
-    body += '</details></section><section class="backoffice-panel"><details><summary>Recent audit events</summary><table><tr><th>Time · Tehran</th><th>Actor</th><th>Action / entity</th><th>Details</th></tr>'
+    body += '</details></section>'
+    sections['imports'] = body
+    body = '<section class="backoffice-panel"><details><summary>Recent audit events</summary><table><tr><th>Time · Tehran</th><th>Actor</th><th>Action / entity</th><th>Details</th></tr>'
     for a in audits:
         body += f'<tr><td>{e(local(a["created_at"]))}</td><td>{e(a["actor"])}</td><td>{e(a["action"])} / {e(a["entity"])}</td><td>{e(a["details"])}</td></tr>'
     body += '</table></details></section>'
-    style = '''<style>table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #dce4ef;padding:.5rem;text-align:left;vertical-align:top}td{overflow-wrap:anywhere}form{display:flex;flex-wrap:wrap;gap:.7rem;align-items:end;margin:.8rem 0}label{display:flex;flex-direction:column;gap:.2rem}textarea{width:min(900px,95vw)}label:has(textarea){width:100%}pre{white-space:pre-wrap;overflow-wrap:anywhere}code{overflow-wrap:anywhere}.telegram-preview{background:#eef7ed;max-width:600px;padding:1rem;border-radius:12px}.telegram-preview img,.telegram-preview video{max-width:100%;max-height:400px}.keyboard{display:flex;gap:.5rem;margin-top:.5rem}.keyboard a{background:white;padding:.4rem;border-radius:6px}tg-spoiler{background:#ccc}td form{font-size:.85rem}section{overflow-x:auto}</style>'''
-    script = '''document.getElementById('upload').addEventListener('click',async()=>{const file=document.getElementById('media-file').files[0];const out=document.getElementById('upload-result');if(!file){out.textContent='Select a file first';return}out.textContent='Uploading…';try{const r=await fetch('/message-manager/media',{method:'POST',headers:{'X-CSRF-Token':CSRF,'X-File-Name':encodeURIComponent(file.name),'Content-Type':file.type||'application/octet-stream'},body:file});const text=await r.text();if(!r.ok)throw new Error(text);const data=JSON.parse(text);document.getElementById('asset-key').value=data.asset_key;out.textContent='Uploaded. Asset key: '+data.asset_key+' · save the draft to attach it.'}catch(e){out.textContent=e.message}});'''
-    script = script.replace('CSRF',json.dumps(csrf))
-    return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Message Manager</title>' + SHARED_STYLE + style + '</head><body>' + page_header('message-manager','Message Manager') + '<p>All schedule times use Asia/Tehran. The independent worker runs in the Telclaw runtime.</p>' + (f'<p class="backoffice-error">{e(error)}</p>' if error else '') + body + f'<script nonce="{e(nonce)}">{script}</script></body></html>'
+    audit = body
+    tabs = '<nav class="mm-tabs" aria-label="Message Manager sections">' + ''.join(
+        f'<a href="/message-manager?view={key}"' + (' aria-current="page"' if active == key else '') + f'>{label}</a>'
+        for key, label in [('messages','Messages'), ('editor','Create message'), ('channels','Channels'), ('imports','Excel and reports')]) + '</nav>'
+    script = SCRIPT.replace('__CSRF__', json.dumps(csrf))
+    return ('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Message Manager</title>'
+        + SHARED_STYLE + STYLE + '</head><body>' + page_header('message-manager','Message Manager')
+        + '<p class="backoffice-muted">Create, schedule and track your channel messages · All publication times use Asia/Tehran.</p>'
+        + tabs + (f'<p class="backoffice-error">{e(error)}</p>' if error else '') + sections[active]
+        + (audit if active == 'messages' else '') + f'<script nonce="{e(nonce)}">{script}</script></body></html>')

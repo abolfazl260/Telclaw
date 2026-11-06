@@ -51,11 +51,11 @@ def build_aboutus_message() -> str:
         "<b>ارسال بار و مدارک بین‌المللی، خدمات پرواز و ویزا و ثبت آگهی</b>، "
         "ادورتیو مجموعه‌ای از خدمات و جوامع تخصصی را در کنار هم گرد آورده است.",
         "",
-        "🏠 <b>کانال‌های مسکن | 5K عضو</b>",
+        "🏠 <b>کانال‌های مسکن | 8K عضو</b>",
     ]
     lines.extend("• " + _link(*item) for item in CHANNELS[:3])
     lines.extend(["", "📦✈️ <b>ارسال بار، پرواز و ویزا</b>"])
-    lines.append("• " + _link(*CHANNELS[5]) + " | 9K عضو")
+    lines.append("• " + _link(*CHANNELS[5]) + " | 12K عضو")
     lines.append("• " + _link(*BOTS[1]))
     lines.extend(["", "💼 <b>کانال‌های فرصت شغلی</b>"])
     lines.extend("• " + _link(*item) for item in CHANNELS[3:5])

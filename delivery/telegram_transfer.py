@@ -391,10 +391,6 @@ def format_transfer_ad(record):
         suffix = f" {currency}" if currency else ""
         lines.append(f"💰 Price: {_format_number(record['price'])}{suffix}")
 
-    description = _clean_description(record.get("description"))
-    if description:
-        lines.append(f"📝 Description:\n{description}")
-
     if record.get("features"):
         features = record["features"]
         if isinstance(features, (list, tuple)):
@@ -410,6 +406,10 @@ def format_transfer_ad(record):
         lines.append(f"👤 Contact: {username}")
     elif record.get("contact"):
         lines.append(f"👤 Contact: {_mask_contact(record['contact'])}")
+
+    description = _clean_description(record.get("description"))
+    if description:
+        lines.append(description)
 
     return "\n\n".join(lines)
 

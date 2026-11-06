@@ -246,7 +246,8 @@ class TelegramTransferPublisher:
                 lines.append(f"📅 Date: {gregorian_label} | {jalali_label}")
             except ValueError:
                 lines.append(f"📅 Date: {departure_date}")
-            lines.append("")
+        lines.append("🪪 Identity Verification: Not Verified")
+        lines.append("")
         price = cls._number(data.get("price"))
         if price is not None:
             lines.append(f"💰 Price: {price:g} {cls._value(data, 'currency') or 'CAD'}")

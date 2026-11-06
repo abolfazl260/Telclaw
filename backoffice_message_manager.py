@@ -1,7 +1,8 @@
 """Authenticated routes; publishing is queued, never performed by HTTP handlers."""
 import asyncio
 import sqlite3
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
+import json
 
 from aiohttp import web
 import aiohttp
@@ -22,7 +23,7 @@ def confirmed(form):
     return form.get('confirmed') == 'yes'
 
 
-def redirect(message_id=None, batch_id=None, view=None):
+def redirect(message_id=None, batch_id=None, view=None, notice=''):
     location = '/message-manager'
     if message_id:
         location += '?id=' + str(int(message_id))
@@ -30,6 +31,8 @@ def redirect(message_id=None, batch_id=None, view=None):
         location += "?view=" + view
     elif batch_id:
         location += '?batch=' + str(batch_id)
+    if notice:
+        location += ('&' if '?' in location else '?') + urlencode({'notice':notice})
     raise web.HTTPSeeOther(location)
 
 
@@ -51,7 +54,7 @@ async def action(request):
     try:
         mid = int(data['id']) if data.get('id') else None
         if command == 'save':
-            redirect(mm.service.save(data, admin))
+            redirect(mm.service.save(data, admin), notice='save')
         elif command == 'preview':
             payload = mm.service.payload(data)
             payload['title'] = str(data.get('title') or '')
@@ -65,20 +68,20 @@ async def action(request):
         elif command in {'publish', 'schedule'}:
             await mm.service.activate(mid, data, data.getall('targets', []), admin, confirmed(data),
                 immediate=command == 'publish', replace_id=int(data['replace_id']) if data.get('replace_id') else None)
-            redirect(mid)
+            redirect(mid, notice=command)
         elif command == 'duplicate':
-            redirect(mm.service.duplicate(mid, admin))
+            redirect(mm.service.duplicate(mid, admin), notice=command)
         elif command == 'archive':
             if not confirmed(data):
                 raise ValidationError('Confirm archiving and cancellation')
             mm.repo.archive(mid, admin)
-            redirect(mid)
+            redirect(mid, notice=command)
         elif command == 'schedule-action':
             mm.repo.schedule_action(int(data['schedule_id']), data.get('action'), admin)
-            redirect(mid)
+            redirect(mid, notice=command)
         elif command == 'retry':
             mm.repo.manual_retry(int(data['delivery_id']), admin, confirmed(data))
-            redirect(mid)
+            redirect(mid, notice=command)
         elif command == 'target':
             target_id = int(data['target_id']) if data.get('target_id') else None
             enabled = data.get('enabled', 'yes') == 'yes'
@@ -92,7 +95,7 @@ async def action(request):
                 detail = await mm.sender.check_target(target)
                 routing_rules.update_target_connection(target_id, 'connected', detail)
             mm.repo.eligible(target_id, enabled, admin)
-            redirect(view='channels')
+            redirect(view='channels', notice=command)
         elif command == 'import':
             upload = data.get('workbook')
             if not isinstance(upload, web.FileField) or not upload.filename.lower().endswith('.xlsx'):
@@ -102,16 +105,62 @@ async def action(request):
             redirect(batch_id=batch_id)
         elif command == 'import-confirm':
             await asyncio.to_thread(mm.excel.confirm, data.get('batch_id'), admin, confirmed(data))
-            redirect(batch_id=data.get('batch_id'))
+            redirect(batch_id=data.get('batch_id'), notice=command)
         elif command == 'import-activate':
             await mm.excel.activate(data.get('batch_id'), admin, confirmed(data))
-            redirect(batch_id=data.get('batch_id'))
+            redirect(batch_id=data.get('batch_id'), notice=command)
         else:
             raise web.HTTPNotFound()
     except (aiohttp.ClientError, TimeoutError, PreflightRetry) as exc:
-        raise web.HTTPBadRequest(text="Telegram permission check unavailable; try again later") from exc
+        return form_error(request, data, command, 'Telegram permission check unavailable; try again later', 'targets')
     except (ValueError, TypeError, KeyError, sqlite3.IntegrityError) as exc:
-        raise web.HTTPBadRequest(text=str(exc)[:2000]) from exc
+        return form_error(request, data, command, str(exc)[:2000])
+
+
+def form_error(request, data, command, error, field=None):
+    mm = request.app[MM_KEY]
+    if command == 'preview' and data.get('fragment') == 'yes':
+        return web.Response(text=error, status=400)
+    if field is None:
+        lower = error.lower()
+        field = ('buttons' if any(x in lower for x in ['button','url','keyboard','link']) else
+                 'asset_key' if 'media' in lower else 'title' if 'title' in lower else
+                 'targets' if any(x in lower for x in ['destination','permission','activate','channel']) else
+                 'date' if command == 'schedule' and 'date' in lower else 'time' if command == 'schedule' else
+                 'namespace' if command.startswith('import') and 'namespace' in lower else 'workbook' if command.startswith('import') else
+                 'target_id' if command == 'target' and data.get('target_id') else 'chat_id' if command == 'target' else 'text')
+    query = {'view': 'channels' if command == 'target' else 'imports' if command.startswith('import') else 'editor'}
+    message = None
+    try:
+        if data.get('id'):
+            message = mm.repo.get_message(int(data['id']))
+    except (ValueError, TypeError):
+        pass
+    draft = None
+    if command in {'save','preview'}:
+        try:
+            keyboard = json.loads(data.get('buttons') or '[]')
+            from message_manager.validation import buttons
+            keyboard = buttons(keyboard)
+        except (ValueError, TypeError):
+            keyboard = []
+        asset = data.get('asset_key') or ''
+        try:
+            if asset: mm.repo.media(asset)
+        except ValueError:
+            asset = ''
+        draft = dict(title=data.get('title',''), text=data.get('text',''), parse_mode=data.get('parse_mode') or 'HTML',
+                     asset_key=asset, buttons=keyboard, buttons_raw=data.get('buttons') or '[]')
+    values = {key: data.getall(key) for key in data if key != 'csrf' and isinstance(data.get(key), str)}
+    feedback = dict(action=command, values=values, errors={field:error})
+    batch = None
+    try:
+        if data.get('batch_id'): batch = mm.excel.batch(data['batch_id'])
+    except ValueError:
+        pass
+    body = render(mm, request['session']['csrf'], request['csp_nonce'], query, message, draft, batch,
+                  error=error, feedback=feedback)
+    return web.Response(text=body, content_type='text/html', status=400)
 
 
 async def upload_media(request):

@@ -1,5 +1,6 @@
 """Scoped layout and progressive enhancements for Message Manager."""
 STYLE = '''<style>
+.mm-status-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem}.mm-status-cards>div{padding:1rem;background:#f3f6fb;border-radius:10px}.mm-status-cards strong{display:block;font-size:1.8rem}.mm-status-cards span{display:block}.mm-success{background:#e6f5ed;color:#17633f;padding:1rem;border-radius:8px}.mm-field-error{color:#963525;font-size:.9rem;margin:.3rem 0}[aria-invalid=true]{outline:2px solid #963525}.mm-telegram-header{color:#42778a;font-weight:600;margin-bottom:.8rem}
 .mm-tabs{display:flex;gap:.5rem;border-bottom:1px solid #ccd8e8;padding-bottom:.7rem;margin:1rem 0;flex-wrap:wrap}
 .mm-tabs a,.mm-primary{padding:.6rem 1rem;border-radius:8px;text-decoration:none;background:white;color:#1957b8;border:1px solid #dce4ef}
 .mm-tabs a[aria-current=page],.mm-primary{background:#1957b8;color:white}
@@ -18,6 +19,8 @@ pre,code{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:1rem 0}summa
 </style>'''
 
 SCRIPT = r'''(()=>{
+const feedbackNode=document.getElementById('form-feedback');
+if(feedbackNode){const feedback=JSON.parse(feedbackNode.dataset.feedback);const forms=[...document.querySelectorAll('form[action="/message-manager/'+feedback.action+'"]')];const form=feedback.action==='target'?forms.find(form=>feedback.values.target_id?form.elements.target_id?.value===feedback.values.target_id[0]:form.elements.chat_id):forms[0];if(form){for(const [name,values] of Object.entries(feedback.values)){for(const field of form.querySelectorAll('[name="'+CSS.escape(name)+'"]')){if(field.tagName==='SELECT'&&field.multiple){for(const option of field.options)option.selected=values.includes(option.value)}else if(field.type==='checkbox'||field.type==='radio')field.checked=values.includes(field.value);else if(field.type!=='file')field.value=values[0]||''}}for(const [name,error] of Object.entries(feedback.errors)){const field=form.elements.namedItem(name);const element=field instanceof Element?field:form.querySelector('input:not([type=hidden]),textarea,select');if(element){const message=document.createElement('p');message.className='mm-field-error';message.id='field-error-'+name;message.textContent=error;element.setAttribute('aria-invalid','true');element.setAttribute('aria-describedby',message.id);element.closest('label')?.append(message);if(!message.isConnected)element.after(message)}}}}
 const editor=document.getElementById('message-editor');if(!editor)return;
 const text=editor.elements.text, mode=editor.elements.parse_mode, raw=editor.elements.buttons;
 const builder=document.getElementById('button-builder'), asset=document.getElementById('asset-key');

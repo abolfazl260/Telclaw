@@ -171,3 +171,33 @@ async def test_manual_preview_marks_saved_editor_as_unsaved(mm,monkeypatch):
         html = await response.text()
         assert response.status == 200 and 'data-unsaved="true"' in html
         assert mm.repo.get_message(mid)['content']['text'] == 'Saved text'
+
+
+@pytest.mark.asyncio
+async def test_form_errors_keep_input_and_success_has_notice(mm,monkeypatch):
+    async with TestClient(TestServer(app_for(mm,monkeypatch))) as client:
+        response = await client.post('/message-manager/save',data={'csrf':'mm-csrf','title':'Keep title','text':'<script>bad</script>'},cookies=COOKIES)
+        html = await response.text()
+        assert response.status == 400 and 'id="message-editor"' in html
+        assert 'Keep title' in html and '&lt;script&gt;bad&lt;/script&gt;' in html
+        assert 'data-feedback=' in html and mm.repo.list_messages() == []
+        response = await client.post('/message-manager/save',data={'csrf':'mm-csrf','title':'Valid','text':'Hello'},cookies=COOKIES)
+        assert 'Draft saved successfully.' in await response.text()
+
+
+def test_dashboard_reports_actual_counts_and_worker_expiry(mm):
+    from datetime import timedelta
+    from test_message_manager_repository import scheduled, NOW
+    from message_manager.models import SendResult
+    scheduled(mm,(1,))
+    mm.repo.materialize(NOW)
+    job = mm.repo.claim(NOW)
+    mm.repo.finish(job,SendResult('sent',message_id=12),now=NOW)
+    status = mm.repo.dashboard(NOW)
+    assert status['sent'] == 1 and status['upcoming'] == 0
+    assert status['worker_state'] == 'unknown'
+    mm.repo.worker_heartbeat()
+    assert mm.repo.dashboard()['worker_state'] == 'running'
+    assert mm.repo.dashboard(utcnow()+timedelta(hours=1))['worker_state'] == 'stale'
+    mm.repo.cooldown(60)
+    assert mm.repo.dashboard()['cooldown']

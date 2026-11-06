@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 from backoffice_layout import SHARED_STYLE, page_header
 from message_manager import recurrence
-from message_manager.validation import content
+from message_manager.validation import content, ValidationError
 from backoffice_message_manager_assets import STYLE, SCRIPT
 
 
@@ -43,10 +43,10 @@ def preview(payload, repo):
         else:
             media_html = f'<p><a href="{e(src)}">{e(asset["original_name"])}</a></p>'
     keyboard = ''.join('<div class="keyboard">' + ''.join(f'<a href="{e(b["url"])}" rel="noreferrer">{e(b["text"])}</a>' for b in row) + '</div>' for row in payload['buttons'])
-    return f'<div class="telegram-preview">{media_html}<div dir="auto" style="white-space:pre-wrap">{safe}</div>{keyboard}</div>'
+    return f'<div class="telegram-preview"><div class="mm-telegram-header">Telegram · Channel message</div>{media_html}<div dir="auto" style="white-space:pre-wrap">{safe}</div>{keyboard}</div>'
 
 
-def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, error=''):
+def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, error='', feedback=None):
     repo = runtime.repo
     active = query.get('view') or ('editor' if message or draft else 'imports' if batch else 'messages')
     if active not in {'messages', 'editor', 'channels', 'imports'}:
@@ -89,7 +89,10 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
       <div class="mm-actions">{previous_link} {next_link}<a href="/message-manager?view=editor">New draft</a> · <a href="/message-manager">Reset filters</a></div></section>'''
     if not rows:
         body = body.replace('<div class="mm-table"><table>', '<div class="mm-table" hidden><table>', 1)
-    sections['messages'] = body
+    health = repo.dashboard()
+    cards = '<div class="mm-status-cards">' + ''.join(f'<div><strong>{health[key]}</strong><span>{label}</span></div>' for key,label in [('upcoming','Upcoming messages'),('sent','Sent deliveries'),('failed','Failed deliveries'),('uncertain','Uncertain deliveries')]) + '</div>'
+    health_panel = f'<section class="backoffice-panel"><h2>Publishing status</h2>{cards}<p>Deliveries are counted per channel, across all history.</p><p>Worker: <strong>{e(health["worker_state"])}</strong> · Last queue check: {e(local(health["heartbeat"]))} · Telegram cooldown: {e(local(health["cooldown"])) if health["cooldown"] else "None"}</p><p>{e(health["worker_error"])}</p><p class="backoffice-muted">Unknown/stale means no recent worker heartbeat was recorded; this page does not start the worker. Refresh to update status.</p></section>'
+    sections['messages'] = health_panel + body
     body = ''
     body += f'''<div class="mm-editor-grid"><section class="backoffice-panel"><h2>{'Edit draft #' + str(mid) if mid else 'Create draft'}</h2>
       <form id="message-editor" data-unsaved="{'true' if draft else 'false'}" method="post" action="/message-manager/save">{hidden('csrf',csrf)}{hidden('id',mid)}{hidden('version',message['version'] if message else '')}
@@ -104,13 +107,16 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
       <p id="upload-result" role="status">{e(repo.media(payload['asset_key'])['original_name']) if payload.get('asset_key') else 'No file attached'}</p></fieldset>
       <fieldset><legend>3. Add buttons (optional)</legend><div id="button-builder"></div><button id="add-button" type="button">Add button</button>
       <details><summary>Advanced keyboard JSON</summary>
-      <label>URL keyboard JSON (array of rows) <textarea id="keyboard-json" name="buttons" rows="3">{e(json.dumps(payload['buttons'],ensure_ascii=False))}</textarea></label>
+      <label>URL keyboard JSON (array of rows) <textarea id="keyboard-json" name="buttons" rows="3">{e(payload.get('buttons_raw', json.dumps(payload['buttons'],ensure_ascii=False)))}</textarea></label>
       <p class="backoffice-muted">Array of rows containing text and URL objects.</p></details></fieldset>
       <div class="mm-actions"><button formaction="/message-manager/preview">Preview</button> <button>Save draft</button></div>
       <p id="save-status" role="status">Save changes before publishing.</p></form></section>
       <aside class="backoffice-panel mm-preview-panel"><h2>Telegram preview</h2><p class="backoffice-muted">Preview updates while you write.</p><div id="live-preview">'''
     if payload['text']:
-        body += preview(payload, repo)
+        try:
+            body += preview(payload, repo)
+        except ValidationError:
+            body += '<p>Correct the highlighted fields to preview this message.</p>'
     else:
         body += '<p class="mm-empty">Your message preview will appear here.</p>'
     body += '</div><p id="preview-status" role="status"></p></aside></div>'
@@ -195,9 +201,14 @@ def render(runtime, csrf, nonce, query, message=None, draft=None, batch=None, er
     tabs = '<nav class="mm-tabs" aria-label="Message Manager sections">' + ''.join(
         f'<a href="/message-manager?view={key}"' + (' aria-current="page"' if active == key else '') + f'>{label}</a>'
         for key, label in [('messages','Messages'), ('editor','Create message'), ('channels','Channels'), ('imports','Excel and reports')]) + '</nav>'
+    notices = {'save':'Draft saved successfully.', 'schedule':'Schedule activated successfully.', 'publish':'Publication queued successfully; check delivery status for the result.', 'duplicate':'Draft duplicated.', 'archive':'Message archived.', 'schedule-action':'Schedule updated.', 'retry':'Manual resend queued.', 'target':'Channel updated.', 'import':'Workbook validated. Review the preview.', 'import-confirm':'Imported drafts saved.', 'import-activate':'Imported schedules activated.'}
+    notice = notices.get(query.get('notice'), '')
+    banner = f'<p class="mm-success" role="status">{e(notice)}</p>' if notice else ''
+    if feedback:
+        banner += f'<div id="form-feedback" data-feedback="{e(json.dumps(feedback))}"></div>'
     script = SCRIPT.replace('__CSRF__', json.dumps(csrf))
     return ('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Telclaw · Message Manager</title>'
         + SHARED_STYLE + STYLE + '</head><body>' + page_header('message-manager','Message Manager')
         + '<p class="backoffice-muted">Create, schedule and track your channel messages · All publication times use Asia/Tehran.</p>'
-        + tabs + (f'<p class="backoffice-error">{e(error)}</p>' if error else '') + sections[active]
+        + tabs + banner + (f'<p class="backoffice-error" role="alert">{e(error)}</p>' if error else '') + sections[active]
         + (audit if active == 'messages' else '') + f'<script nonce="{e(nonce)}">{script}</script></body></html>')

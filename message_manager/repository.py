@@ -350,3 +350,26 @@ class Repository:
             if not row:
                 raise ValidationError("Unknown media asset key")
             return dict(row)
+
+    def worker_heartbeat(self, state='running', error=''):
+        with self.connection(True) as c:
+            for key, value in [('worker_heartbeat', stamp()), ('worker_state', state), ('worker_error', error[:500])]:
+                c.execute('INSERT INTO mm_runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
+
+    def dashboard(self, now=None):
+        now = now or utcnow()
+        with self.connection() as c:
+            counts = {r['status']: r['n'] for r in c.execute('SELECT status,COUNT(*) AS n FROM mm_deliveries GROUP BY status')}
+            upcoming = c.execute("""SELECT COUNT(DISTINCT message_id) FROM (
+             SELECT message_id FROM mm_schedules WHERE state='active' AND next_due IS NOT NULL
+             UNION SELECT s.message_id FROM mm_schedules s JOIN mm_occurrences o ON o.schedule_id=s.id
+             JOIN mm_deliveries d ON d.occurrence_id=o.id WHERE s.state IN ('active','completed') AND d.status IN ('waiting','sending','retry'))""").fetchone()[0]
+            runtime = dict(c.execute("SELECT key,value FROM mm_runtime WHERE key LIKE 'worker_%' OR key='bot_cooldown'"))
+            shared = c.execute('SELECT MAX(rate_limited_until) FROM publishing_targets').fetchone()[0]
+        heartbeat = runtime.get('worker_heartbeat')
+        fresh = bool(heartbeat and (now - datetime.fromisoformat(heartbeat)).total_seconds() < 360)
+        state = runtime.get('worker_state', 'unknown') if fresh else 'stale' if heartbeat else 'unknown'
+        cooldown = max(shared or '', runtime.get('bot_cooldown', ''))
+        return dict(upcoming=upcoming, sent=counts.get('sent',0), failed=counts.get('failed',0), uncertain=counts.get('uncertain',0),
+            worker_state=state, heartbeat=heartbeat, worker_error=runtime.get('worker_error',''),
+            cooldown=cooldown if cooldown and cooldown > stamp(now) else None)

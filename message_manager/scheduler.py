@@ -16,6 +16,7 @@ class Worker:
         self.repo, self.sender = repo, sender
 
     async def tick(self):
+        self.repo.worker_heartbeat()
         self.repo.recover()
         self.repo.materialize(limit=config.MESSAGE_MANAGER_BATCH_SIZE,
             once_grace=config.MESSAGE_MANAGER_MISSED_WINDOW_SECONDS,
@@ -53,6 +54,7 @@ class Worker:
                 logger.error('Message Manager delivery failed | delivery=%s type=%s', job['id'], type(exc).__name__)
                 result = SendResult('uncertain', 'Unexpected dispatch error; verify Telegram before resending')
             self.repo.finish(job, result, max_attempts=config.MESSAGE_MANAGER_MAX_ATTEMPTS)
+            self.repo.worker_heartbeat()
 
     async def run(self):
         cycles = 0
@@ -63,7 +65,13 @@ class Worker:
                     self.sender.media.purge_unreferenced(config.MESSAGE_MANAGER_MEDIA_RETENTION_DAYS)
                 cycles += 1
             except asyncio.CancelledError:
+                self.repo.worker_heartbeat('stopped')
                 raise
-            except Exception:
+            except Exception as exc:
+                self.repo.worker_heartbeat('error', type(exc).__name__)
                 logger.exception('Message Manager worker cycle failed')
-            await asyncio.sleep(config.MESSAGE_MANAGER_POLL_SECONDS)
+            try:
+                await asyncio.sleep(config.MESSAGE_MANAGER_POLL_SECONDS)
+            except asyncio.CancelledError:
+                self.repo.worker_heartbeat('stopped')
+                raise

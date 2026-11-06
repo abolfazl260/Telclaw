@@ -93,3 +93,9 @@ Message Manager has four internal tabs: **Messages**, **Create message**, **Chan
 The responsive editor places the Telegram preview alongside the form on desktop and below it on mobile. Write the text, attach a file, and add button text/URLs with row numbers. Raw keyboard JSON is available under Advanced keyboard JSON. Bold, italic and link tools insert supported Telegram HTML around the selected text. The preview is validated by the server and never queues a publication. Uploaded attachments are identified by filename with a protected media preview, and can be removed from the draft.
 
 Save the draft before choosing destinations or activating a schedule. Publication uses saved content; the editor warns and blocks publication when local changes have not been saved. Without JavaScript, the server-rendered tabs, advanced JSON field, manual Preview and Save actions remain available.
+
+## Status and feedback
+
+The Messages tab reports distinct upcoming messages and lifetime per-channel sent/failed/uncertain delivery counts. Worker heartbeat/state and last queue check are persisted in the existing runtime table. Missing/expired heartbeat is shown as unknown/stale. Telegram cooldown includes the module and shared destination registry cooldown. Refresh for updates.
+
+Form failures remain on their original tab with the draft retained, an error summary and field-level feedback. Success banners distinguish saving, activating a schedule and queuing a publication; queued does not mean delivered. Telegram-styled previews include channel-message context, protected attachments and URL keyboards; previews never send to Telegram.

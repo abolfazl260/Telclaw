@@ -244,16 +244,18 @@ class TelegramTransferPublisher:
             except ValueError:
                 lines.append(f"📅 Date: {departure_date}")
             lines.append("")
-        description = cls._clean_description(data.get("description"))
-        if description:
-            lines.append(f"📝 Description: {description}")
         price = cls._number(data.get("price"))
         if price is not None:
             lines.append(f"💰 Price: {price:g} {cls._value(data, 'currency') or 'CAD'}")
         contact = cls._value(data, "contact")
         if contact:
             lines.append(f"📞 Contact: {contact}")
-        return "\n".join(lines)
+        description = cls._clean_description(data.get("description"))
+        if description:
+            if lines[-1] != "":
+                lines.append("")
+            lines.append(description)
+        return "\n".join(lines).rstrip()
 
     async def _send_message(self, text, reply_markup=None):
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"

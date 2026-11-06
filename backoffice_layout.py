@@ -1,8 +1,10 @@
 """Shared visual frame and navigation for every authenticated back-office page."""
 from html import escape
+import config
 
 SECTIONS = (
     ('publishing', '/', 'Publishing'),
+    ('message-manager', '/message-manager', 'Message Manager'),
     ('operations', '/operations', 'Operations'),
     ('cargo', '/cargo', 'Active Cargo'),
     ('assistant', '/assistant', 'AI Assistant'),
@@ -51,6 +53,8 @@ outline:3px solid #90b9f4;outline-offset:2px}
 def page_header(active, title):
     links = []
     for key, url, label in SECTIONS:
+        if key == 'message-manager' and not config.MESSAGE_MANAGER_ENABLED:
+            continue
         current = ' class="active" aria-current="page"' if key == active else ''
         links.append(f'<a href="{url}"{current}>{label}</a>')
     return (f'<header class="backoffice-header" dir="ltr"><h1>{escape(title)}</h1>'

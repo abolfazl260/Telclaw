@@ -121,7 +121,7 @@ async def test_single_message_crawl_uses_existing_storage_and_deduplication(manu
     assert stored["raw_text"] == text
     assert stored["processing_status"] == "pending"
     assert stored["ai_status"] == "waiting"
-    assert stored["message_link"] == "https://t.me/source_channel/567"
+    assert stored["message_link"] is None  # Existing crawler links text-only posts by source and ID.
 
     second = await crawler.crawl_message(client, "source_channel", 567)
     assert second["saved"] == 0

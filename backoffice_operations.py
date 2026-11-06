@@ -703,6 +703,52 @@ class BackofficeOperations:
         )
         return details
 
+    async def crawl_single_message(
+        self, *, account_name, channel_username, message_id, requested_by=None
+    ):
+        """Collect one configured source post without scheduling a channel crawl."""
+        from collection.crawler import crawl_message
+        from processing.normalizer import normalize_channel_username
+
+        source = normalize_channel_username(channel_username)
+        configured = {
+            normalize_channel_username(entry.get("username"))
+            for items in self.channel_data().values()
+            if isinstance(items, list)
+            for entry in items
+            if isinstance(entry, dict) and entry.get("username")
+        }
+        if not source or source not in configured:
+            raise ValueError("Select a configured source channel")
+        if isinstance(message_id, bool) or not isinstance(message_id, int) or message_id <= 0:
+            raise ValueError("Invalid Telegram message ID")
+        allowed_accounts = {
+            str(item.get("session"))
+            for item in await self.list_accounts()
+            if item.get("session")
+        }
+        if account_name not in allowed_accounts:
+            raise ValueError("Select an authorized Telegram session")
+
+        client = await self._connect_account(account_name)
+        async with self.pipeline_lock:
+            result = await crawl_message(client, source, message_id)
+        self._activity(
+            "crawler_single_message",
+            "INFO" if result.get("status") == "completed" else "WARNING",
+            f"Manual crawl requested for @{source}/{message_id}",
+            {
+                "requested_by": requested_by,
+                "account": account_name,
+                "channel": source,
+                "message_id": message_id,
+                "status": result.get("status"),
+                "saved": result.get("saved", 0),
+                "duplicates_skipped": result.get("duplicates_skipped", 0),
+            },
+        )
+        return result
+
     def stop_crawler(self, requested_by=None):
         active = len(self.crawler.active_jobs())
         self.crawler.stop_all()

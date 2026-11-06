@@ -134,6 +134,10 @@ async def test_transfer_success_is_not_resent_when_legacy_text_changes(db, monke
     # The publisher must pass the contact draft through to Telegram sendMessage.
     button = sent[0][1]["inline_keyboard"][0][0]
     assert button["text"] == "👤 @sourceuser"
+    assert sent[0][1]["inline_keyboard"][0][1] == {
+        "text": "➕ ثبت آگهی",
+        "url": "https://t.me/advertio_bot?startapp=create",
+    }
     assert urlsplit(button["url"]).path == "/sourceuser"
     assert parse_qs(urlsplit(button["url"]).query) == {
         "text": [
@@ -310,8 +314,13 @@ def test_transfer_contact_button_opens_ad_owner_with_prefilled_draft(username):
     markup = TelegramTransferPublisher._contact_button({"sender_username": username})
     assert markup is not None
     assert len(markup["inline_keyboard"]) == 1
-    assert len(markup["inline_keyboard"][0]) == 1
+    assert len(markup["inline_keyboard"][0]) == 2
     button = markup["inline_keyboard"][0][0]
+    register_button = markup["inline_keyboard"][0][1]
+    assert register_button == {
+        "text": "➕ ثبت آگهی",
+        "url": "https://t.me/advertio_bot?startapp=create",
+    }
     assert button["text"] == "👤 @alice_123"
 
     url = urlsplit(button["url"])
@@ -330,6 +339,10 @@ def test_transfer_contact_button_opens_ad_owner_with_prefilled_draft(username):
     None, "", "@", "bob", "ali/evil", "alice?text=overridden", "<script>", "@" * 100,
 ])
 def test_transfer_contact_button_rejects_missing_or_unsafe_usernames(username):
+    # Invalid usernames must never become contact links, but registration stays available.
     assert TelegramTransferPublisher._contact_button({
         "sender_username": username,
-    }) is None
+    }) == {"inline_keyboard": [[{
+        "text": "➕ ثبت آگهی",
+        "url": "https://t.me/advertio_bot?startapp=create",
+    }]]}

@@ -220,7 +220,7 @@ class TelegramTransferPublisher:
             lines.append("")
         title = cls._remove_emojis(cls._value(data, "title"))
         if title:
-            lines.append(f"📌 Title: {title}")
+            lines.append(f"📌 {title}")
             lines.append("")
         lines.extend([
             cls._location_line("Origin", origin, cls._value(data, "origin_country")),

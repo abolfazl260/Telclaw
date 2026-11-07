@@ -27,8 +27,8 @@ def test_transfer_title_is_published_after_ad_number():
     lines = text.splitlines()
 
     assert lines[0] == "TR-008601"
-    assert "📌 Title: Small package from Tehran to Toronto" in text
-    assert text.index("📌 Title:") < text.index("Origin:")
+    assert "📌 Small package from Tehran to Toronto" in text
+    assert text.index("📌 Small package from Tehran to Toronto") < text.index("Origin:")
     assert "🇮🇷 Origin: Tehran" in text
     assert "🇨🇦 Destination: Toronto" in text
 
@@ -37,7 +37,7 @@ def test_missing_transfer_title_does_not_render_empty_title_line():
     record = _record(title=None)
     text = TelegramTransferPublisher.format_ad(record, record)
 
-    assert "📌 Title:" not in text
+    assert not any(line.startswith("📌 ") for line in text.splitlines())
 
 
 def test_transfer_text_cleanup_preserves_normal_language_characters():
@@ -97,7 +97,7 @@ def test_realistic_transfer_description_is_the_final_plain_text_block():
 
     text = TelegramTransferPublisher.format_ad(record, record)
 
-    assert text.startswith("TR-010397\n\n📌 Title: Tehran to Berlin 13 November")
+    assert text.startswith("TR-010397\n\n📌 Tehran to Berlin 13 November")
     assert "📅 Date: 13/11/2026 | 22/08/1405" in text
     assert text.endswith("\n\n" + message)
     assert "Description:" not in text

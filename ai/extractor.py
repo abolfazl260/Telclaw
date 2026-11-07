@@ -17,13 +17,16 @@ logger = logging.getLogger("telclaw.ai")
 class AIExtractionError(RuntimeError):
     """An AI failure whose details are diagnostic-only and must not reach message storage."""
 
-    def __init__(self, message, *, status=None, reason=None, provider="groq", stop_queue=False, retry_after=None):
+    def __init__(self, message, *, status=None, reason=None, provider="groq", stop_queue=False, retry_after=None, cooldown_cause=None):
         super().__init__(message)
         self.status = status
         self.reason = reason
         self.provider = provider
         self.stop_queue = stop_queue
         self.retry_after = retry_after
+        # Optional safe diagnostic category for cooldown metadata. Provider
+        # routing still uses the original reason/status unchanged.
+        self.cooldown_cause = cooldown_cause
 
 
 def _title_is_english(title):

@@ -47,8 +47,9 @@ reposts. Sender ID is preferred; otherwise the username, then the
 \`(channel_username, message_id)\` pair is used. A sender may have distinct trips.
 Only \`transfer_role='shipper'\` is counted as **requests** and
 \`transfer_role='passenger'\` as **passenger offers**. Blank/unrecognized roles
-remain **unknown**; they are never guessed. The extraction prompt may not fill
-this optional legacy field, so the report always shows the unknown-role total.
+remain **unknown**; they are never guessed. This PR adds explicit `transfer_role` extraction for new transferlist posts.
+Historical records without that field remain unknown; no unsafe bulk reprocessing
+is performed. The report always displays the unknown-role total.
 These are listing counts, not completed shipments or available capacity.
 
 The report ranks routes by unique listing count. The private widget contains a

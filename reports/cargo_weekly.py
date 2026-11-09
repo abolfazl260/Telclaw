@@ -16,11 +16,12 @@ import re
 import zlib
 from zoneinfo import ZoneInfo
 
-import config
 from storage import database
 
 log = logging.getLogger(__name__)
 TEHRAN = ZoneInfo("Asia/Tehran")
+# Advertio Cargo is a product destination, not a per-installation setting.
+REPORT_CHANNEL = "@advertio_cargo"
 UNSPECIFIED = {"", "-", "—", "unknown", "unspecified", "none", "null", "n/a", "na", "نامشخص"}
 
 # Telegram widget profile 1: inline CSS/JS, no network, no external assets.
@@ -287,9 +288,7 @@ async def send_private_report(monitor, chat_id, *, now=None):
 
 async def publish_weekly_once(monitor, *, now=None):
     """Called by the independent worker; safe across restarts/processes."""
-    if not getattr(config, "CARGO_WEEKLY_REPORT_ENABLED", False):
-        return False
-    if not monitor.enabled or not getattr(config, "CARGO_WEEKLY_REPORT_CHANNEL", ""):
+    if not monitor.enabled:
         return False
     current = (now or datetime.now(TEHRAN)).astimezone(TEHRAN)
     monday = current - timedelta(days=current.weekday())
@@ -302,7 +301,7 @@ async def publish_weekly_once(monitor, *, now=None):
     username = str((me.get("result") or {}).get("username") or "")
     if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
         raise ValueError("Cannot publish cargo widget deep link without bot username")
-    target = config.CARGO_WEEKLY_REPORT_CHANNEL
+    target = REPORT_CHANNEL
     if not await asyncio.to_thread(_claim, report["period_key"], target):
         return False
     try:

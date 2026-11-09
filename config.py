@@ -194,6 +194,11 @@ ADVERTIO_CARGO_BATCH_SIZE = max(1, min(100, _int_env("TELCLAW_ADVERTIO_CARGO_BAT
 ADVERTIO_CARGO_DAILY_LIMIT = max(1, min(500, _int_env("TELCLAW_ADVERTIO_CARGO_DAILY_LIMIT", 250, minimum=1)))
 
 
+# Public weekly cargo route report. Explicit opt-in prevents surprise channel posts.
+# Bot API 10.4 widgets are currently available in private chats only.
+CARGO_WEEKLY_REPORT_ENABLED = os.getenv("TELCLAW_CARGO_WEEKLY_REPORT_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+CARGO_WEEKLY_REPORT_CHANNEL = os.getenv("TELCLAW_CARGO_WEEKLY_REPORT_CHANNEL", "").strip()
+
 # Dedicated Telegram transfer-ad publisher. It reuses the existing Telegram bot token
 # and publishes only AI-processed transferlist records to the configured channel.
 TRANSFER_TELEGRAM_PUBLISH_ENABLED = os.getenv("TELCLAW_TRANSFER_TELEGRAM_PUBLISH_ENABLED", "false").lower() in {"1", "true", "yes", "on"}

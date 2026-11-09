@@ -86,7 +86,7 @@ async def _run():
 
     # Weekly public report is independent of the AI/crawl/transfer publishing queues.
     cargo_weekly_task = None
-    if config.CARGO_WEEKLY_REPORT_ENABLED and monitor.enabled:
+    if monitor.enabled:
         from reports.cargo_weekly import run_weekly_publisher
         cargo_weekly_task = asyncio.create_task(
             run_weekly_publisher(monitor), name="cargo-weekly-report"

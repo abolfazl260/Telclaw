@@ -231,9 +231,11 @@ async def test_opted_in_validation_warning_is_sent_but_other_warnings_are_not(mo
     monkeypatch.setattr(monitor, "_api", fake_api)
     monkeypatch.setattr(monitor, "_poll_updates", idle_poll)
     await monitor.start()
-    source = logging.getLogger("telclaw.ai")
-    original_level = source.level
-    source.setLevel(logging.WARNING)
+    # Legacy bootstrap may configure the root logger at ERROR.
+    root = logging.getLogger()
+    original_root_level = root.level
+    root.setLevel(logging.ERROR)
+    source = logging.getLogger("telclaw.advertio.validation")
     try:
         source.warning("Ordinary warning: do not notify admins")
         source.warning(
@@ -259,7 +261,7 @@ async def test_opted_in_validation_warning_is_sent_but_other_warnings_are_not(mo
             ).fetchall()
         assert len(rows) == 1
         assert rows[0]["level"] == "WARNING"
-        assert rows[0]["source"] == "telclaw.ai"
+        assert rows[0]["source"] == "telclaw.advertio.validation"
     finally:
-        source.setLevel(original_level)
+        root.setLevel(original_root_level)
         await monitor.stop()

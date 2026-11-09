@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from contextlib import closing
+from datetime import datetime, timedelta
 import html
 import json
 import logging
@@ -24,7 +25,7 @@ UNSPECIFIED = {"", "-", "—", "unknown", "unspecified", "none", "null", "n/a", 
 
 # Telegram widget profile 1: inline CSS/JS, no network, no external assets.
 # The HTML remains immutable; the compact snapshot is carried in public_data.
-WIDGET_HTML = """<html lang="fa" dir="rtl"><style>
+WIDGET_HTML = """<html lang="fa" dir="rtl"><head><style>
 body{font-family:system-ui,sans-serif;margin:0;padding:14px;color:var(--tg-theme-text-color)}
 h3{margin:0 0 5px;font-size:1.1em}.meta,.note{color:var(--tg-theme-hint-color);font-size:.77em}
 .meta{margin-bottom:10px}.summary{display:flex;gap:7px;margin:10px 0}
@@ -41,7 +42,7 @@ background:var(--tg-theme-secondary-bg-color);color:var(--tg-theme-text-color);b
 .fill{height:100%;border-radius:8px;background:var(--tg-theme-link-color)}
 .sub{font-size:.73em;color:var(--tg-theme-hint-color)}
 .note{margin-top:11px;line-height:1.6}
-</style><body><h3>📦 گزارش هفتگی مسیرهای کارگو</h3>
+</style></head><body><h3>📦 گزارش هفتگی مسیرهای کارگو</h3>
 <div id="period" class="meta">Advertio Cargo</div>
 <div class="summary"><div class="stat"><strong id="total">—</strong><small>آگهی یکتا</small></div>
 <div class="stat"><strong id="routes">—</strong><small>مسیر</small></div>
@@ -246,7 +247,7 @@ def channel_post(report, bot_username: str):
 
 def _claim(period_key, channel):
     """Claim before network I/O. Uncertain sends must never be auto-repeated."""
-    with database.get_connection() as conn:
+    with closing(database.get_connection()) as conn, conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS cargo_weekly_report_publications (
                  period_key TEXT PRIMARY KEY, destination TEXT NOT NULL,
@@ -264,7 +265,7 @@ def _claim(period_key, channel):
 
 
 def _finish(period_key, status, message_id=None, error=None):
-    with database.get_connection() as conn:
+    with closing(database.get_connection()) as conn, conn:
         conn.execute(
             """UPDATE cargo_weekly_report_publications
                SET status=?, telegram_message_id=?, error=?, completed_at=CURRENT_TIMESTAMP

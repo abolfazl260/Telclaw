@@ -41,6 +41,14 @@ def cargo_db(tmp_path, monkeypatch):
 NOW = datetime(2026, 11, 10, 12, tzinfo=timezone.utc)
 
 
+def test_report_has_no_env_setup_and_uses_existing_advertio_cargo_destination(monkeypatch):
+    monkeypatch.setenv("TELCLAW_CARGO_WEEKLY_REPORT_ENABLED", "false")
+    monkeypatch.setenv("TELCLAW_CARGO_WEEKLY_REPORT_CHANNEL", "@wrong_channel")
+    assert cargo_weekly.REPORT_CHANNEL == "@advertio_cargo"
+    assert not hasattr(config, "CARGO_WEEKLY_REPORT_ENABLED")
+    assert not hasattr(config, "CARGO_WEEKLY_REPORT_CHANNEL")
+
+
 def test_week_boundaries_are_complete_tehran_weeks():
     start, end = cargo_weekly.previous_complete_week(NOW)
     assert (start.date().isoformat(), end.date().isoformat()) == ("2026-11-02", "2026-11-09")
@@ -91,8 +99,6 @@ def test_channel_post_has_private_deep_link_and_no_widget(cargo_db):
 @pytest.mark.asyncio
 async def test_weekly_publisher_is_idempotent(cargo_db, monkeypatch):
     cargo_db(1)
-    monkeypatch.setattr(config, "CARGO_WEEKLY_REPORT_ENABLED", True)
-    monkeypatch.setattr(config, "CARGO_WEEKLY_REPORT_CHANNEL", "@advertio_cargo")
     calls = []
 
     class Monitor:
@@ -108,6 +114,7 @@ async def test_weekly_publisher_is_idempotent(cargo_db, monkeypatch):
     assert await cargo_weekly.publish_weekly_once(monitor, now=NOW)
     assert not await cargo_weekly.publish_weekly_once(monitor, now=NOW)
     assert sum(method == "sendMessage" for method, _ in calls) == 1
+    assert next(payload["chat_id"] for method, payload in calls if method == "sendMessage") == "@advertio_cargo"
     with database.get_connection() as conn:
         row = conn.execute(
             "SELECT status, telegram_message_id FROM cargo_weekly_report_publications"
@@ -118,8 +125,6 @@ async def test_weekly_publisher_is_idempotent(cargo_db, monkeypatch):
 @pytest.mark.asyncio
 async def test_ambiguous_send_is_not_repeated(cargo_db, monkeypatch):
     cargo_db(1)
-    monkeypatch.setattr(config, "CARGO_WEEKLY_REPORT_ENABLED", True)
-    monkeypatch.setattr(config, "CARGO_WEEKLY_REPORT_CHANNEL", "@advertio_cargo")
     sends = []
 
     class Monitor:

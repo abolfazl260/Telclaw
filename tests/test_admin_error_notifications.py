@@ -215,3 +215,51 @@ async def test_monitor_disabled_installs_no_error_handler(monkeypatch):
     await monitor.start()
     assert list(root.handlers) == before
     assert monitor._error_dispatcher is None
+
+@pytest.mark.asyncio
+async def test_opted_in_validation_warning_is_sent_but_other_warnings_are_not(monitor_db, monkeypatch):
+    monitor = TelegramMonitor()
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+        return {"ok": True, "result": []}
+
+    async def idle_poll():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    monkeypatch.setattr(monitor, "_poll_updates", idle_poll)
+    await monitor.start()
+    source = logging.getLogger("telclaw.ai")
+    original_level = source.level
+    source.setLevel(logging.WARNING)
+    try:
+        source.warning("Ordinary warning: do not notify admins")
+        source.warning(
+            "[ADVERTIO VALIDATION WARNING] status=rejected message_id=184923 "
+            "channel=canada_homes detail=Required Advertio housing data is missing/invalid: price",
+            extra={"notify_admin": True},
+        )
+        await asyncio.sleep(0.03)
+        await asyncio.wait_for(monitor._error_dispatcher.queue.join(), timeout=2)
+        notifications = [payload for method, payload in calls if method == "sendMessage"]
+        assert len(notifications) == len(ADMIN_USER_IDS)
+        for payload in notifications:
+            message = payload["text"]
+            assert "Telclaw System Warning" in message
+            assert "<b>Level:</b> WARNING" in message
+            assert "message_id=184923" in message
+            assert "Ordinary warning" not in message
+            assert "Traceback" not in message
+
+        with database.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT kind,level,source FROM system_activity WHERE kind='warning'"
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["level"] == "WARNING"
+        assert rows[0]["source"] == "telclaw.ai"
+    finally:
+        source.setLevel(original_level)
+        await monitor.stop()

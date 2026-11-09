@@ -137,7 +137,7 @@ class AIProcessingService:
             print(f"[ADVERTIO] Stage skip requested; remaining delivery stays pending. message={record['message_id']}")
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         from delivery import housing_retry
-        from delivery.advertio_service import AdvertioMappingError
+        from delivery.advertio_service import AdvertioMappingError, log_mapping_rejection
         if housing_retry.paused_until():
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         now = datetime.now(timezone.utc).isoformat()
@@ -169,11 +169,7 @@ class AIProcessingService:
                 status="rejected", lead_id=None,
                 error=str(exc)[:4000], processed_at=now,
             )
-            logger.warning(
-                "[ADVERTIO VALIDATION WARNING] status=rejected message_id=%s channel=%s detail=%s",
-                record.get("message_id"), record.get("channel_username"), str(exc),
-                extra={"notify_admin": True},
-            )
+            log_mapping_rejection(record, exc)
             print(f"[ADVERTIO] rejected: message={record['message_id']} reason={str(exc)[:300]}")
             return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
         except Exception as exc:

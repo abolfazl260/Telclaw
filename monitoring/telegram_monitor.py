@@ -56,8 +56,14 @@ def _write_database_part(snapshot_path, part_path, offset, size):
 
 
 class _TelegramErrorHandler(logging.Handler):
-    def __init__(self,monitor): super().__init__(level=logging.ERROR); self.monitor=monitor
+    def __init__(self,monitor): super().__init__(level=logging.WARNING); self.monitor=monitor
     def emit(self,record):
+        # Preserve ERROR/CRITICAL forwarding. Only explicitly opted-in WARNING
+        # records (such as expected Advertio validation rejections) are alerted.
+        if record.levelno < logging.ERROR and not (
+            record.levelno == logging.WARNING and getattr(record, "notify_admin", False)
+        ):
+            return
         if record.name.startswith("monitoring.telegram_monitor"): return
         if _is_expected_aiohttp_client_noise(record): return
         dispatcher = self.monitor._error_dispatcher
@@ -372,11 +378,14 @@ class TelegramMonitor:
                 logger.warning("Telegram admin error alert failed for admin %s", admin_id)
 
     async def error(self,level,source,message):
+        is_warning = str(level).upper() == "WARNING"
+        kind = "warning" if is_warning else "error"
+        heading = "⚠️ Telclaw System Warning" if is_warning else "🚨 Telclaw System Error"
         try:
-            database.record_system_activity("error",level,source,str(message)[:4000])
+            database.record_system_activity(kind,level,source,str(message)[:4000])
         except Exception:
-            logger.exception("Failed to persist system error activity")
-        await self.broadcast_admin_errors(f"🚨 <b>Telclaw System Error</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
+            logger.exception("Failed to persist system alert activity")
+        await self.broadcast_admin_errors(f"<b>{heading}</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
     async def report(self,kind,stats):
         try:
             database.record_system_activity(kind,"INFO","telegram_monitor",f"{kind} report",stats)

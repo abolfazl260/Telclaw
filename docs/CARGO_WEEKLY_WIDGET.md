@@ -14,23 +14,27 @@ https://core.telegram.org/bots/widgets
 - Existing administrator-only monitoring commands and forward-import behavior
   are not exposed to regular users.
 
-## Activation
+## Availability (enabled by default)
 
-1. Deploy with Telegram Bot API 10.4 compatibility and start the existing
-   Telclaw monitoring bot; this is the bot users will open from the channel.
-2. Make the bot an administrator of the destination channel with permission to
-   publish messages.
-3. Set \`TELCLAW_CARGO_WEEKLY_REPORT_CHANNEL=@advertio_cargo\` (or another
-   channel ID/username), then set \`TELCLAW_CARGO_WEEKLY_REPORT_ENABLED=true\`.
-4. Restart Telclaw. The publisher checks every 30 minutes and publishes at
-   most one report per completed Tehran week, starting Monday at 10:00 Tehran
-   time. If it starts later in the week, it can publish the previous full week
-   once, provided qualifying ads exist.
-5. Test the private \`/cargoreport\` command before enabling automatic posts.
+The weekly cargo report is a built-in Advertio feature. There are **no
+cargo-report-specific environment variables or setup switches**.
 
-The feature is **off by default**. No channel posts are attempted until opted
-in. It reuses \`TELCLAW_TELEGRAM_BOT_TOKEN\` and the existing monitoring poller.
+- Deploy the updated Telclaw code with the existing Telegram monitoring bot.
+- The public `/cargoreport` command is immediately available to users in
+  their private chat with the bot; the bot token is already required for
+  Telegram integration and is not a new reporting setting.
+- The built-in channel destination is `@advertio_cargo`. The bot must have
+  Telegram administrator permission to post there; no code-level or `.env`
+  change is required.
+- Every Monday at 10:00 Asia/Tehran or later, the worker publishes one report
+  for the last completed week (only when qualifying ads exist). A later startup
+  during the same week publishes at most once.
+- With Telegram monitoring disabled or missing a bot token, the report
+  cannot send Telegram messages. Publishing errors are logged; normal
+  crawling and AI processing continue.
 
+This uses the existing bot integration and does not modify other publishing
+configurations.
 ## Aggregation contract
 
 The reporting period is the previous **complete** Monday 00:00 to Monday

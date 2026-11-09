@@ -211,7 +211,6 @@ def widget_payload(chat_id, report):
             f"گزارش هفتگی مسیرهای کارگو | {report['start']} تا {report['end']} "
             f"| {report['total']} آگهی یکتا"
         ),
-        "height": 0,
         "allow_queries": False,
     }
 

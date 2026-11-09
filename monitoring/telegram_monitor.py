@@ -97,6 +97,7 @@ class TelegramMonitor:
             {"command":"today","description":"نمایش آمار امروز"},
             {"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},
             {"command":"transferlive","description":"نمایش آگهی‌های فعال حمل‌ونقل"},
+            {"command":"cargoreport","description":"گزارش هفتگی مسیرهای کارگو"},
             {"command":"transfercountry","description":"خلاصه مسیرها بر اساس کشور"},
             {"command":"down_errors","description":"Download crawler error log"},
             {"command":"database","description":"Download full SQLite database"},
@@ -173,6 +174,28 @@ class TelegramMonitor:
             user=message.get("from")
             if chat.get("type") == "private" and isinstance(chat_id,int) and isinstance(user,dict) and user.get("id") == chat_id:
                 await self._send_aboutus(chat_id)
+            return
+        # /cargoreport and /start cargo_weekly are public ONLY in the
+        # requester's own private chat. Admin-only commands remain unchanged.
+        user = message.get("from")
+        public_private = (
+            not is_forwarded(message) and chat.get("type") == "private"
+            and isinstance(chat_id, int) and isinstance(user, dict)
+            and user.get("id") == chat_id
+        )
+        if public_private and (
+            command == "/cargoreport"
+            or (command == "/start" and text.split(maxsplit=1)[1:] == ["cargo_weekly"])
+        ):
+            try:
+                from reports.cargo_weekly import send_private_report
+                await send_private_report(self, chat_id)
+            except Exception:
+                logger.exception("[CARGO WEEKLY] private report failed chat=%s", chat_id)
+                await self._api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "در حال حاضر نمایش گزارش کارگو امکان‌پذیر نیست. بعداً دوباره امتحان کنید.",
+                })
             return
         if not self._is_admin_private_chat(chat,message.get("from")): return
         if is_forwarded(message):

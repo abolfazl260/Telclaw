@@ -517,6 +517,22 @@ class AdvertioDeliveryService:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) {status}: message={record['message_id']}")
             except housing_retry.HousingDeferred:
                 break
+            except AdvertioMappingError as exc:
+                # Missing/invalid housing fields are expected, permanent rejections.
+                self.repository.mark_advertio_result(
+                    record["message_id"], record["channel_username"],
+                    status="rejected", lead_id=None,
+                    error=str(exc)[:4000],
+                    processed_at=datetime.now(timezone.utc).isoformat(),
+                )
+                failed += 1
+                logger.warning(
+                    "[ADVERTIO VALIDATION WARNING] status=rejected message_id=%s channel=%s detail=%s",
+                    record.get("message_id"), record.get("channel_username"), str(exc),
+                    extra={"notify_admin": True},
+                )
+                if progress:
+                    print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) rejected: message={record['message_id']} reason={str(exc)[:300]}")
             except Exception as exc:
                 retryable = isinstance(exc, AdvertioError) and exc.retryable
                 status = "retry" if retryable else "rejected"

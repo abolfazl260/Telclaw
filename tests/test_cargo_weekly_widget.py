@@ -84,6 +84,7 @@ def test_widget_payload_is_under_telegram_limits(cargo_db):
     assert len(payload["public_data"].encode("utf-8")) <= 1024
     assert data["r"][0][2:] == [0, 1, 0]
     assert payload["allow_queries"] is False
+    assert "height" not in payload  # Telegram picks natural height instead of clamping 0 to 50px
 
 
 def test_channel_post_has_private_deep_link_and_no_widget(cargo_db):

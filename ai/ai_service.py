@@ -137,6 +137,7 @@ class AIProcessingService:
             print(f"[ADVERTIO] Stage skip requested; remaining delivery stays pending. message={record['message_id']}")
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         from delivery import housing_retry
+        from delivery.advertio_service import AdvertioMappingError, log_mapping_rejection
         if housing_retry.paused_until():
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
         now = datetime.now(timezone.utc).isoformat()
@@ -161,6 +162,16 @@ class AIProcessingService:
             return {"attempted": 1, "sent": int(status == "sent"), "already_existed": int(status == "already_existed"), "failed": 0, "skipped": 0}
         except housing_retry.HousingDeferred:
             return {"attempted": 0, "sent": 0, "already_existed": 0, "failed": 0, "skipped": 1}
+        except AdvertioMappingError as exc:
+            # Invalid listing data is an expected, non-retryable rejection.
+            self.repository.mark_advertio_result(
+                record["message_id"], record["channel_username"],
+                status="rejected", lead_id=None,
+                error=str(exc)[:4000], processed_at=now,
+            )
+            log_mapping_rejection(record, exc)
+            print(f"[ADVERTIO] rejected: message={record['message_id']} reason={str(exc)[:300]}")
+            return {"attempted": 1, "sent": 0, "already_existed": 0, "failed": 1, "skipped": 0}
         except Exception as exc:
             from delivery.advertio_client import AdvertioError
             retryable = isinstance(exc, AdvertioError) and exc.retryable

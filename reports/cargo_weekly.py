@@ -161,7 +161,7 @@ def build_report(now: datetime | None = None, *, max_routes: int = 5):
         if dedup in unique:
             continue
         unique.add(dedup)
-        display.setdefault(route, f"{origin} ({oc}) ← {destination} ({dc})")
+        display.setdefault(route, f"\u2066{origin} ({oc}) → {destination} ({dc})\u2069")
         grouped[route]["total"] += 1
         grouped[route][role] += 1
         total += 1

@@ -8,6 +8,8 @@ import pytest
 import config
 from reports import cargo_weekly
 from storage import database
+from ai.category_schemas import CATEGORY_FIELDS, validate_result
+from ai.prompt_loader import render_prompt
 
 
 @pytest.fixture
@@ -158,3 +160,17 @@ async def test_public_private_command_does_not_require_admin(monkeypatch):
     message["chat"] = {"id": -10042, "type": "channel"}
     await bot._handle_update({"message": message})
     assert seen == [424242]
+
+
+def test_ai_extracts_explicit_transfer_role_without_guessing():
+    assert "transfer_role" in CATEGORY_FIELDS["transferlist"]
+    prompt = render_prompt("transferlist", "من هفته بعد به کانادا سفر دارم و بار شما را می‌برم")
+    assert '"transfer_role":null' in prompt
+    assert 'transfer_role is "shipper"' in prompt
+    category, fields = validate_result({
+        "category": "transferlist",
+        "data": {"transferlist": {"transfer_role": "passenger", "origin_city": "Tehran"}},
+    })
+    assert category == "transferlist"
+    assert fields["transfer_role"] == "passenger"
+

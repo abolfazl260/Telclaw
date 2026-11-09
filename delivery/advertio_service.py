@@ -13,6 +13,19 @@ from storage.data_normalizer import availability_rent_period, normalize_housing_
 from storage.message_repository import MessageRepository
 
 logger = logging.getLogger(__name__)
+# A dedicated warning-only logger remains enabled even when the root logger
+# is configured at ERROR (see error_handler.py). Do not lower global log levels.
+validation_logger = logging.getLogger("telclaw.advertio.validation")
+validation_logger.setLevel(logging.WARNING)
+
+
+def log_mapping_rejection(record, exc):
+    """Notify administrators of invalid housing data without an error traceback."""
+    validation_logger.warning(
+        "[ADVERTIO VALIDATION WARNING] status=rejected message_id=%s channel=%s detail=%s",
+        record.get("message_id"), record.get("channel_username"), str(exc),
+        extra={"notify_admin": True},
+    )
 
 
 class AdvertioMappingError(ValueError):
@@ -526,11 +539,7 @@ class AdvertioDeliveryService:
                     processed_at=datetime.now(timezone.utc).isoformat(),
                 )
                 failed += 1
-                logger.warning(
-                    "[ADVERTIO VALIDATION WARNING] status=rejected message_id=%s channel=%s detail=%s",
-                    record.get("message_id"), record.get("channel_username"), str(exc),
-                    extra={"notify_admin": True},
-                )
+                log_mapping_rejection(record, exc)
                 if progress:
                     print(f"[ADVERTIO] {index}/{total} ({index * 100 / total:6.2f}%) rejected: message={record['message_id']} reason={str(exc)[:300]}")
             except Exception as exc:

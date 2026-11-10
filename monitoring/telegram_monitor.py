@@ -12,6 +12,7 @@ from services.stage_control import get_stage_control
 from monitoring.error_alerts import ErrorAlertDispatcher
 from monitoring.source_formatter import format_source_messages
 from monitoring.aboutus import build_aboutus_message, aboutus_keyboard
+from monitoring.qa import build_qa_rich_message
 from monitoring.admin_forward_ingest import ingest_admin_forward, is_forwarded
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
@@ -91,6 +92,7 @@ class TelegramMonitor:
         commands=[
             {"command":"start","description":"فعال‌سازی دریافت گزارش‌ها"},
             {"command":"aboutus","description":"آشنایی با مجموعه ادورتیو و لینک‌ها"},
+            {"command":"qa","description":"سؤالات متداول ارسال بار و مدارک"},
             {"command":"stop","description":"توقف دریافت گزارش‌ها"},
             {"command":"status","description":"نمایش وضعیت فعلی سیستم"},
             {"command":"health","description":"بررسی سلامت فعلی سیستم"},
@@ -184,6 +186,14 @@ class TelegramMonitor:
             and isinstance(chat_id, int) and isinstance(user, dict)
             and user.get("id") == chat_id
         )
+        if public_private and command == "/qa":
+            # Public, read-only Rich Message. Native details expand inside the client;
+            # no callbacks or monitoring subscription are needed.
+            await self._api("sendRichMessage", {
+                "chat_id": chat_id,
+                "rich_message": build_qa_rich_message(),
+            })
+            return
         if public_private and (
             command == "/cargoreport"
             or (command == "/start" and text.split(maxsplit=1)[1:] == ["cargo_weekly"])

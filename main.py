@@ -84,6 +84,14 @@ async def _run():
     if not monitor.enabled:
         print("[TELEGRAM MONITOR] Disabled. Set TELCLAW_TELEGRAM_MONITOR_ENABLED=true and a bot token in .env.")
 
+    # Weekly public report is independent of the AI/crawl/transfer publishing queues.
+    cargo_weekly_task = None
+    if monitor.enabled:
+        from reports.cargo_weekly import run_weekly_publisher
+        cargo_weekly_task = asyncio.create_task(
+            run_weekly_publisher(monitor), name="cargo-weekly-report"
+        )
+
     transfer_publisher = None
     transfer_task = None
     if backoffice_ready or (not config.BACKOFFICE_ENABLED and config.TRANSFER_TELEGRAM_PUBLISH_ENABLED):
@@ -108,6 +116,12 @@ async def _run():
     try:
         await system_ui.run()
     finally:
+        if cargo_weekly_task:
+            cargo_weekly_task.cancel()
+            try:
+                await cargo_weekly_task
+            except asyncio.CancelledError:
+                pass
         if message_manager_task:
             message_manager_task.cancel()
             try:

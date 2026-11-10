@@ -11,7 +11,7 @@ CATEGORY_FIELDS = {
         "availability", "property_condition", "contact", "features",
     ),
     "transferlist": (
-        "title", "description", "origin_city", "origin_province", "origin_country",
+        "title", "description", "transfer_role", "origin_city", "origin_province", "origin_country",
         "destination_city", "destination_province", "destination_country", "airline",
         "flight_number", "departure_date", "departure_time", "arrival_date", "arrival_time",
         "cargo_type", "weight", "weight_unit", "quantity",

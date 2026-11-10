@@ -14,7 +14,7 @@ OUTPUT SCHEMA
 {
   "category":"{category}",
   "data":{"{category}":{
-    "title":null,"description":null,
+    "title":null,"description":null,"transfer_role":null,
     "origin_city":null,"origin_province":null,"origin_country":null,
     "destination_city":null,"destination_province":null,"destination_country":null,
     "airline":null,"flight_number":null,
@@ -26,6 +26,18 @@ OUTPUT SCHEMA
 }
 
 Use exactly these fields. Never add, remove, or rename fields. Unknown or ambiguous values = null.
+
+ROLE
+- transfer_role is "passenger" ONLY when the author explicitly offers to carry
+  cargo, baggage, parcels or documents for others on a journey.
+- transfer_role is "shipper" ONLY when the author explicitly requests a
+  traveler/carrier to transport cargo, baggage, parcels or documents.
+- If the author offers paid transportation as a traveler, choose passenger.
+- A traveler asking to send their own parcel is shipper, not passenger.
+- For a general question, mixed/unclear intent, a travel-only announcement,
+  or unclear author perspective, transfer_role = null.
+- Determine the role from the original message's explicit intent; never
+  infer it from route, location, country, flight or cargo keywords alone.
 
 ROUTE
 - origin_city = departure/loading/source; destination_city = arrival/unloading/target.

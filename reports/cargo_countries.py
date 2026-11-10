@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -143,7 +144,7 @@ def build_country_snapshot(now: datetime | None = None):
         raise ValueError("The snapshot time must include a timezone")
     utc_now = current.astimezone(timezone.utc)
     cutoffs = [utc_now - timedelta(days=days) for days in PERIODS]
-    with database.get_connection() as conn:
+    with closing(database.get_connection()) as conn:
         rows = conn.execute(
             """SELECT m.id, m.channel_username, m.message_id, m.sender_id,
                       m.sender_username, m.date, t.origin_country,

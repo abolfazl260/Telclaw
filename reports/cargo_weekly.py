@@ -1,7 +1,7 @@
 """Weekly Advertio Cargo route intelligence and Telegram Bot API 10.4 widget.
 
-Production widgets are private-chat-only. A normal channel post links to the
-bot's /start cargo_weekly deep link; the actual HTML widget is sent in private.
+Production widgets are private-chat-only. The weekly channel post is a
+button-free summary; the HTML widget remains available in the bot's private chat.
 """
 from __future__ import annotations
 

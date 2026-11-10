@@ -1,7 +1,7 @@
 """Weekly Advertio Cargo route intelligence and Telegram Bot API 10.4 widget.
 
-Production widgets are private-chat-only. A normal channel post links to the
-bot's /start cargo_weekly deep link; the actual HTML widget is sent in private.
+Production widgets are private-chat-only. The weekly channel post is a
+button-free summary; the HTML widget remains available in the bot's private chat.
 """
 from __future__ import annotations
 
@@ -215,35 +215,28 @@ def widget_payload(chat_id, report):
     }
 
 
-def channel_post(report, bot_username: str):
-    """Channel-compatible message: Telegram production rejects channel widgets."""
+def channel_post(report):
+    """Format the public channel summary without buttons or private-chat CTAs."""
     lines = [
-        "<b>📦 گزارش هفتگی مسیرهای کارگو | Advertio</b>",
+        "<b>📦 گزارش هفتگی | Advertio</b>",
         f"📅 {report['start']} تا {report['end']}",
-        f"📊 {report['total']} آگهی یکتا در {report['route_count']} مسیر",
+        f"📊 {report['total']} آگهی در {report['route_count']} مسیر",
         "",
         "<b>پرتکرارترین مسیرهای آگهی‌شده:</b>",
     ]
-    for i, route in enumerate(report["routes"], 1):
-        lines.append(
-            f"{i}. {html.escape(route['name'])} — {route['total']} آگهی "
-            f"(درخواست: {route['shipper']} | مسافر: {route['passenger']})"
-        )
+    for i, route in enumerate(report["routes"][:5], 1):
+        lines.append(f"{i}. {html.escape(route['name'])} — {route['total']} آگهی")
     lines += [
         "",
-        f"نقش نامشخص: {report['unknown']} آگهی",
-        "این اعداد تعداد آگهی‌های پردازش‌شده و یکتا هستند، نه تعداد حمل‌های قطعی.",
+        "@advertio_bot",
+        "@advertio_support",
+        "@advertio_cargo",
     ]
     return {
         "text": "\n".join(lines),
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
-        "reply_markup": {"inline_keyboard": [[{
-            "text": "📊 مشاهده ویجت گزارش",
-            "url": f"https://t.me/{bot_username}?start=cargo_weekly",
-        }]]},
     }
-
 
 def _claim(period_key, channel):
     """Claim before network I/O. Uncertain sends must never be auto-repeated."""
@@ -296,16 +289,12 @@ async def publish_weekly_once(monitor, *, now=None):
     report = await asyncio.to_thread(build_report, current)
     if not report["total"]:
         return False
-    me = await monitor._api("getMe")
-    username = str((me.get("result") or {}).get("username") or "")
-    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-        raise ValueError("Cannot publish cargo widget deep link without bot username")
     target = REPORT_CHANNEL
     if not await asyncio.to_thread(_claim, report["period_key"], target):
         return False
     try:
         result = await monitor._api("sendMessage", {
-            "chat_id": target, **channel_post(report, username)
+            "chat_id": target, **channel_post(report)
         })
         message_id = (result.get("result") or {}).get("message_id")
     except Exception as exc:

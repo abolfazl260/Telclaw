@@ -5,9 +5,13 @@
 Telegram **production** currently supports HTML widgets in **private bot chats only**:
 https://core.telegram.org/bots/widgets
 
-- The channel receives a regular Bot API HTML text post with an inline button to
-  \`https://t.me/<actual_bot_username>?start=cargo_weekly\`.
-- A user opens the bot and presses Start; \`/start cargo_weekly\` or the public
+- The channel receives a **button-free** Bot API HTML text summary, with the
+  reporting dates, total listings, distinct route count, top five route totals,
+  and the three plain mentions `@advertio_bot`, `@advertio_support`, and
+  `@advertio_cargo`.
+- No inline keyboard, widget deep link, breakdown by transfer role, or
+  explanatory footnote is added to the channel post.
+- Users may independently open the bot; \`/start cargo_weekly\` or the public
   \`/cargoreport\` command sends a real \`sendWidget\` message.
 - No Mini App, web server, external scripts or widget network calls are needed.
 - Unsupported/older clients can still read the widget's caption.
@@ -78,5 +82,5 @@ queues, crawlers or AI state.
 
 \`tests/test_cargo_weekly_widget.py\` covers timezone week boundaries, role
 accounting, deduplication, invalid locations, Telegram widget size and data
-limits, the private bot deep link, repeated publishing and ambiguous network
+limits, the button-free channel post, repeated publishing and ambiguous network
 outcomes, and the public/private bot command boundary.

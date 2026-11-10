@@ -87,14 +87,47 @@ def test_widget_payload_is_under_telegram_limits(cargo_db):
     assert "height" not in payload  # Telegram picks natural height instead of clamping 0 to 50px
 
 
-def test_channel_post_has_private_deep_link_and_no_widget(cargo_db):
+def test_channel_post_matches_requested_plain_format_and_has_no_buttons(cargo_db):
     cargo_db(1)
-    payload = cargo_weekly.channel_post(cargo_weekly.build_report(NOW), "AdvertioHelperBot")
-    assert "sendWidget" not in payload
-    assert "آگهی" in payload["text"]
-    assert payload["reply_markup"]["inline_keyboard"][0][0]["url"] == (
-        "https://t.me/AdvertioHelperBot?start=cargo_weekly"
-    )
+    report = cargo_weekly.build_report(NOW)
+    payload = cargo_weekly.channel_post(report)
+    assert payload == {
+        "text": (
+            "<b>📦 گزارش هفتگی | Advertio</b>\n"
+            "📅 2026-11-02 تا 2026-11-08\n"
+            "📊 1 آگهی در 1 مسیر\n\n"
+            "<b>پرتکرارترین مسیرهای آگهی‌شده:</b>\n"
+            "1. \u2066Tehran (IR) → Toronto (CA)\u2069 — 1 آگهی\n\n"
+            "@advertio_bot\n"
+            "@advertio_support\n"
+            "@advertio_cargo"
+        ),
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+    assert "reply_markup" not in payload
+    assert "درخواست:" not in payload["text"]
+    assert "نامشخص:" not in payload["text"]
+    assert "مشاهده ویجت" not in payload["text"]
+
+
+def test_channel_post_escapes_unsafe_names_and_limits_to_five_routes():
+    report = {
+        "start": "2026-11-02",
+        "end": "2026-11-08",
+        "total": 21,
+        "route_count": 6,
+        "routes": [
+            {"name": '<b>Moscow & Dubai</b>', "total": index}
+            for index in range(6, 0, -1)
+        ],
+    }
+    payload = cargo_weekly.channel_post(report)
+    text = payload["text"]
+    assert "&lt;b&gt;Moscow &amp; Dubai&lt;/b&gt;" in text
+    assert text.count(" — ") == 5
+    assert "6. " not in text
+    assert "reply_markup" not in payload
 
 
 @pytest.mark.asyncio
@@ -107,8 +140,8 @@ async def test_weekly_publisher_is_idempotent(cargo_db, monkeypatch):
 
         async def _api(self, method, payload=None):
             calls.append((method, payload))
-            if method == "getMe":
-                return {"result": {"username": "AdvertioHelperBot"}}
+            assert method == "sendMessage"
+            assert "reply_markup" not in payload
             return {"result": {"message_id": 990}}
 
     monitor = Monitor()
@@ -132,8 +165,7 @@ async def test_ambiguous_send_is_not_repeated(cargo_db, monkeypatch):
         enabled = True
 
         async def _api(self, method, payload=None):
-            if method == "getMe":
-                return {"result": {"username": "AdvertioHelperBot"}}
+            assert method == "sendMessage"
             sends.append(payload)
             raise TimeoutError("Telegram reply lost after a possible send")
 

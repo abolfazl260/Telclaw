@@ -98,6 +98,7 @@ class TelegramMonitor:
             {"command":"source","description":"نمایش کانال‌ها و گروه‌های تحت کرال"},
             {"command":"transferlive","description":"نمایش آگهی‌های فعال حمل‌ونقل"},
             {"command":"cargoreport","description":"گزارش هفتگی مسیرهای کارگو"},
+            {"command":"cargocountries","description":"نمودار آگهی‌ها بر اساس کشور مبدأ"},
             {"command":"transfercountry","description":"خلاصه مسیرها بر اساس کشور"},
             {"command":"down_errors","description":"Download crawler error log"},
             {"command":"database","description":"Download full SQLite database"},
@@ -175,8 +176,8 @@ class TelegramMonitor:
             if chat.get("type") == "private" and isinstance(chat_id,int) and isinstance(user,dict) and user.get("id") == chat_id:
                 await self._send_aboutus(chat_id)
             return
-        # /cargoreport and /start cargo_weekly are public ONLY in the
-        # requester's own private chat. Admin-only commands remain unchanged.
+        # Public cargo reports are available ONLY in the requester's own
+        # private chat. Admin-only controls remain unchanged.
         user = message.get("from")
         public_private = (
             not is_forwarded(message) and chat.get("type") == "private"
@@ -195,6 +196,17 @@ class TelegramMonitor:
                 await self._api("sendMessage", {
                     "chat_id": chat_id,
                     "text": "در حال حاضر نمایش گزارش کارگو امکان‌پذیر نیست. بعداً دوباره امتحان کنید.",
+                })
+            return
+        if public_private and command == "/cargocountries":
+            try:
+                from reports.cargo_countries import send_country_report
+                await send_country_report(self, chat_id)
+            except Exception:
+                logger.exception("[CARGO COUNTRIES] private widget failed chat=%s", chat_id)
+                await self._api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "در حال حاضر نمایش نمودار کشورهای مبدأ امکان‌پذیر نیست. بعداً دوباره امتحان کنید.",
                 })
             return
         if not self._is_admin_private_chat(chat,message.get("from")): return

@@ -82,5 +82,5 @@ queues, crawlers or AI state.
 
 \`tests/test_cargo_weekly_widget.py\` covers timezone week boundaries, role
 accounting, deduplication, invalid locations, Telegram widget size and data
-limits, the private bot deep link, repeated publishing and ambiguous network
+limits, the button-free channel post, repeated publishing and ambiguous network
 outcomes, and the public/private bot command boundary.

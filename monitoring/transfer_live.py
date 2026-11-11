@@ -13,6 +13,8 @@ from storage import database
 
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_RICH_MESSAGE_LENGTH = 30000
+MAX_RICH_MESSAGE_BLOCKS = 450  # Telegram permits 500 blocks per rich message.
+PERSIAN_DIGITS = str.maketrans("0123456789,", "۰۱۲۳۴۵۶۷۸۹٬")
 AD_SUBMISSION_DRAFT = "سلام وقت بخیر درخواست ثبت آگهی ارسال بار/مسافر داشتم در کانال Advertio"
 FLIGHT_BOT_QUOTE = (
     "✈️ با ربات ویزا و پرواز ادورتیو، بلیط پرواز از مبدأ ایران رو بدون واسطه "
@@ -260,7 +262,15 @@ def _cell(text: str, *, header: bool = False, align: str = "right") -> str:
     return f"<{tag} align=\"{align}\">{html.escape(str(text))}</{tag}>"
 
 
-def _origin_table(origin: str, rows, today: date) -> str:
+def _fa_number(value: int) -> str:
+    return f"{value:,}".translate(PERSIAN_DIGITS)
+
+
+def _origin_table(
+    origin: str, rows, today: date, *, total_count: int | None = None,
+    part_number: int | None = None,
+) -> str:
+    """Render one closed, native Telegram details block for an origin."""
     table_rows = [
         "<tr>"
         + _cell("کاربر", header=True)
@@ -270,7 +280,6 @@ def _origin_table(origin: str, rows, today: date) -> str:
         + _cell("مانده", header=True, align="center")
         + "</tr>"
     ]
-
     for row in rows:
         username = str(row["sender_username"] or "").strip()
         username = username if username.startswith("@") else (f"@{username}" if username else "بدون یوزرنیم")
@@ -285,59 +294,103 @@ def _origin_table(origin: str, rows, today: date) -> str:
             + "</tr>"
         )
 
+    count = len(rows) if total_count is None else total_count
+    part_label = f" (بخش {_fa_number(part_number)})" if part_number is not None else ""
     return (
-        f"<h3>📍 از مبدا {html.escape(origin)}</h3>"
-        f"<table bordered striped compact>"
-        f"<caption>{len(rows)} آگهی فعال</caption>"
+        "<details><summary>"
+        f"📍 از مبدا {html.escape(origin)} — <b>{_fa_number(count)}</b> آگهی فعال{part_label}"
+        "</summary>"
+        "<table bordered striped compact>"
+        f"<caption>{_fa_number(len(rows))} آگهی فعال</caption>"
         f"{''.join(table_rows)}"
-        f"</table>"
+        "</table></details>"
+    )
+
+
+def _live_header(total: int, origin_count: int, published_30: int, due_tomorrow: int) -> str:
+    """All counts come from the report's live, de-duplicated cohorts."""
+    return (
+        "<h1>🟢 آگهی های فعال Advertio</h1>"
+        f"<p>📊 <b>{_fa_number(total)}</b> آگهی در <b>{_fa_number(origin_count)}</b> مبدا فعال می باشند</p>"
+        f"<p>📊 <b>{_fa_number(published_30)}</b> آگهی ارسال بار در <b>۳۰</b> روز گذشته منتشر شده است</p>"
+        '<p>📊 جهت ثبت آگهی از ربات ادورتیو '
+        '<a href="https://t.me/advertio_bot">@advertio_bot</a> اقدام نمایید</p>'
+        f"<p>📊 <b>{_fa_number(due_tomorrow)}</b> آگهی تا فردا منقضی و پرواز خواهند کرد</p>"
+        '<p>جهت ارتباط با پشتیبانی '
+        '<a href="https://t.me/advertio_support">@advertio_support</a></p>'
+        "<hr/>"
     )
 
 
 def _build_messages():
-    # A usable route requires both countries. City is optional; when it is
-    # missing the destination cell shows a dash alongside the country flag.
+    # Use the same valid-country, de-duplicated cohort for the active total,
+    # origin totals and departures through the end of tomorrow (Tehran time).
     rows = [
         row for row in _fetch_active_rows()
         if _country_code(row["origin_country"]) and _country_code(row["destination_country"])
     ]
     today = datetime.now(TEHRAN_TZ).date()
+    tomorrow = today + timedelta(days=1)
+    due_tomorrow = sum(
+        1 for row in rows
+        if (departure := _dual_date(row["departure_date"])[2]) is not None
+        and today <= departure <= tomorrow
+    )
 
     groups = OrderedDict()
     for row in rows:
         groups.setdefault(_origin_label(row), []).append(row)
 
-    if not groups:
-        return [
-            {
-                "html": (
-                    "<h1>🟢 آگهی های فعال</h1>"
-                    "<p>⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد.</p>"
-                )
-            }
-        ]
-
-    total = len(rows)
+    published_30 = _fetch_published_transfer_stats()["last_30_days"]
+    prefix = _live_header(len(rows), len(groups), published_30, due_tomorrow)
     generated = datetime.now(TEHRAN_TZ).strftime("%Y-%m-%d %H:%M")
+    suffix = "<hr/>" + f"<p>🕐 <b>آخرین بروزرسانی:</b> {generated} تهران</p>"
 
-    prefix = (
-        "<h1>🟢 آگهی های فعال</h1>"
-        f"<p><b>📊 خلاصه وضعیت</b> — <b>{total}</b> آگهی در <b>{len(groups)}</b> مبدا</p>"
-        "<hr/>"
-    )
-    suffix = (
-        "<hr/>"
-        f"<p>🕐 <b>آخرین بروزرسانی:</b> {generated} تهران</p>"
-    )
+    if not groups:
+        return [{"html": prefix + "<p>⚠️ در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد.</p>" + suffix}]
+
+    def fits(message: str) -> bool:
+        # Be conservative: Unicode and HTML markup also consume the API limit.
+        return len(message.encode("utf-8")) <= MAX_RICH_MESSAGE_LENGTH
 
     chunks = []
     current = prefix
+    # Count each details, table and its rows with a small safety margin.
+    current_blocks = 12
     for origin, origin_rows in groups.items():
-        section = _origin_table(origin, origin_rows, today)
-        if len(current) + len(section) + len(suffix) > MAX_RICH_MESSAGE_LENGTH and current != prefix:
-            chunks.append({"html": current + suffix})
-            current = prefix
-        current += section
+        # An unusually busy single origin must not exceed Telegram's limits.
+        batches = []
+        batch = []
+        for row in origin_rows:
+            proposed = batch + [row]
+            preview = _origin_table(origin, proposed, today, total_count=len(origin_rows))
+            if batch and (
+                not fits(prefix + preview + suffix + (" " * 512))
+                or len(proposed) + 16 > MAX_RICH_MESSAGE_BLOCKS
+            ):
+                batches.append(batch)
+                batch = [row]
+            else:
+                batch = proposed
+        if batch:
+            batches.append(batch)
+
+        for index, batch in enumerate(batches, 1):
+            section = _origin_table(
+                origin, batch, today, total_count=len(origin_rows),
+                part_number=index if len(batches) > 1 else None,
+            )
+            section_blocks = len(batch) + 4
+            if current != prefix and (
+                not fits(current + section + suffix)
+                or current_blocks + section_blocks > MAX_RICH_MESSAGE_BLOCKS
+            ):
+                chunks.append({"html": current + suffix})
+                current = prefix
+                current_blocks = 12
+            current += section
+            current_blocks += section_blocks
+
     chunks.append({"html": current + suffix})
     return chunks
 

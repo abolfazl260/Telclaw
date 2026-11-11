@@ -39,11 +39,15 @@ def test_transferlive_excludes_unknown_countries_and_updates_counts(monkeypatch)
         _row(6, destination="XX", city="Berlin"),
     ])
 
+    monkeypatch.setattr(transfer_live, "_fetch_published_transfer_stats", lambda: {"last_30_days": 246})
     messages = transfer_live._build_messages()
     assert len(messages) == 1
     html = messages[0]["html"]
-    assert "<b>2</b> آگهی در <b>1</b> مبدا" in html
-    assert "<caption>2 آگهی فعال</caption>" in html
+    assert "<b>۲</b> آگهی در <b>۱</b> مبدا" in html
+    assert "<caption>۲ آگهی فعال</caption>" in html
+    assert "<details><summary>📍 از مبدا 🇮🇷 Iran — <b>۲</b> آگهی فعال</summary>" in html
+    assert "</table></details>" in html
+    assert "<b>۲۴۶</b> آگهی ارسال بار در <b>۳۰</b> روز گذشته منتشر شده است" in html
     assert "🇩🇪 —" in html
     assert "🇩🇪 Düsseldorf" in html
     assert "نامشخص" not in html
@@ -57,6 +61,7 @@ def test_transferlive_empty_state_when_no_known_country(monkeypatch):
         _row(1, destination=None),
         _row(2, origin=None),
     ])
+    monkeypatch.setattr(transfer_live, "_fetch_published_transfer_stats", lambda: {"last_30_days": 0})
     html = transfer_live._build_messages()[0]["html"]
     assert "در حال حاضر آگهی فعال حمل‌ونقل وجود ندارد" in html
     assert "<table" not in html
@@ -73,3 +78,46 @@ def test_country_summary_skips_invalid_codes_but_keeps_valid_unlisted_codes():
         _row(6, origin="IR", destination="AU"),
     ])
     assert summary == [(("IR", "AU"), 1), (("IR", "DE"), 1)]
+
+
+def test_live_header_uses_dynamic_departures_and_linked_contacts(monkeypatch):
+    from datetime import datetime, timedelta
+
+    today = datetime.now(transfer_live.TEHRAN_TZ).date()
+    entries = [
+        {**_row(1), "departure_date": today.isoformat()},
+        {**_row(2), "departure_date": (today + timedelta(days=1)).isoformat()},
+        {**_row(3), "departure_date": (today + timedelta(days=2)).isoformat()},
+        {**_row(4), "departure_date": (today + timedelta(days=20)).isoformat()},
+    ]
+    monkeypatch.setattr(transfer_live, "_fetch_active_rows", lambda: entries)
+    monkeypatch.setattr(transfer_live, "_fetch_published_transfer_stats", lambda: {"last_30_days": 246})
+    html = transfer_live._build_messages()[0]["html"]
+    assert "<h1>🟢 آگهی های فعال Advertio</h1>" in html
+    assert "<b>۴</b> آگهی در <b>۱</b> مبدا" in html
+    assert "<b>۲</b> آگهی تا فردا منقضی و پرواز خواهند کرد" in html
+    assert '<a href="https://t.me/advertio_bot">@advertio_bot</a>' in html
+    assert '<a href="https://t.me/advertio_support">@advertio_support</a>' in html
+    assert "<tg-button" not in html
+
+
+def test_live_accordion_chunks_are_complete_and_within_limits(monkeypatch):
+    from datetime import datetime, timedelta
+
+    date = (datetime.now(transfer_live.TEHRAN_TZ).date() + timedelta(days=30)).isoformat()
+    entries = [
+        {**_row(i, city="Moscow & Dubai"), "departure_date": date,
+         "sender_username": f"long_username_{i:04d}" + "x" * 32}
+        for i in range(1, 450)
+    ]
+    monkeypatch.setattr(transfer_live, "_fetch_active_rows", lambda: entries)
+    monkeypatch.setattr(transfer_live, "_fetch_published_transfer_stats", lambda: {"last_30_days": 0})
+    chunks = transfer_live._build_messages()
+    assert len(chunks) > 1
+    assert all(len(chunk["html"].encode("utf-8")) <= transfer_live.MAX_RICH_MESSAGE_LENGTH for chunk in chunks)
+    assert all(chunk["html"].count("<details>") == chunk["html"].count("</details>") for chunk in chunks)
+    assert all(chunk["html"].count("<table ") == chunk["html"].count("</table>") for chunk in chunks)
+    combined = "".join(chunk["html"] for chunk in chunks)
+    assert combined.count("<td ") == 449 * 5
+    assert "Moscow &amp; Dubai" in combined
+    assert "بخش ۱" in combined and "بخش ۲" in combined

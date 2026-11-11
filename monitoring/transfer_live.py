@@ -299,10 +299,10 @@ def _origin_table(
     part_label = f" (بخش {_fa_number(part_number)})" if part_number is not None else ""
     return (
         "<details><summary>"
-        f"📍 از مبدا {html.escape(origin)} — <b>{_fa_number(count)}</b> آگهی فعال{part_label}"
+        f"📍 از مبدا {html.escape(origin)} — <b>{_fa_number(count)}</b> آگهی{part_label}"
         "</summary>"
         "<table bordered striped compact>"
-        f"<caption>{_fa_number(len(rows))} آگهی فعال</caption>"
+        f"<caption>{_fa_number(len(rows))} آگهی</caption>"
         f"{''.join(table_rows)}"
         "</table></details>"
     )

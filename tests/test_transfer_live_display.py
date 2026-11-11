@@ -44,8 +44,8 @@ def test_transferlive_excludes_unknown_countries_and_updates_counts(monkeypatch)
     assert len(messages) == 1
     html = messages[0]["html"]
     assert "<b>۲</b> آگهی در <b>۱</b> مبدا" in html
-    assert "<caption>۲ آگهی فعال</caption>" in html
-    assert "<details><summary>📍 از مبدا 🇮🇷 Iran — <b>۲</b> آگهی فعال</summary>" in html
+    assert "<caption>۲ آگهی</caption>" in html
+    assert "<details><summary>📍 از مبدا 🇮🇷 Iran — <b>۲</b> آگهی</summary>" in html
     assert "</table></details>" in html
     assert "<b>۲۴۶</b> آگهی ارسال بار در <b>۳۰</b> روز گذشته منتشر شده است" in html
     assert "🇩🇪 —" in html

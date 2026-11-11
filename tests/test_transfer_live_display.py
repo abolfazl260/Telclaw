@@ -114,6 +114,9 @@ def test_live_accordion_chunks_are_complete_and_within_limits(monkeypatch):
     monkeypatch.setattr(transfer_live, "_fetch_published_transfer_stats", lambda: {"last_30_days": 0})
     chunks = transfer_live._build_messages()
     assert len(chunks) > 1
+    assert chunks[0]["html"].count("<h1>") == 1
+    assert all("<h1>" not in part["html"] for part in chunks[1:])
+    assert all(part["html"].count("<details>") <= transfer_live.MAX_ORIGINS_PER_MESSAGE for part in chunks)
     assert all(len(chunk["html"].encode("utf-8")) <= transfer_live.MAX_RICH_MESSAGE_LENGTH for chunk in chunks)
     assert all(chunk["html"].count("<details>") == chunk["html"].count("</details>") for chunk in chunks)
     assert all(chunk["html"].count("<table ") == chunk["html"].count("</table>") for chunk in chunks)
@@ -121,3 +124,52 @@ def test_live_accordion_chunks_are_complete_and_within_limits(monkeypatch):
     assert combined.count("<td ") == 449 * 5
     assert "Moscow &amp; Dubai" in combined
     assert "بخش ۱" in combined and "بخش ۲" in combined
+
+
+
+def test_live_report_splits_every_eight_origins_without_repeating_header(monkeypatch):
+    codes = [
+        "IR", "DE", "TR", "CA", "US", "GB", "FR", "IT",
+        "ES", "NL", "BE", "AT", "CH", "SE", "NO", "DK",
+        "FI", "PL", "GR", "RU",
+    ]
+    monkeypatch.setattr(
+        transfer_live, "_fetch_active_rows",
+        lambda: [_row(i, origin=country) for i, country in enumerate(codes, 1)],
+    )
+    monkeypatch.setattr(
+        transfer_live, "_fetch_published_transfer_stats",
+        lambda: {"last_30_days": 246},
+    )
+    messages = transfer_live._build_messages()
+    assert [msg["html"].count("<details>") for msg in messages] == [8, 8, 4]
+    assert "🟢 آگهی های فعال Advertio" in messages[0]["html"]
+    assert "<b>۲۰</b> مبدا" in messages[0]["html"]
+    assert "۲۴۶" in messages[0]["html"]
+    assert all(msg["html"].startswith("<details>") for msg in messages[1:])
+    assert all("🟢 آگهی های فعال Advertio" not in msg["html"] for msg in messages[1:])
+    assert all("@advertio_bot" not in msg["html"] for msg in messages[1:])
+    assert all("آخرین بروزرسانی" not in msg["html"] for msg in messages[1:])
+    assert all(
+        len(msg["html"].encode("utf-8")) <= transfer_live.MAX_RICH_MESSAGE_LENGTH
+        for msg in messages
+    )
+    combined = "".join(msg["html"] for msg in messages)
+    assert combined.count("<details>") == combined.count("</details>") == 20
+    for i in range(1, 21):
+        assert combined.count(f"<td align=\"right\">@user{i}</td>") == 1
+
+
+def test_live_report_exactly_eight_origins_keeps_single_message(monkeypatch):
+    codes = ["IR", "DE", "TR", "CA", "US", "GB", "FR", "IT"]
+    monkeypatch.setattr(
+        transfer_live, "_fetch_active_rows",
+        lambda: [_row(i, origin=code) for i, code in enumerate(codes, 1)],
+    )
+    monkeypatch.setattr(
+        transfer_live, "_fetch_published_transfer_stats",
+        lambda: {"last_30_days": 0},
+    )
+    messages = transfer_live._build_messages()
+    assert len(messages) == 1
+    assert messages[0]["html"].count("<details>") == 8

@@ -299,29 +299,28 @@ def _origin_table(
     part_label = f" (بخش {_fa_number(part_number)})" if part_number is not None else ""
     return (
         "<details><summary>"
-        f"📍 از مبدا {html.escape(origin)} — <b>{_fa_number(count)}</b> آگهی{part_label}"
+        f"📍 از مبدا {html.escape(origin)} — <b>{_fa_number(count)}</b>{part_label}"
         "</summary>"
         "<table bordered striped compact>"
-        f"<caption>{_fa_number(len(rows))} آگهی</caption>"
         f"{''.join(table_rows)}"
         "</table></details>"
     )
 
 
 def _live_header(total: int, origin_count: int, published_30: int, due_tomorrow: int) -> str:
-    """All counts come from the report's live, de-duplicated cohorts."""
+    """Render the concise Persian report heading with live aggregate counts."""
     return (
-        "<h1>🟢 آگهی های فعال Advertio</h1>"
-        f"<p>📊 <b>{_fa_number(total)}</b> آگهی در <b>{_fa_number(origin_count)}</b> مبدا فعال می باشند</p>"
-        f"<p>📊 <b>{_fa_number(published_30)}</b> آگهی ارسال بار در <b>۳۰</b> روز گذشته منتشر شده است</p>"
-        '<p>📊 جهت ثبت آگهی از ربات ادورتیو '
-        '<a href="https://t.me/advertio_bot">@advertio_bot</a> اقدام نمایید</p>'
-        f"<p>📊 <b>{_fa_number(due_tomorrow)}</b> آگهی تا فردا منقضی و پرواز خواهند کرد</p>"
-        '<p>جهت ارتباط با پشتیبانی '
+        "<h1>🟢 آگهی‌های فعال | Advertio</h1>"
+        f"<p>📦 <b>{_fa_number(total)} مسافر فعال</b> در <b>{_fa_number(origin_count)} مبدأ</b></p>"
+        f"<p>📊 <b>{_fa_number(published_30)} آگهی</b> منتشرشده در ۳۰ روز گذشته</p>"
+        f"<p>⏳ <b>{_fa_number(due_tomorrow)} آگهی</b> با تاریخ پرواز تا پایان فردا</p>"
+        "<hr/>"
+        '<p>📝 <b>ثبت آگهی:</b> '
+        '<a href="https://t.me/advertio_bot">@advertio_bot</a></p>'
+        '<p>💬 <b>پشتیبانی:</b> '
         '<a href="https://t.me/advertio_support">@advertio_support</a></p>'
         "<hr/>"
     )
-
 
 def _build_messages():
     # Use the same valid-country, de-duplicated cohort for the active total,

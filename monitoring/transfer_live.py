@@ -14,6 +14,7 @@ from storage import database
 TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 MAX_RICH_MESSAGE_LENGTH = 30000
 MAX_RICH_MESSAGE_BLOCKS = 450  # Telegram permits 500 blocks per rich message.
+MAX_ORIGINS_PER_MESSAGE = 8
 PERSIAN_DIGITS = str.maketrans("0123456789,", "۰۱۲۳۴۵۶۷۸۹٬")
 AD_SUBMISSION_DRAFT = "سلام وقت بخیر درخواست ثبت آگهی ارسال بار/مسافر داشتم در کانال Advertio"
 FLIGHT_BOT_QUOTE = (
@@ -355,8 +356,10 @@ def _build_messages():
 
     chunks = []
     current = prefix
-    # Count each details, table and its rows with a small safety margin.
+    # The header/summary and update timestamp appear only on the first page.
     current_blocks = 12
+    current_origins = 0
+    last_origin = None
     for origin, origin_rows in groups.items():
         # An unusually busy single origin must not exceed Telegram's limits.
         batches = []
@@ -381,19 +384,28 @@ def _build_messages():
                 part_number=index if len(batches) > 1 else None,
             )
             section_blocks = len(batch) + 4
-            if current != prefix and (
-                not fits(current + section + suffix)
+            new_origin = origin != last_origin
+            prospective = current + section + (suffix if not chunks else "")
+            if current_origins and (
+                current_origins + int(new_origin) > MAX_ORIGINS_PER_MESSAGE
+                or not fits(prospective)
                 or current_blocks + section_blocks > MAX_RICH_MESSAGE_BLOCKS
             ):
-                chunks.append({"html": current + suffix})
-                current = prefix
-                current_blocks = 12
+                chunks.append({"html": current + (suffix if not chunks else "")})
+                current = ""
+                current_blocks = 0
+                current_origins = 0
+                last_origin = None
+                new_origin = True
+
             current += section
             current_blocks += section_blocks
+            if new_origin:
+                current_origins += 1
+            last_origin = origin
 
-    chunks.append({"html": current + suffix})
+    chunks.append({"html": current + (suffix if not chunks else "")})
     return chunks
-
 
 def _country_report_header(active: int, published: dict) -> str:
     """Render live counters as a compact Heading 5 Rich Message header."""

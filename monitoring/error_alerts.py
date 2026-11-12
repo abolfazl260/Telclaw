@@ -114,7 +114,9 @@ class ErrorAlertDispatcher:
                 )
                 if context and context.get("original_message_id") is not None:
                     signature += (
-                        "\noriginal_message_id="
+                        "\noriginal_channel_username="
+                        + str(context.get("original_channel_username") or "")
+                        + "\noriginal_message_id="
                         + str(context["original_message_id"])
                     )
                 key = (level, source, signature)

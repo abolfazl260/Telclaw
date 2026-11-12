@@ -331,3 +331,33 @@ def test_original_message_chunks_respect_telegram_utf16_limit():
         sum(2 if ord(character) > 0xFFFF else 1 for character in chunk) <= 3500
         for chunk in chunks
     )
+
+@pytest.mark.asyncio
+async def test_validation_alert_deduplication_scopes_message_ids_to_channels():
+    reports = []
+
+    class FakeMonitor:
+        async def error(self, level, source, message, context=None):
+            reports.append((level, source, message, context))
+
+    dispatcher = ErrorAlertDispatcher(FakeMonitor())
+    dispatcher.start()
+    try:
+        for channel in ("first_channel", "second_channel"):
+            dispatcher.submit(
+                "WARNING",
+                "telclaw.advertio.validation",
+                "Rejected message_id=42 detail=missing city",
+                context={
+                    "original_message_text": f"Listing from {channel}",
+                    "original_channel_username": channel,
+                    "original_message_id": 42,
+                },
+            )
+        await asyncio.wait_for(dispatcher.queue.join(), timeout=2)
+        assert len(reports) == 2
+        assert {item[3]["original_channel_username"] for item in reports} == {
+            "first_channel", "second_channel"
+        }
+    finally:
+        await dispatcher.stop()

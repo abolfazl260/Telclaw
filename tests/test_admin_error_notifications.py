@@ -265,3 +265,69 @@ async def test_opted_in_validation_warning_is_sent_but_other_warnings_are_not(mo
     finally:
         root.setLevel(original_root_level)
         await monitor.stop()
+
+@pytest.mark.asyncio
+async def test_validation_warning_sends_original_message_and_source_link(monitor_db, monkeypatch):
+    monitor = TelegramMonitor()
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+        return {"ok": True, "result": []}
+
+    async def idle_poll():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    monkeypatch.setattr(monitor, "_poll_updates", idle_poll)
+    await monitor.start()
+    root = logging.getLogger()
+    original_root_level = root.level
+    root.setLevel(logging.ERROR)
+    source = logging.getLogger("telclaw.advertio.validation")
+    original_text = "Apartment available <today> & ready to move in."
+    try:
+        source.warning(
+            "[ADVERTIO VALIDATION WARNING] status=rejected message_id=184923 "
+            "channel=canada_homes detail=Required fields missing: city",
+            extra={
+                "notify_admin": True,
+                "original_message_text": original_text,
+                "original_message_link": "https://t.me/canada_homes/184923",
+                "original_message_id": 184923,
+                "original_channel_username": "canada_homes",
+            },
+        )
+        await asyncio.sleep(0.03)
+        await asyncio.wait_for(monitor._error_dispatcher.queue.join(), timeout=2)
+
+        notifications = [
+            payload for method, payload in calls if method == "sendMessage"
+        ]
+        assert len(notifications) == 2 * len(ADMIN_USER_IDS)
+        for admin_id in ADMIN_USER_IDS:
+            admin_messages = [
+                item["text"] for item in notifications
+                if item["chat_id"] == admin_id
+            ]
+            assert len(admin_messages) == 2
+            assert "Telclaw System Warning" in admin_messages[0]
+            assert "Original Telegram Message" in admin_messages[1]
+            assert "Apartment available &lt;today&gt; &amp; ready to move in." in (
+                admin_messages[1]
+            )
+            assert 'href="https://t.me/canada_homes/184923"' in admin_messages[1]
+    finally:
+        root.setLevel(original_root_level)
+        await monitor.stop()
+
+
+def test_original_message_chunks_respect_telegram_utf16_limit():
+    original = "A" * 3499 + "🙂" * 700 + "END"
+    chunks = TelegramMonitor._split_original_message(original)
+    assert len(chunks) > 1
+    assert "".join(chunks) == original
+    assert all(
+        sum(2 if ord(character) > 0xFFFF else 1 for character in chunk) <= 3500
+        for chunk in chunks
+    )

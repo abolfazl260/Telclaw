@@ -17,7 +17,7 @@ REPEAT_WINDOW_SECONDS = 300
 MAX_TRACKED_SIGNATURES = 512
 
 
-def redact_secrets(value):
+def redact_secrets(value, *, max_length=3000):
     message = str(value)
     credentials = [
         getattr(config, name, "") for name in (
@@ -36,7 +36,7 @@ def redact_secrets(value):
         key=len, reverse=True,
     ):
         message = message.replace(credential, "[REDACTED]")
-    return message[:3000]
+    return message[:max_length]
 
 
 class ErrorAlertDispatcher:
@@ -57,37 +57,66 @@ class ErrorAlertDispatcher:
     def start(self):
         self.task = self.loop.create_task(self._drain(), name="telclaw-admin-error-alerts")
 
-    def submit(self, level, source, message):
+    def submit(self, level, source, message, context=None):
         """May be called from any thread; dispatch onto the event loop."""
         if self.stopped or self.loop.is_closed():
             return
+        safe_context = None
+        if isinstance(context, dict):
+            original_text = context.get("original_message_text")
+            if isinstance(original_text, str) and original_text:
+                safe_context = {
+                    "original_message_text": redact_secrets(
+                        original_text, max_length=4096
+                    )
+                }
+                for key, limit in (
+                    ("original_message_id", 64),
+                    ("original_channel_username", 128),
+                ):
+                    value = context.get(key)
+                    if value is not None:
+                        safe_context[key] = str(value)[:limit]
+                link = context.get("original_message_link")
+                if (
+                    isinstance(link, str)
+                    and link.startswith("https://t.me/")
+                    and len(link) <= 500
+                    and not any(ord(character) < 32 for character in link)
+                ):
+                    safe_context["original_message_link"] = link
+
         try:
-            self.loop.call_soon_threadsafe(self._enqueue, level, source, redact_secrets(message))
+            self.loop.call_soon_threadsafe(
+                self._enqueue, level, source, redact_secrets(message), safe_context
+            )
         except RuntimeError:
             # A shutdown race should not interrupt file logging.
             pass
 
-    def _enqueue(self, level, source, message):
+    def _enqueue(self, level, source, message, context=None):
         if self.stopped:
             return
         try:
-            self.queue.put_nowait((level, source, message))
+            self.queue.put_nowait((level, source, message, context))
         except asyncio.QueueFull:
             self.dropped += 1
 
     async def _drain(self):
         while True:
-            level, source, message = await self.queue.get()
+            level, source, message, context = await self.queue.get()
             try:
-                # Deduplication affects Telegram notifications, not normal file
-                # logs. The first occurrence is always forwarded.
-                # Per-record failures often include a unique message_id.
-                # Group those notifications by error type/source, while keeping
-                # the original ID in the first delivered alert.
+                # Deduplicate repeated failures, but keep each source listing's
+                # validation warning distinct so its original message is delivered.
                 signature = re.sub(
                     r"\b(message_id|record_id|telegram_message_id)\s*=\s*[^\s,|]+",
                     r"\1=*", message, flags=re.IGNORECASE,
                 )
+                if context and context.get("original_message_id") is not None:
+                    signature += (
+                        "\noriginal_message_id="
+                        + str(context["original_message_id"])
+                    )
                 key = (level, source, signature)
                 now = time.monotonic()
                 last = self.last_sent.get(key)
@@ -103,7 +132,10 @@ class ErrorAlertDispatcher:
                         self.suppressed.pop(old, None)
                 if repeats:
                     message += f"\nSimilar errors suppressed: {repeats}"
-                await self.monitor.error(level, source, message)
+                if context:
+                    await self.monitor.error(level, source, message, context=context)
+                else:
+                    await self.monitor.error(level, source, message)
                 if self.dropped:
                     dropped = self.dropped
                     self.dropped = 0

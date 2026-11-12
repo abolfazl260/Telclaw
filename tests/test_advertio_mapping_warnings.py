@@ -32,6 +32,7 @@ def _record():
         "message_id": 184923,
         "channel_username": "canada_homes",
         "message_link": "https://t.me/canada_homes/184923",
+        "raw_text": "Apartment for rent in Toronto. Contact me for details.",
         "media_type": None,
         "housing_data": {
             "listing_type": "rent",
@@ -57,6 +58,12 @@ def _assert_validation_warning(caplog):
     assert warning.levelno == logging.WARNING
     assert getattr(warning, "notify_admin", False) is True
     assert warning.exc_info is None
+    assert warning.original_message_text == (
+        "Apartment for rent in Toronto. Contact me for details."
+    )
+    assert warning.original_message_link == "https://t.me/canada_homes/184923"
+    assert warning.original_message_id == 184923
+    assert warning.original_channel_username == "canada_homes"
     assert "message_id=184923" in warning.getMessage()
     for field in ("bedrooms", "price", "currency=CAD", "province", "city"):
         assert field in warning.getMessage()

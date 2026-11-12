@@ -285,6 +285,7 @@ async def test_validation_warning_sends_original_message_and_source_link(monitor
     original_root_level = root.level
     root.setLevel(logging.ERROR)
     source = logging.getLogger("telclaw.advertio.validation")
+    source.setLevel(logging.WARNING)
     original_text = "Apartment available <today> & ready to move in."
     try:
         source.warning(
@@ -354,6 +355,7 @@ async def test_validation_alert_deduplication_scopes_message_ids_to_channels():
                     "original_message_id": 42,
                 },
             )
+        await asyncio.sleep(0.03)
         await asyncio.wait_for(dispatcher.queue.join(), timeout=2)
         assert len(reports) == 2
         assert {item[3]["original_channel_username"] for item in reports} == {

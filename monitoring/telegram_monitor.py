@@ -73,7 +73,21 @@ class _TelegramErrorHandler(logging.Handler):
         message = self.format(record)
         if record.exc_info and record.exc_info[1] is not None:
             message += f" | {type(record.exc_info[1]).__name__}: {record.exc_info[1]}"
-        dispatcher.submit(record.levelname, record.name, message)
+        context = {}
+        original_text = getattr(record, "original_message_text", None)
+        if isinstance(original_text, str) and original_text:
+            context["original_message_text"] = original_text
+            for key in (
+                "original_message_link",
+                "original_message_id",
+                "original_channel_username",
+            ):
+                value = getattr(record, key, None)
+                if value is not None:
+                    context[key] = value
+        dispatcher.submit(
+            record.levelname, record.name, message, context=context or None
+        )
 
 class TelegramMonitor:
     def __init__(self):
@@ -422,7 +436,57 @@ class TelegramMonitor:
                 # Do not recursively report failures inside the notifier.
                 logger.warning("Telegram admin error alert failed for admin %s", admin_id)
 
-    async def error(self,level,source,message):
+    @staticmethod
+    def _split_original_message(text, max_utf16_units=3500):
+        """Split source text safely below Telegram's UTF-16 message limit."""
+        chunks = []
+        current = []
+        current_units = 0
+        for character in text:
+            units = 2 if ord(character) > 0xFFFF else 1
+            if current and current_units + units > max_utf16_units:
+                chunks.append("".join(current))
+                current = []
+                current_units = 0
+            current.append(character)
+            current_units += units
+        if current:
+            chunks.append("".join(current))
+        return chunks
+
+    async def _broadcast_original_message(self, context):
+        original_text = context.get("original_message_text")
+        if not isinstance(original_text, str) or not original_text:
+            return
+
+        chunks = self._split_original_message(original_text)
+        channel = str(context.get("original_channel_username") or "").strip()
+        message_id = str(context.get("original_message_id") or "").strip()
+        message_link = context.get("original_message_link")
+        metadata = []
+        if channel:
+            metadata.append(
+                f"📡 <b>Channel:</b> @{html.escape(channel.lstrip('@'))}"
+            )
+        if message_id:
+            metadata.append(f"🆔 <b>Message ID:</b> {html.escape(message_id)}")
+        if (
+            isinstance(message_link, str)
+            and message_link.startswith("https://t.me/")
+        ):
+            metadata.append(
+                f'🔗 <a href="{html.escape(message_link, quote=True)}">'
+                "Open original message</a>"
+            )
+
+        for index, chunk in enumerate(chunks, start=1):
+            title = "📝 <b>Original Telegram Message</b>"
+            if len(chunks) > 1:
+                title += f" ({index}/{len(chunks)})"
+            lines = [title, *metadata, "", f"<pre>{html.escape(chunk)}</pre>"]
+            await self.broadcast_admin_errors("\n".join(lines))
+
+    async def error(self,level,source,message,context=None):
         is_warning = str(level).upper() == "WARNING"
         kind = "warning" if is_warning else "error"
         heading = "⚠️ Telclaw System Warning" if is_warning else "🚨 Telclaw System Error"
@@ -430,7 +494,16 @@ class TelegramMonitor:
             database.record_system_activity(kind,level,source,str(message)[:4000])
         except Exception:
             logger.exception("Failed to persist system alert activity")
-        await self.broadcast_admin_errors(f"<b>{heading}</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
+        alert = (
+            f"<b>{heading}</b>\n\n"
+            f"<b>Level:</b> {html.escape(level)}\n"
+            f"<b>Source:</b> {html.escape(source)}\n"
+            f"<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n"
+            f"<pre>{html.escape(message[:3500])}</pre>"
+        )
+        await self.broadcast_admin_errors(alert)
+        if context:
+            await self._broadcast_original_message(context)
     async def report(self,kind,stats):
         try:
             database.record_system_activity(kind,"INFO","telegram_monitor",f"{kind} report",stats)

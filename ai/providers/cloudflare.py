@@ -182,7 +182,7 @@ class CloudflareProvider(AIProvider):
                 with self.rate_limiter.slot():
                     response = requests.post(self.endpoint, headers={"Authorization": f"Bearer {self.api_token}", "Content-Type": "application/json"}, json=payload, timeout=self.timeout)
             except requests.RequestException as exc:
-                self._cooldowns.block(self.active_index, config.AI_COOLDOWN_SECONDS)
+                self._cooldowns.block(self.active_index, config.AI_COOLDOWN_SECONDS, cause="network_error")
                 next_index = self._next_available()
                 if next_index is not None and attempts < attempt_budget:
                     logger.warning("Cloudflare account failover: from=%s to=%s reason=network_error",
@@ -204,7 +204,7 @@ class CloudflareProvider(AIProvider):
                     if retry_after is not None and retry_after > 0:
                         cooldown = retry_after
                     # Mark even the final account before a wrapped search.
-                    self._cooldowns.block(self.active_index, cooldown)
+                    self._cooldowns.block(self.active_index, cooldown, cause=reason)
                     next_index = self._next_available()
                 if next_index is not None and attempts < attempt_budget:
                     logger.warning("Cloudflare account failover: from=%s to=%s reason=%s",

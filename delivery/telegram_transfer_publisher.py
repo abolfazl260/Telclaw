@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime
-from urllib.parse import quote
 
 import aiohttp
 
@@ -13,13 +12,6 @@ from storage import database
 from storage.data_normalizer import normalize_category_data
 
 logger = logging.getLogger(__name__)
-
-# Telegram's public-username deep links prefill this message without sending it.
-TRANSFER_CONTACT_DRAFT = (
-    "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال @advertio_cargo "
-    "داشتید خدمت شما پیام می دهم"
-)
-
 
 class TransferTelegramPublishError(RuntimeError):
     """Raised when a transfer advertisement cannot be published."""
@@ -186,24 +178,13 @@ class TelegramTransferPublisher:
         return f"{float(match.group(1).replace(',', '.')):g} m³"
 
     @staticmethod
-    def _telegram_username(record):
-        username = str(record.get("sender_username") or "").strip().lstrip("@")
-        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-            return None
-        return username
-
-    @classmethod
-    def _contact_button(cls, record):
-        buttons = []
-        username = cls._telegram_username(record)
-        if username:
-            # The ad owner's username determines the destination. The UTF-8
-            # Persian message is only a draft; sending remains the reader's choice.
-            url = f"https://t.me/{username}?text={quote(TRANSFER_CONTACT_DRAFT, safe='')}"
-            buttons.append({"text": f"👤 @{username}", "url": url})
-        # The Main Mini App receives start_param=create to open ad creation.
-        buttons.append({"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot?startapp=create"})
-        return {"inline_keyboard": [buttons]}
+    def _contact_button(record):
+        # No per-listing deep link exists. Open Advertio's Main Mini App
+        # without a start parameter, regardless of sender username.
+        return {"inline_keyboard": [[
+            {"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"},
+            {"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"},
+        ]]}
 
     @classmethod
     def format_ad(cls, record, data):

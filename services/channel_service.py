@@ -22,7 +22,12 @@ class ChannelService:
         data = self.load()
         if category not in data:
             raise KeyError(f"Unknown category: {category}")
-        return data[category]
+        # JSON has no comment syntax; an explicit enabled=false preserves a
+        # source entry while excluding it from every crawler scheduling path.
+        return [
+            channel for channel in data[category]
+            if not (isinstance(channel, dict) and channel.get("enabled") is False)
+        ]
 
     def category_with_channels(self, category):
         return {

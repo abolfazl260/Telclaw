@@ -495,7 +495,7 @@ def test_november_city_aliases_do_not_guess_from_uncertain_or_other_country_valu
         ("DE", "Wuppertal/Düsseldorf"),
         ("US", "KUL"),
         ("GB", "Kishinev"),
-        ("RU", "СПБ", "CA"),
+        ("CA", "СПБ"),
     ]
     for sample in untouched:
         country, city = sample[:2]

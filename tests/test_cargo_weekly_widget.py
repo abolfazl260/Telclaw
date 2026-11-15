@@ -180,6 +180,32 @@ async def test_ambiguous_send_is_not_repeated(cargo_db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_private_report_falls_back_to_text_when_telegram_rejects_widget(cargo_db):
+    cargo_db(1)
+    calls = []
+
+    class Monitor:
+        async def _api(self, method, payload=None):
+            calls.append((method, payload))
+            if method == "sendWidget":
+                raise RuntimeError(
+                    "Telegram API sendWidget failed: HTTP 400 "
+                    "(error_code=400; description=Bad Request: unsupported widget)"
+                )
+            return {"ok": True, "result": {"message_id": 123}}
+
+    await cargo_weekly.send_private_report(Monitor(), 424242, now=NOW)
+
+    assert [method for method, _ in calls] == ["sendWidget", "sendMessage"]
+    fallback = calls[-1][1]
+    assert fallback["chat_id"] == 424242
+    assert "گزارش هفتگی مسیرهای کارگو" in fallback["text"]
+    assert "Tehran (IR) → Toronto (CA)" in fallback["text"]
+    assert "درخواست ارسال: 0" in fallback["text"]
+
+
+
+@pytest.mark.asyncio
 async def test_public_private_command_does_not_require_admin(monkeypatch):
     from monitoring.telegram_monitor import TelegramMonitor
     from reports import cargo_weekly

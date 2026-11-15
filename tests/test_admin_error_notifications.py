@@ -71,6 +71,100 @@ async def test_background_worker_error_reaches_all_admins_without_start(monitor_
 
 
 @pytest.mark.asyncio
+async def test_cargoreport_command_failure_is_forwarded_to_admins(monitor_db, monkeypatch):
+    from reports import cargo_weekly
+
+    monitor = TelegramMonitor()
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+        return {"ok": True, "result": []}
+
+    async def idle_poll():
+        await asyncio.Event().wait()
+
+    async def fail_report(_monitor, _chat_id):
+        raise RuntimeError("database query failed")
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    monkeypatch.setattr(monitor, "_poll_updates", idle_poll)
+    monkeypatch.setattr(cargo_weekly, "send_private_report", fail_report)
+    await monitor.start()
+    try:
+        await monitor._handle_update({
+            "message": {
+                "from": {"id": 424242},
+                "chat": {"id": 424242, "type": "private"},
+                "text": "/cargoreport",
+            }
+        })
+        await asyncio.wait_for(monitor._error_dispatcher.queue.join(), timeout=2)
+
+        messages = [
+            payload for method, payload in calls if method == "sendMessage"
+        ]
+        user_fallback = next(item for item in messages if item["chat_id"] == 424242)
+        assert "نمایش گزارش کارگو امکان‌پذیر نیست" in user_fallback["text"]
+
+        admin_alerts = [item for item in messages if item["chat_id"] in ADMIN_USER_IDS]
+        assert {item["chat_id"] for item in admin_alerts} == ADMIN_USER_IDS
+        assert all("[CARGO WEEKLY] private report failed" in item["text"] for item in admin_alerts)
+        assert all("database query failed" in item["text"] for item in admin_alerts)
+    finally:
+        await monitor.stop()
+
+
+@pytest.mark.asyncio
+async def test_internal_alert_persistence_error_does_not_recurse(monitor_db, monkeypatch):
+    monitor = TelegramMonitor()
+    calls = []
+
+    async def fake_api(method, payload):
+        calls.append((method, payload))
+        return {"ok": True, "result": []}
+
+    async def idle_poll():
+        await asyncio.Event().wait()
+
+    def fail_record(*args, **kwargs):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(monitor, "_api", fake_api)
+    monkeypatch.setattr(monitor, "_poll_updates", idle_poll)
+    monkeypatch.setattr(database, "record_system_activity", fail_record)
+    await monitor.start()
+    try:
+        await monitor.error("ERROR", "test.source", "Original failure")
+        await asyncio.sleep(0.03)
+        assert monitor._error_dispatcher.queue.empty()
+        notifications = [
+            payload for method, payload in calls if method == "sendMessage"
+        ]
+        assert len(notifications) == len(ADMIN_USER_IDS)
+        assert all("Original failure" in item["text"] for item in notifications)
+    finally:
+        await monitor.stop()
+
+
+def test_telegram_api_error_includes_bot_api_description():
+    from monitoring.telegram_monitor import _telegram_api_failure
+
+    error = _telegram_api_failure(
+        "sendWidget",
+        400,
+        {
+            "ok": False,
+            "error_code": 400,
+            "description": "Bad Request: invalid widget HTML",
+        },
+    )
+    assert "HTTP 400" in str(error)
+    assert "error_code=400" in str(error)
+    assert "Bad Request: invalid widget HTML" in str(error)
+
+
+@pytest.mark.asyncio
 async def test_admin_stop_before_start_opts_out_of_default_errors(monitor_db, monkeypatch):
     monitor = TelegramMonitor()
     calls = []

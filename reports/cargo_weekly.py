@@ -215,6 +215,26 @@ def widget_payload(chat_id, report):
     }
 
 
+def private_text_report(report):
+    """Render a compact plain-text fallback when Telegram rejects the widget."""
+    lines = [
+        "📦 گزارش هفتگی مسیرهای کارگو | Advertio",
+        f"📅 {report['start']} تا {report['end']}",
+        f"📊 {report['total']} آگهی در {report['route_count']} مسیر",
+        f"❓ آگهی با نقش نامشخص: {report['unknown']}",
+        "",
+        "پرتکرارترین مسیرها:",
+    ]
+    for index, route in enumerate(report["routes"], 1):
+        name = " ".join(str(route["name"]).split())[:180]
+        lines.append(f"{index}. {name} — {route['total']} آگهی")
+        lines.append(
+            f"   درخواست ارسال: {route['shipper']} | "
+            f"مسافر: {route['passenger']} | نامشخص: {route['unknown']}"
+        )
+    return "\n".join(lines)
+
+
 def channel_post(report):
     """Format the public channel summary without buttons or private-chat CTAs."""
     lines = [
@@ -275,7 +295,32 @@ async def send_private_report(monitor, chat_id, *, now=None):
             "text": "در هفته کامل گذشته آگهی کارگوی قابل گزارش با مسیر معتبر ثبت نشده است.",
         })
         return
-    await monitor._api("sendWidget", widget_payload(chat_id, report))
+    try:
+        payload = widget_payload(chat_id, report)
+    except (TypeError, ValueError):
+        log.exception(
+            "[CARGO WEEKLY] widget payload creation failed chat=%s; sending text fallback",
+            chat_id,
+        )
+        await monitor._api("sendMessage", {
+            "chat_id": chat_id,
+            "text": private_text_report(report),
+        })
+        return
+
+    try:
+        await monitor._api("sendWidget", payload)
+    except RuntimeError:
+        # RuntimeError is raised for an explicit Telegram API rejection. Network
+        # timeouts remain ambiguous and must not trigger a possible duplicate.
+        log.exception(
+            "[CARGO WEEKLY] Telegram rejected private widget chat=%s; sending text fallback",
+            chat_id,
+        )
+        await monitor._api("sendMessage", {
+            "chat_id": chat_id,
+            "text": private_text_report(report),
+        })
 
 
 async def publish_weekly_once(monitor, *, now=None):

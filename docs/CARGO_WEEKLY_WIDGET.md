@@ -15,8 +15,16 @@ https://core.telegram.org/bots/widgets
   \`/cargoreport\` command sends a real \`sendWidget\` message.
 - No Mini App, web server, external scripts or widget network calls are needed.
 - Unsupported/older clients can still read the widget's caption.
+- If Telegram explicitly rejects the private widget (or local widget-payload
+  validation fails), the bot sends a plain-text version of the same report.
+  Network timeouts are treated as ambiguous and do not trigger a second report
+  automatically, avoiding duplicate deliveries.
 - Existing administrator-only monitoring commands and forward-import behavior
   are not exposed to regular users.
+- Errors raised while handling `/cargoreport` are forwarded to the allowlisted
+  administrators; internal alert-persistence failures are excluded to prevent
+  recursive notifications. Telegram API rejection descriptions are preserved
+  in the diagnostic log and alert.
 
 ## Availability (enabled by default)
 

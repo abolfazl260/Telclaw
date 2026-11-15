@@ -504,3 +504,34 @@ def test_november_city_aliases_do_not_guess_from_uncertain_or_other_country_valu
         result, _ = data_normalizer.normalize_category_data("transferlist", record)
         assert result["origin_city"] == city, (country, city)
         assert result["destination_city"] == city, (country, city)
+
+
+def test_november_countries_normalize_before_scoped_city_aliases(city_db):
+    cases = [
+        ("Denmark", "DK", "Alborg", "Aalborg"),
+        ("Bulgaria", "BG", "Св. Влас", "Sveti Vlas"),
+        ("Montenegro", "ME", "Tivat Municipality", "Tivat"),
+        ("South Korea", "KR", "Kwangju", "Gwangju"),
+        ("Czech Republic", "CZ", "Карловы Вары", "Karlovy Vary"),
+        ("Switzerland", "CH", "Bazell", "Basel"),
+        ("Moldova", "MD", "Kishinev", "Chișinău"),
+        ("Romania", "RO", "Constanća", "Constanța"),
+        ("Qatar", "QA", "Doha Municipality", "Doha"),
+        ("Malaysia", "MY", "KUL", "Kuala Lumpur"),
+        ("Ukraine", "UA", "Odessa", "Odesa"),
+        ("Uzbekistan", "UZ", "Toshkent", "Tashkent"),
+        ("Austria", "AT", "Wien", "Vienna"),
+        ("Oman", "OM", "مسقط", "Muscat"),
+        ("Serbia", "RS", "Нови-Сад", "Novi Sad"),
+    ]
+    for country_name, iso2, city, expected_city in cases:
+        normalized, _ = data_normalizer.normalize_category_data(
+            "transferlist", {
+                "origin_country": country_name, "origin_city": city,
+                "destination_country": country_name, "destination_city": city,
+            }
+        )
+        assert normalized["origin_country"] == iso2
+        assert normalized["destination_country"] == iso2
+        assert normalized["origin_city"] == expected_city
+        assert normalized["destination_city"] == expected_city

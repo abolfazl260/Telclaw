@@ -135,12 +135,14 @@ cargo-specific operation.
 
 ## Additional city aliases — November 15, 2026
 
-A separate user-provided list of **420 city-field values** was reviewed.
+A separate user-provided list of **418 distinct city-field values** (plus two Markdown header lines) was reviewed.
 The 59 additional **country-scoped** aliases are registered in
 `storage/transfer_city_aliases.py`. They are seeded for both
 `transferlist.origin_city` and `transferlist.destination_city` and
 appear in Back Office **Normalization** after the application initializes.
-No country-free replacement is introduced for these aliases.
+The matching English country names are also seeded to ISO2 for countries
+not previously covered, so city rules work when old rows have full country
+names instead of codes. No country-free replacement is introduced for these aliases.
 
 Representative examples (full list is in the seed file):
 

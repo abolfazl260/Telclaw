@@ -151,6 +151,22 @@ TRANSFER_COUNTRY_ALIASES = (
     ("United States", "US"), ("USA", "US"), ("America", "US"),
     ("United Kingdom", "GB"), ("UK", "GB"),
     ("UAE", "AE"), ("United Arab Emirates", "AE"),
+    # ISO2 country scoping for the November 2026 additional city aliases.
+    ("Austria", "AT"),
+    ("Bulgaria", "BG"),
+    ("Switzerland", "CH"),
+    ("Czechia", "CZ"), ("Czech Republic", "CZ"),
+    ("Denmark", "DK"),
+    ("South Korea", "KR"), ("Republic of Korea", "KR"),
+    ("Moldova", "MD"),
+    ("Montenegro", "ME"),
+    ("Malaysia", "MY"),
+    ("Oman", "OM"),
+    ("Qatar", "QA"),
+    ("Romania", "RO"),
+    ("Serbia", "RS"),
+    ("Ukraine", "UA"),
+    ("Uzbekistan", "UZ"),
 )
 
 # Special destination-only country correction: source field was "IR or TR"

@@ -37,6 +37,21 @@ def _is_expected_aiohttp_client_noise(record):
     return "Pause on PRI/Upgrade" in detail or "Invalid method encountered" in detail
 
 
+def _telegram_api_failure(method, status, data):
+    """Preserve Telegram's actionable error description in raised API failures."""
+    error_code = data.get("error_code") if isinstance(data, dict) else None
+    description = data.get("description") if isinstance(data, dict) else None
+    details = []
+    if error_code is not None:
+        details.append(f"error_code={error_code}")
+    if description:
+        details.append(f"description={str(description)[:500]}")
+    elif data is not None and not isinstance(data, dict):
+        details.append(f"response={str(data)[:500]}")
+    suffix = f" ({'; '.join(details)})" if details else ""
+    return RuntimeError(f"Telegram API {method} failed: HTTP {status}{suffix}")
+
+
 def _snapshot_sqlite_database(source_path, snapshot_path):
     """Snapshot committed SQLite data, including uncheckpointed WAL transactions."""
     with closing(sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True)) as source:
@@ -65,7 +80,7 @@ class _TelegramErrorHandler(logging.Handler):
             record.levelno == logging.WARNING and getattr(record, "notify_admin", False)
         ):
             return
-        if record.name.startswith("monitoring.telegram_monitor"): return
+        if getattr(record, "skip_telegram_alert", False): return
         if _is_expected_aiohttp_client_noise(record): return
         dispatcher = self.monitor._error_dispatcher
         if dispatcher is None:
@@ -127,7 +142,8 @@ class TelegramMonitor:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
             async with session.post(f"https://api.telegram.org/bot{self.token}/{method}",json=payload or {}) as response:
                 data=await response.json(content_type=None)
-                if not response.ok or not data.get("ok"): raise RuntimeError(f"Telegram API {method} failed: HTTP {response.status}")
+                if not response.ok or not isinstance(data, dict) or not data.get("ok"):
+                    raise _telegram_api_failure(method, response.status, data)
                 return data
     async def _send_document(self,chat_id,file_path,caption):
         if not self._is_admin_chat(chat_id): return
@@ -136,7 +152,8 @@ class TelegramMonitor:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
                 async with session.post(f"https://api.telegram.org/bot{self.token}/sendDocument",data=form) as response:
                     data=await response.json(content_type=None)
-                    if not response.ok or not data.get("ok"): raise RuntimeError(f"Telegram API sendDocument failed: HTTP {response.status}")
+                    if not response.ok or not isinstance(data, dict) or not data.get("ok"):
+                        raise _telegram_api_failure("sendDocument", response.status, data)
                     return data
         finally: file_handle.close()
     async def _poll_updates(self):
@@ -429,7 +446,10 @@ class TelegramMonitor:
         try:
             database.record_system_activity(kind,level,source,str(message)[:4000])
         except Exception:
-            logger.exception("Failed to persist system alert activity")
+            logger.exception(
+                "Failed to persist system alert activity",
+                extra={"skip_telegram_alert": True},
+            )
         await self.broadcast_admin_errors(f"<b>{heading}</b>\n\n<b>Level:</b> {html.escape(level)}\n<b>Source:</b> {html.escape(source)}\n<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n<pre>{html.escape(message[:3500])}</pre>")
     async def report(self,kind,stats):
         try:

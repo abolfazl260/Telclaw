@@ -101,7 +101,7 @@ SPECS = (
     _s("TELCLAW_BACKOFFICE_TLS_KEY", "BACKOFFICE_TLS_KEY", "Back Office", secret=True, restart=True),
 
     _s("TELCLAW_ADVERTIO_INGEST_ENABLED", "ADVERTIO_INGEST_ENABLED", "Advertio", kind="bool", restart=True, fallback="false"),
-    _s("TELCLAW_ADVERTIO_BASE_URL", "ADVERTIO_BASE_URL", "Advertio", restart=True, fallback="https://api.advertio.ir"),
+    _s("TELCLAW_ADVERTIO_BASE_URL", "ADVERTIO_BASE_URL", "Advertio", restart=True, fallback="https://api.advertio.net"),
     _s("TELCLAW_ADVERTIO_INGEST_KEY", "ADVERTIO_INGEST_KEY", "Advertio", secret=True, restart=True),
     _s("TELCLAW_ADVERTIO_SOURCE_NAME", "ADVERTIO_SOURCE_NAME", "Advertio", restart=True, fallback="telegram-rent"),
     _s("TELCLAW_ADVERTIO_AUTO_PUBLISH", "ADVERTIO_AUTO_PUBLISH", "Advertio", kind="bool", fallback="false"),

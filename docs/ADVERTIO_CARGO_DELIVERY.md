@@ -10,7 +10,7 @@ As of 2026-10-21, `travel_date` is optional.
 
 ## Deployment requirements
 
-1. Verify `https://api.advertio.ir/health` is reachable with valid TLS.
+1. Verify `https://api.advertio.net/health` is reachable with valid TLS.
    The platform guide notes that the dedicated API hostname was not yet live
    when the contract was updated on 2026-10-21. Do not assume it is available.
 2. Configure `TELCLAW_ADVERTIO_INGEST_KEY` with the same secret as the API

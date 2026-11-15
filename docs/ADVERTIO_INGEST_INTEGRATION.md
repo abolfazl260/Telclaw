@@ -47,7 +47,7 @@ The integration is disabled by default:
 
 ```env
 TELCLAW_ADVERTIO_INGEST_ENABLED=false
-TELCLAW_ADVERTIO_BASE_URL=https://api.advertio.ir
+TELCLAW_ADVERTIO_BASE_URL=https://api.advertio.net
 TELCLAW_ADVERTIO_INGEST_KEY=...
 TELCLAW_ADVERTIO_SOURCE_NAME=telegram-rent
 TELCLAW_ADVERTIO_AUTO_PUBLISH=false

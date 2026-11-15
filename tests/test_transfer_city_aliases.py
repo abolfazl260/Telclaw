@@ -421,3 +421,117 @@ def test_new_cargo_location_aliases_backfill_without_editing_source(city_db):
         assert row["description"] == "preserve cleaned description"
         assert row["raw_text"] == "unchanged source"
     assert rows[-1]["destination_province"] == "Razavi Khorasan"
+
+
+# November 2026 review of distinct city values supplied by the operator.
+# Exercise both cargo directions against one database and reject cross-country
+# matches, which are especially dangerous for short abbreviations.
+def test_november_2026_city_variants_are_normalized_on_both_sides(city_db):
+    samples = [
+        ("DK", "Århus", "Aarhus"),
+        ("DK", "Alborg", "Aalborg"),
+        ("DK", "Kobenhavn", "Copenhagen"),
+        ("CH", "Bazell", "Basel"),
+        ("ME", "Bar Municipality", "Bar"),
+        ("ME", "Budva Municipality", "Budva"),
+        ("RS", "City of Belgrade", "Belgrade"),
+        ("RS", "Нови-Сад", "Novi Sad"),
+        ("DE", "Buchum", "Bochum"),
+        ("DE", 'K"ln', "Cologne"),
+        ("DE", "DREZNEN", "Dresden"),
+        ("DE", "Düseldorf", "Düsseldorf"),
+        ("DE", "Shuttrart", "Stuttgart"),
+        ("MD", "Kishinev", "Chișinău"),
+        ("RO", "Constanća", "Constanța"),
+        ("QA", "Doha Municipality", "Doha"),
+        ("IR", "Fooman", "Fuman"),
+        ("IR", "Keraj", "Karaj"),
+        ("IR", "Kish", "Kish Island"),
+        ("IR", "مشهد", "Mashhad"),
+        ("CN", "Guanjou", "Guangzhou"),
+        ("CN", "Гуанчжоу", "Guangzhou"),
+        ("CN", "XI’AN", "Xi'an"),
+        ("KR", "Kwangju", "Gwangju"),
+        ("TR", "Stabul", "Istanbul"),
+        ("TR", "استانبول", "Istanbul"),
+        ("RU", "Kalingrad", "Kaliningrad"),
+        ("RU", "Калининград", "Kaliningrad"),
+        ("RU", "СПБ", "St. Petersburg"),
+        ("CZ", "Карловы Вары", "Karlovy Vary"),
+        ("MY", "KUL", "Kuala Lumpur"),
+        ("CA", "Montral", "Montreal"),
+        ("OM", "مسقط", "Muscat"),
+        ("IT", "Napoli", "Naples"),
+        ("UA", "Odessa", "Odesa"),
+        ("BG", "Солнечный Берег", "Sunny Beach"),
+        ("BG", "Св. Влас", "Sveti Vlas"),
+        ("UZ", "Toshkent", "Tashkent"),
+        ("AT", "Wien", "Vienna"),
+        ("AE", "Дубай", "Dubai"),
+    ]
+    for country, alias, canonical in samples:
+        result, changes = data_normalizer.normalize_category_data(
+            "transferlist", {
+                "origin_city": alias, "origin_country": country,
+                "destination_city": alias, "destination_country": country,
+            }
+        )
+        assert result["origin_city"] == canonical, (country, alias)
+        assert result["destination_city"] == canonical, (country, alias)
+        assert changes["origin_city"] == (alias, canonical), (country, alias)
+        assert changes["destination_city"] == (alias, canonical), (country, alias)
+
+
+def test_november_city_aliases_do_not_guess_from_uncertain_or_other_country_values(city_db):
+    untouched = [
+        ("GB", "Adens"),
+        ("DK", "Aravus"),
+        ("CN", "Gujan"),
+        ("CN", "Cindao"),
+        ("DE", "Klen"),
+        ("DE", "Mänz"),
+        ("RO", "Mamay"),
+        ("CA", "North York"),
+        ("DE", "Wuppertal/Düsseldorf"),
+        ("US", "KUL"),
+        ("GB", "Kishinev"),
+        ("CA", "СПБ"),
+    ]
+    for sample in untouched:
+        country, city = sample[:2]
+        record = {"origin_country": country, "origin_city": city,
+                  "destination_country": country, "destination_city": city}
+        result, _ = data_normalizer.normalize_category_data("transferlist", record)
+        assert result["origin_city"] == city, (country, city)
+        assert result["destination_city"] == city, (country, city)
+
+
+def test_november_countries_normalize_before_scoped_city_aliases(city_db):
+    cases = [
+        ("Denmark", "DK", "Alborg", "Aalborg"),
+        ("Bulgaria", "BG", "Св. Влас", "Sveti Vlas"),
+        ("Montenegro", "ME", "Tivat Municipality", "Tivat"),
+        ("South Korea", "KR", "Kwangju", "Gwangju"),
+        ("Czech Republic", "CZ", "Карловы Вары", "Karlovy Vary"),
+        ("Switzerland", "CH", "Bazell", "Basel"),
+        ("Moldova", "MD", "Kishinev", "Chișinău"),
+        ("Romania", "RO", "Constanća", "Constanța"),
+        ("Qatar", "QA", "Doha Municipality", "Doha"),
+        ("Malaysia", "MY", "KUL", "Kuala Lumpur"),
+        ("Ukraine", "UA", "Odessa", "Odesa"),
+        ("Uzbekistan", "UZ", "Toshkent", "Tashkent"),
+        ("Austria", "AT", "Wien", "Vienna"),
+        ("Oman", "OM", "مسقط", "Muscat"),
+        ("Serbia", "RS", "Нови-Сад", "Novi Sad"),
+    ]
+    for country_name, iso2, city, expected_city in cases:
+        normalized, _ = data_normalizer.normalize_category_data(
+            "transferlist", {
+                "origin_country": country_name, "origin_city": city,
+                "destination_country": country_name, "destination_city": city,
+            }
+        )
+        assert normalized["origin_country"] == iso2
+        assert normalized["destination_country"] == iso2
+        assert normalized["origin_city"] == expected_city
+        assert normalized["destination_city"] == expected_city

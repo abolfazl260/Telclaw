@@ -131,3 +131,57 @@ Re-running unified cargo location normalization is idempotent.
 Full `Re-normalize existing data` remains under **Advanced Normalization**;
 it applies other categories/fields as well and should not be used for this
 cargo-specific operation.
+
+
+## Additional city aliases — November 15, 2026
+
+A separate user-provided list of **418 distinct city-field values** (plus two Markdown header lines) was reviewed.
+The 59 additional **country-scoped** aliases are registered in
+`storage/transfer_city_aliases.py`. They are seeded for both
+`transferlist.origin_city` and `transferlist.destination_city` and
+appear in Back Office **Normalization** after the application initializes.
+The matching English country names are also seeded to ISO2 for countries
+not previously covered, so city rules work when old rows have full country
+names instead of codes. No country-free replacement is introduced for these aliases.
+
+Representative examples (full list is in the seed file):
+
+| Country | Source values | Canonical city |
+|---|---|---|
+| DE | `Buchum` | Bochum |
+| DE | `DREZDEN`, `DREZNEN` | Dresden |
+| DE | `Düseldorf` | Düsseldorf |
+| CN | `Guanjou`, `Гуанчжоу` | Guangzhou |
+| CN | `Si'an`, `XI'AN`, `XI’AN`, `Xian` | Xi'an |
+| RU | `Kalingrad`, `Kalinigrad`, `Kaliōnigrad`, `Калининград` | Kaliningrad |
+| RU | `СПБ`, `St Petersburg` | St. Petersburg |
+| IR | `مشهد` | Mashhad |
+| IR | `Keraj` | Karaj |
+| CA | `Montral` | Montreal |
+| BG | `Св. Влас`, `Sv. Vlas` | Sveti Vlas |
+| DK | `Århus` | Aarhus |
+| MD | `Kishinev` | Chișinău |
+| ME | `Budva Municipality` | Budva |
+| IT | `Napoli` | Naples |
+| UA | `Odessa` | Odesa |
+
+These rules include established alternate spellings, transliterations,
+typographical errors, and explicitly same-named municipality labels.
+For compatibility, Saint Petersburg variants use the already-seeded
+`St. Petersburg` canonical form; the `Kish` label is mapped to
+`Kish Island` as selected in the city-review list. Pre-existing aliases
+are not replaced, and custom Back Office overrides still take priority.
+
+The review deliberately **does not** add guesses such as
+`Adens`, `Aravus`, `Gujan`, `Cindao`, `Klen`, `Mänz`, `Mamay`
+or `Mămăi`. It also does not collapse `North Vancouver`,
+`North York`, or `Novi Beograd` into different municipality names.
+Country names, regions, provinces, and multi-city strings remain
+unmapped unless already covered by separately operator-approved rules.
+
+**Deployment:** these are seed rules, not an immediate edit of the
+production database. Deploy/restart the application to register them,
+then use **Back Office → Normalization → Cargo Location Normalization →
+Preview Changes** before **Apply Normalization** to existing records.
+Keep the SQLite backup and verify the preview; source message text
+and prior delivery states are not modified by this operation.

@@ -72,7 +72,10 @@ def format_source_messages(data):
     for name, sources in data.items():
         if not isinstance(sources, list):
             raise ValueError(f"Invalid source category: {name!s}")
-        entries = [source for source in sources if isinstance(source, dict)]
+        entries = [
+            source for source in sources
+            if isinstance(source, dict) and source.get("enabled") is not False
+        ]
         groups.append((name, entries))
 
     total = sum(len(entries) for _, entries in groups)

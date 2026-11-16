@@ -42,6 +42,11 @@ def test_rich_source_output_has_group_counts_clickable_names_and_escaped_html():
                 "description": "Work <now> & earn a living",
             },
             {"name": "Second jobs", "username": "TorontoHiring", "description": ""},
+            {
+                "name": "Disabled source",
+                "username": "disabled_source",
+                "enabled": False,
+            },
         ],
         "Canada_Rent": [
             {"name": "Homes", "username": "RentToronto", "description": "Apartments"},
@@ -52,6 +57,8 @@ def test_rich_source_output_has_group_counts_clickable_names_and_escaped_html():
     html = pages[0]
     assert "<b>Categories:</b> 2" in html
     assert "<b>Sources:</b> 3" in html
+    assert "Disabled source" not in html
+    assert "@disabled_source" not in html
     assert "<b>Canada_Job</b>" in html
     assert "<b>Canada_Rent</b>" in html
     assert "<i>· 2 sources</i>" in html

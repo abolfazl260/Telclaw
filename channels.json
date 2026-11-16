@@ -4,7 +4,8 @@
       "name": "Canada Job Bank",
       "username": "canadajobbankTG",
       "country": "Canada",
-      "description": "Official and community job opportunities across Canada."
+      "description": "Official and community job opportunities across Canada.",
+      "enabled": false
     },
     {
       "name": "Toronto Iranians Job Group",
@@ -605,6 +606,18 @@
       "username": "Poputki_transferEuropa",
       "country": "International",
       "description": "Passenger cargo, luggage, flight, and international delivery coordination."
+    },
+    {
+      "name": "Wien 24h",
+      "username": "wien24h",
+      "country": "Austria",
+      "description": "Passenger travel and cargo coordination related to Vienna."
+    },
+    {
+      "name": "Flight AU",
+      "username": "flightau",
+      "country": "Australia",
+      "description": "Flight and passenger cargo coordination related to Australia."
     }
   ],
   "Canada_Language": [
@@ -675,6 +688,12 @@
       "username": "divare_canada",
       "country": "Canada",
       "description": "Canadian classifieds and marketplace listings."
+    },
+    {
+      "name": "Toronto Sales Home",
+      "username": "torontosaleshome",
+      "country": "Canada",
+      "description": "Local marketplace and sales listings in Toronto."
     }
   ],
   "Canada_Education": [

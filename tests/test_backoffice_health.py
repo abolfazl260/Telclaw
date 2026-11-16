@@ -17,6 +17,7 @@ def health_db(tmp_path, monkeypatch):
         "transport": [
             {"username": "crawled_channel", "name": "Crawled source"},
             {"username": "not_crawled_yet", "name": "Waiting source"},
+            {"username": "disabled_source", "name": "Disabled source", "enabled": False},
         ]
     }), encoding="utf-8")
     monkeypatch.setattr(config, "DB_NAME", str(db_path))
@@ -65,6 +66,7 @@ def test_health_snapshot_reports_database_crawls_and_channels(health_db):
     assert channels["crawled_channel"]["crawl_state"] == "crawled"
     assert channels["not_crawled_yet"]["messages"] == 0
     assert channels["not_crawled_yet"]["crawl_state"] == "not crawled"
+    assert "disabled_source" not in channels
 
 
 @pytest.mark.asyncio

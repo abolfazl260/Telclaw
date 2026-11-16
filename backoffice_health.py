@@ -62,7 +62,7 @@ def _configured_sources():
         if not isinstance(items, list):
             continue
         for item in items:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or item.get("enabled") is False:
                 continue
             username = str(item.get("username") or "").strip().lstrip("@").casefold()
             if not username:

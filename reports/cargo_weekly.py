@@ -310,9 +310,12 @@ async def send_private_report(monitor, chat_id, *, now=None):
 
     try:
         await monitor._api("sendWidget", payload)
-    except RuntimeError:
-        # RuntimeError is raised for an explicit Telegram API rejection. Network
-        # timeouts remain ambiguous and must not trigger a possible duplicate.
+    except RuntimeError as exc:
+        # Only a confirmed negative Telegram Bot API response proves that the
+        # widget was rejected. Other runtime failures can be ambiguous after
+        # the request was sent, so never risk delivering a duplicate report.
+        if not str(exc).startswith("Telegram API sendWidget failed: HTTP "):
+            raise
         log.exception(
             "[CARGO WEEKLY] Telegram rejected private widget chat=%s; sending text fallback",
             chat_id,

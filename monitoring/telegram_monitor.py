@@ -20,6 +20,14 @@ PROJECT_ROOT=Path(__file__).resolve().parent.parent
 CRAWLER_ERRORS_LOG=PROJECT_ROOT / "crawler_errors.log"
 TELEGRAM_MAX_DOCUMENT_BYTES=50*1024*1024
 TELEGRAM_DATABASE_PART_BYTES=40*1024*1024
+POLL_LONG_POLL_SECONDS = 20
+POLL_RETRY_BASE_SECONDS = 5
+POLL_RETRY_MAX_SECONDS = 60
+POLL_RETRY_AFTER_MAX_SECONDS = 300
+POLL_OUTAGE_ALERT_AFTER_SECONDS = 120
+TELEGRAM_API_TIMEOUT = aiohttp.ClientTimeout(
+    total=40, connect=10, sock_connect=10, sock_read=30
+)
 ADMIN_USER_IDS=frozenset({1485409432, 266809220, 7469291969, 106056586})
 
 def _is_expected_aiohttp_client_noise(record):
@@ -37,19 +45,42 @@ def _is_expected_aiohttp_client_noise(record):
     return "Pause on PRI/Upgrade" in detail or "Invalid method encountered" in detail
 
 
+class TelegramAPIError(RuntimeError):
+    """Telegram Bot API rejection with structured retry information."""
+
+    def __init__(self, method, status, data):
+        self.method = method
+        self.status = int(status)
+        parameters = data.get("parameters") if isinstance(data, dict) else None
+        retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+        self.retry_after = (
+            float(retry_after)
+            if isinstance(retry_after, (int, float)) and retry_after > 0
+            else None
+        )
+        error_code = data.get("error_code") if isinstance(data, dict) else None
+        description = data.get("description") if isinstance(data, dict) else None
+        details = []
+        if error_code is not None:
+            details.append(f"error_code={error_code}")
+        if description:
+            details.append(f"description={str(description)[:500]}")
+        elif data is not None and not isinstance(data, dict):
+            details.append(f"response={str(data)[:500]}")
+        suffix = f" ({'; '.join(details)})" if details else ""
+        super().__init__(f"Telegram API {method} failed: HTTP {status}{suffix}")
+
+
 def _telegram_api_failure(method, status, data):
     """Preserve Telegram's actionable error description in raised API failures."""
-    error_code = data.get("error_code") if isinstance(data, dict) else None
-    description = data.get("description") if isinstance(data, dict) else None
-    details = []
-    if error_code is not None:
-        details.append(f"error_code={error_code}")
-    if description:
-        details.append(f"description={str(description)[:500]}")
-    elif data is not None and not isinstance(data, dict):
-        details.append(f"response={str(data)[:500]}")
-    suffix = f" ({'; '.join(details)})" if details else ""
-    return RuntimeError(f"Telegram API {method} failed: HTTP {status}{suffix}")
+    return TelegramAPIError(method, status, data)
+
+
+def _is_retryable_poll_error(exc):
+    """Return whether a getUpdates failure is safe to retry automatically."""
+    if isinstance(exc, TelegramAPIError):
+        return exc.status in {408, 425, 429} or exc.status >= 500
+    return isinstance(exc, (aiohttp.ClientError, asyncio.TimeoutError, OSError))
 
 
 def _snapshot_sqlite_database(source_path, snapshot_path):
@@ -153,7 +184,7 @@ class TelegramMonitor:
             await self._error_dispatcher.stop()
             self._error_dispatcher=None
     async def _api(self,method,payload=None):
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as session:
+        async with aiohttp.ClientSession(timeout=TELEGRAM_API_TIMEOUT) as session:
             async with session.post(f"https://api.telegram.org/bot{self.token}/{method}",json=payload or {}) as response:
                 data=await response.json(content_type=None)
                 if not response.ok or not isinstance(data, dict) or not data.get("ok"):
@@ -171,12 +202,107 @@ class TelegramMonitor:
                     return data
         finally: file_handle.close()
     async def _poll_updates(self):
+        consecutive_failures = 0
+        outage_started_at = None
+        outage_alerted = False
+
         while not self._stopping.is_set():
             try:
-                result=await self._api("getUpdates",{"offset":self._offset,"timeout":20,"allowed_updates":["message","callback_query"]})
-                for update in result.get("result",[]): self._offset=max(self._offset,int(update["update_id"])+1); await self._handle_update(update)
-            except asyncio.CancelledError: raise
-            except Exception: logger.exception("Telegram monitor polling failed"); await asyncio.sleep(5)
+                result = await self._api(
+                    "getUpdates",
+                    {
+                        "offset": self._offset,
+                        "timeout": POLL_LONG_POLL_SECONDS,
+                        "allowed_updates": ["message", "callback_query"],
+                    },
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                consecutive_failures += 1
+                now = asyncio.get_running_loop().time()
+                if outage_started_at is None:
+                    outage_started_at = now
+                outage_duration = max(0.0, now - outage_started_at)
+                retry_delay = min(
+                    POLL_RETRY_BASE_SECONDS
+                    * (2 ** min(consecutive_failures - 1, 10)),
+                    POLL_RETRY_MAX_SECONDS,
+                )
+                retry_after = getattr(exc, "retry_after", None)
+                if isinstance(retry_after, (int, float)) and retry_after > 0:
+                    retry_delay = max(
+                        retry_delay,
+                        min(float(retry_after), POLL_RETRY_AFTER_MAX_SECONDS),
+                    )
+
+                retryable = _is_retryable_poll_error(exc)
+                should_alert = not retryable or (
+                    outage_duration >= POLL_OUTAGE_ALERT_AFTER_SECONDS
+                )
+                if should_alert and not outage_alerted:
+                    if retryable:
+                        logger.error(
+                            "Telegram monitor polling unavailable for %.1f seconds "
+                            "after %d consecutive failures",
+                            outage_duration,
+                            consecutive_failures,
+                            exc_info=(type(exc), exc, exc.__traceback__),
+                        )
+                    else:
+                        logger.error(
+                            "Telegram monitor polling failed with a non-retryable error",
+                            exc_info=(type(exc), exc, exc.__traceback__),
+                        )
+                    outage_alerted = True
+                else:
+                    state = (
+                        "temporarily unavailable"
+                        if retryable
+                        else "still failing"
+                    )
+                    logger.warning(
+                        "Telegram monitor polling %s "
+                        "(attempt=%d, outage=%.1fs, retry_in=%.1fs): %s",
+                        state,
+                        consecutive_failures,
+                        outage_duration,
+                        retry_delay,
+                        exc,
+                    )
+
+                await asyncio.sleep(retry_delay)
+                continue
+
+            if outage_started_at is not None:
+                outage_duration = max(
+                    0.0, asyncio.get_running_loop().time() - outage_started_at
+                )
+                logger.info(
+                    "Telegram monitor polling recovered after %.1f seconds "
+                    "(%d consecutive failures)",
+                    outage_duration,
+                    consecutive_failures,
+                )
+            consecutive_failures = 0
+            outage_started_at = None
+            outage_alerted = False
+
+            for update in result.get("result", []):
+                update_id = (
+                    update.get("update_id") if isinstance(update, dict) else None
+                )
+                if update_id is not None:
+                    self._offset = max(self._offset, int(update_id) + 1)
+                try:
+                    await self._handle_update(update)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Telegram monitor update handling failed update_id=%s",
+                        update_id,
+                    )
     def _stage_keyboard(self):
         return {"inline_keyboard":[
             [{"text":"⏭️ Skip Crawl","callback_data":"skip:crawl"},{"text":"⏭️ Skip Processing","callback_data":"skip:processing"}],

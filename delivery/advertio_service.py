@@ -21,10 +21,22 @@ validation_logger.setLevel(logging.WARNING)
 
 def log_mapping_rejection(record, exc):
     """Notify administrators of invalid housing data without an error traceback."""
+    original_text = record.get("raw_text")
+    if not isinstance(original_text, str) or not original_text.strip():
+        original_text = record.get("text")
+    if not isinstance(original_text, str):
+        original_text = ""
+
     validation_logger.warning(
         "[ADVERTIO VALIDATION WARNING] status=rejected message_id=%s channel=%s detail=%s",
         record.get("message_id"), record.get("channel_username"), str(exc),
-        extra={"notify_admin": True},
+        extra={
+            "notify_admin": True,
+            "original_message_text": original_text,
+            "original_message_link": record.get("message_link"),
+            "original_message_id": record.get("message_id"),
+            "original_channel_username": record.get("channel_username"),
+        },
     )
 
 

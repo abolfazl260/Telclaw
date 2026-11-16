@@ -70,8 +70,8 @@ async def test_admin_original_message_contains_safe_link_after_id(context, link)
     assert "&lt;available&gt; &amp; affordable" in body
     assert "<b>Message ID:</b> 140715" in body
     if link is None:
-        assert "Open original message" not in body
+        assert "View Original Message" not in body
     else:
         assert f'href="{link}"' in body
-        assert body.index("Message ID:") < body.index("Open original message")
-        assert body.index("Open original message") < body.index("<pre>")
+        assert body.index("Message ID:") < body.index("View Original Message")
+        assert body.index("View Original Message") < body.index("<pre>")

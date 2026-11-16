@@ -14,6 +14,7 @@ from monitoring.source_formatter import format_source_messages
 from monitoring.aboutus import build_aboutus_message, aboutus_keyboard
 from monitoring.qa import build_qa_rich_message
 from monitoring.admin_forward_ingest import ingest_admin_forward, is_forwarded
+from services.telegram_message_links import build_telegram_message_link
 logger=logging.getLogger(__name__)
 TEHRAN_TZ=ZoneInfo("Asia/Tehran")
 PROJECT_ROOT=Path(__file__).resolve().parent.parent
@@ -127,6 +128,7 @@ class _TelegramErrorHandler(logging.Handler):
                 "original_message_link",
                 "original_message_id",
                 "original_channel_username",
+                "original_channel_id",
             ):
                 value = getattr(record, key, None)
                 if value is not None:
@@ -605,7 +607,11 @@ class TelegramMonitor:
         chunks = self._split_original_message(original_text)
         channel = str(context.get("original_channel_username") or "").strip()
         message_id = str(context.get("original_message_id") or "").strip()
-        message_link = context.get("original_message_link")
+        message_link = build_telegram_message_link(
+            channel, message_id,
+            channel_id=context.get("original_channel_id"),
+            stored_link=context.get("original_message_link"),
+        )
         metadata = []
         if channel:
             metadata.append(
@@ -613,10 +619,7 @@ class TelegramMonitor:
             )
         if message_id:
             metadata.append(f"🆔 <b>Message ID:</b> {html.escape(message_id)}")
-        if (
-            isinstance(message_link, str)
-            and message_link.startswith("https://t.me/")
-        ):
+        if message_link:
             metadata.append(
                 f'🔗 <a href="{html.escape(message_link, quote=True)}">'
                 "Open original message</a>"

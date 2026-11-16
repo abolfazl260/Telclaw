@@ -206,6 +206,22 @@ async def test_private_report_falls_back_to_text_when_telegram_rejects_widget(ca
 
 
 @pytest.mark.asyncio
+async def test_private_report_does_not_retry_on_ambiguous_runtime_failure(cargo_db):
+    cargo_db(1)
+    attempts = []
+
+    class Monitor:
+        async def _api(self, method, payload=None):
+            attempts.append(method)
+            raise RuntimeError("connection closed after request was sent")
+
+    with pytest.raises(RuntimeError, match="connection closed"):
+        await cargo_weekly.send_private_report(Monitor(), 424242, now=NOW)
+
+    assert attempts == ["sendWidget"]
+
+
+@pytest.mark.asyncio
 async def test_public_private_command_does_not_require_admin(monkeypatch):
     from monitoring.telegram_monitor import TelegramMonitor
     from reports import cargo_weekly

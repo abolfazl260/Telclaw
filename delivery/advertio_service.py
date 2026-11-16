@@ -36,6 +36,7 @@ def log_mapping_rejection(record, exc):
             "original_message_link": record.get("message_link"),
             "original_message_id": record.get("message_id"),
             "original_channel_username": record.get("channel_username"),
+            "original_channel_id": record.get("channel_id"),
         },
     )
 

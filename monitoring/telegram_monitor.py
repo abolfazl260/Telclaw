@@ -621,8 +621,8 @@ class TelegramMonitor:
             metadata.append(f"🆔 <b>Message ID:</b> {html.escape(message_id)}")
         if message_link:
             metadata.append(
-                f'🔗 <a href="{html.escape(message_link, quote=True)}">'
-                "Open original message</a>"
+                f'🔗 <b>Message Link:</b> <a href="{html.escape(message_link, quote=True)}">'
+                "View Original Message</a>"
             )
 
         for index, chunk in enumerate(chunks, start=1):

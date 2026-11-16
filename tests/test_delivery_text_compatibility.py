@@ -5,7 +5,6 @@ by explicit local fakes; no Telegram or Advertio delivery can occur.
 """
 
 import json
-from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -131,20 +130,14 @@ async def test_transfer_success_is_not_resent_when_legacy_text_changes(db, monke
     first = await publisher.publish_pending()
     assert first == {"found": 1, "sent": 1, "failed": 0, "rejected": 0}
     assert len(sent) == 1
-    # The publisher must pass the contact draft through to Telegram sendMessage.
-    button = sent[0][1]["inline_keyboard"][0][0]
-    assert button["text"] == "👤 @sourceuser"
-    assert sent[0][1]["inline_keyboard"][0][1] == {
-        "text": "➕ ثبت آگهی",
-        "url": "https://t.me/advertio_bot?startapp=create",
-    }
-    assert urlsplit(button["url"]).path == "/sourceuser"
-    assert parse_qs(urlsplit(button["url"]).query) == {
-        "text": [
-            "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال "
-            "@advertio_cargo داشتید خدمت شما پیام می دهم"
-        ]
-    }
+    # The channel buttons must not disclose the sender or encode a listing ID.
+    assert sent[0][1] == {"inline_keyboard": [[
+        {
+            "text": "👤 ارتباط با آگهی‌دهنده",
+            "url": "https://t.me/advertio_bot?startapp",
+        },
+        {"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"},
+    ]]}
 
     with database.get_connection() as conn:
         existing = conn.execute(
@@ -309,40 +302,19 @@ def test_routed_non_transfer_preview_preserves_structured_and_raw_fallbacks(monk
 
 
 
-@pytest.mark.parametrize("username", ["alice_123", "@alice_123"])
-def test_transfer_contact_button_opens_ad_owner_with_prefilled_draft(username):
-    markup = TelegramTransferPublisher._contact_button({"sender_username": username})
-    assert markup is not None
-    assert len(markup["inline_keyboard"]) == 1
-    assert len(markup["inline_keyboard"][0]) == 2
-    button = markup["inline_keyboard"][0][0]
-    register_button = markup["inline_keyboard"][0][1]
-    assert register_button == {
-        "text": "➕ ثبت آگهی",
-        "url": "https://t.me/advertio_bot?startapp=create",
-    }
-    assert button["text"] == "👤 @alice_123"
-
-    url = urlsplit(button["url"])
-    assert (url.scheme, url.netloc, url.path) == ("https", "t.me", "/alice_123")
-    assert " " not in button["url"]
-    assert "سلام" not in button["url"]  # UTF-8 draft must be percent-encoded.
-    assert parse_qs(url.query) == {
-        "text": [
-            "سلام وقت بخیر در خصوص آگهی حمل باری که در کانال "
-            "@advertio_cargo داشتید خدمت شما پیام می دهم"
-        ]
-    }
-
-
 @pytest.mark.parametrize("username", [
-    None, "", "@", "bob", "ali/evil", "alice?text=overridden", "<script>", "@" * 100,
+    "alice_123", "@alice_123", None, "", "@", "bob",
+    "ali/evil", "alice?text=overridden", "<script>", "@" * 100,
 ])
-def test_transfer_contact_button_rejects_missing_or_unsafe_usernames(username):
-    # Invalid usernames must never become contact links, but registration stays available.
-    assert TelegramTransferPublisher._contact_button({
-        "sender_username": username,
-    }) == {"inline_keyboard": [[{
-        "text": "➕ ثبت آگهی",
-        "url": "https://t.me/advertio_bot?startapp=create",
-    }]]}
+def test_transfer_contact_button_opens_main_mini_app_without_listing_or_username(username):
+    markup = TelegramTransferPublisher._contact_button({"sender_username": username})
+    assert markup == {"inline_keyboard": [[
+        {
+            "text": "👤 ارتباط با آگهی‌دهنده",
+            "url": "https://t.me/advertio_bot?startapp",
+        },
+        {
+            "text": "➕ ثبت آگهی",
+            "url": "https://t.me/advertio_bot",
+        },
+    ]]}

@@ -13,6 +13,7 @@ from telethon import errors
 from telethon.tl.types import PeerChannel, PeerUser
 
 from processing.normalizer import normalize_channel_username, normalize_date
+from services.telegram_message_links import build_telegram_message_link
 from services.message_service import MessageService
 from storage.content_duplicate import find_duplicate, store_content_hash
 from storage.database import get_connection
@@ -179,10 +180,7 @@ def _has_minimum_message_text(text):
 
 def _build_message_link(channel_username, message_id):
     """Build a human-readable Telegram message link when a public username exists."""
-    username = (channel_username or "").strip().lstrip("@")
-    if not username:
-        return None
-    return f"https://t.me/{username}/{message_id}"
+    return build_telegram_message_link(channel_username, message_id)
 
 
 def _extract_media(message, channel_username):
@@ -190,8 +188,9 @@ def _extract_media(message, channel_username):
     file_unique_id = None
     media_type = None
     media_group_id = getattr(message, "grouped_id", None)
+    message_link = _build_message_link(channel_username, message.id)
     if not message.media:
-        return has_media, media_type, file_unique_id, media_group_id, None, None
+        return has_media, media_type, file_unique_id, media_group_id, message_link, None
 
     if getattr(message.media, "document", None):
         file_unique_id = getattr(message.media.document, "id", None)
@@ -200,7 +199,6 @@ def _extract_media(message, channel_username):
         file_unique_id = getattr(message.media.photo, "id", None)
         media_type = "photo"
 
-    message_link = _build_message_link(channel_username, message.id)
     media_reference = (
         f"telegram://{channel_username}/{message.id}"
         if channel_username

@@ -132,6 +132,13 @@ async def test_crawl_preserves_exact_original_text_and_photo_caption(
         assert row["media_path"] is None
         assert row["cleaned_at"] is None
 
+    # Text-only and forwarded posts must retain the same deep-link metadata
+    # as media posts; legacy behavior accidentally left these fields NULL.
+    assert rows[0]["message_link"] == "https://t.me/fixture_source/101"
+    assert rows[2]["message_link"] == "https://t.me/fixture_source/103"
+    assert rows[0]["media_reference"] is None
+    assert rows[2]["media_reference"] is None
+
     photo = rows[1]
     assert photo["has_media"] == 1
     assert photo["media_type"] == "photo"

@@ -73,6 +73,7 @@ class ErrorAlertDispatcher:
                 for key, limit in (
                     ("original_message_id", 64),
                     ("original_channel_username", 128),
+                    ("original_channel_id", 64),
                 ):
                     value = context.get(key)
                     if value is not None:

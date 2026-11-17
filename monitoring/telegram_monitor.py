@@ -163,6 +163,7 @@ class TelegramMonitor:
             {"command":"transferlive","description":"نمایش آگهی‌های فعال حمل‌ونقل"},
             {"command":"cargoreport","description":"گزارش هفتگی مسیرهای کارگو"},
             {"command":"cargocountries","description":"نمودار آگهی‌ها بر اساس کشور مبدأ"},
+            {"command":"cargoorigins","description":"۷ مبدأ پرتقاضای ارسال بار"},
             {"command":"transfercountry","description":"خلاصه مسیرها بر اساس کشور"},
             {"command":"down_errors","description":"Download crawler error log"},
             {"command":"database","description":"Download full SQLite database"},
@@ -376,6 +377,25 @@ class TelegramMonitor:
                 await self._api("sendMessage", {
                     "chat_id": chat_id,
                     "text": "در حال حاضر نمایش نمودار کشورهای مبدأ امکان‌پذیر نیست. بعداً دوباره امتحان کنید.",
+                })
+            return
+        if public_private and command == "/cargoorigins":
+            args = text.split()[1:]
+            arg = args[0].translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")) if len(args) == 1 else ""
+            if args and arg not in {"7", "15", "30"}:
+                await self._api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "بازه معتبر نیست. از /cargoorigins 7، /cargoorigins 15 یا /cargoorigins 30 استفاده کنید.",
+                })
+                return
+            try:
+                from reports.cargo_demand_origins import send_demand_report
+                await send_demand_report(self, chat_id, days=int(arg) if args else 30)
+            except Exception:
+                logger.exception("[CARGO ORIGINS] private demand report failed chat=%s", chat_id)
+                await self._api("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "در حال حاضر گزارش مبدأهای پرتقاضا در دسترس نیست. بعداً دوباره امتحان کنید.",
                 })
             return
         if not self._is_admin_private_chat(chat,message.get("from")): return

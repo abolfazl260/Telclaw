@@ -51,6 +51,7 @@ def test_only_shipper_requests_with_valid_origins_count(demand_db):
     demand_db(8, country="??")
     demand_db(9, origin="Dubai", country="AE")
     demand_db(10, origin="Tehran", country="CA")
+    demand_db(11, origin="Tehran", country="IR")
     report = demand.build_demand_report(NOW)
     assert report["total"] == 4
     assert report["origin_count"] == 3

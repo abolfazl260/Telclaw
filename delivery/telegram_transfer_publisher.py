@@ -181,10 +181,10 @@ class TelegramTransferPublisher:
     def _contact_button(record):
         # No per-listing deep link exists. Open Advertio's Main Mini App
         # without a start parameter, regardless of sender username.
-        return {"inline_keyboard": [[
-            {"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"},
-            {"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"},
-        ]]}
+        return {"inline_keyboard": [
+            [{"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"}],
+            [{"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"}],
+        ]}
 
     @classmethod
     def format_ad(cls, record, data):

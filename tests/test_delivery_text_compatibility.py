@@ -131,13 +131,10 @@ async def test_transfer_success_is_not_resent_when_legacy_text_changes(db, monke
     assert first == {"found": 1, "sent": 1, "failed": 0, "rejected": 0}
     assert len(sent) == 1
     # The channel buttons must not disclose the sender or encode a listing ID.
-    assert sent[0][1] == {"inline_keyboard": [[
-        {
-            "text": "👤 ارتباط با آگهی‌دهنده",
-            "url": "https://t.me/advertio_bot?startapp",
-        },
-        {"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"},
-    ]]}
+    assert sent[0][1] == {"inline_keyboard": [
+        [{"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"}],
+        [{"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"}],
+    ]}
 
     with database.get_connection() as conn:
         existing = conn.execute(
@@ -308,13 +305,7 @@ def test_routed_non_transfer_preview_preserves_structured_and_raw_fallbacks(monk
 ])
 def test_transfer_contact_button_opens_main_mini_app_without_listing_or_username(username):
     markup = TelegramTransferPublisher._contact_button({"sender_username": username})
-    assert markup == {"inline_keyboard": [[
-        {
-            "text": "👤 ارتباط با آگهی‌دهنده",
-            "url": "https://t.me/advertio_bot?startapp",
-        },
-        {
-            "text": "➕ ثبت آگهی",
-            "url": "https://t.me/advertio_bot",
-        },
-    ]]}
+    assert markup == {"inline_keyboard": [
+        [{"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"}],
+        [{"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"}],
+    ]}

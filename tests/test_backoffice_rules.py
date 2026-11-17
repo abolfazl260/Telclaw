@@ -356,13 +356,10 @@ async def test_publisher_sends_only_once_per_destination(rule_db, monkeypatch):
     assert (await publisher.publish_pending())["sent"] == 1
     assert (await publisher.publish_pending())["sent"] == 0
     assert [item["chat_id"] for item in posted] == ["@turkeychannel"]
-    assert posted[0]["reply_markup"] == {"inline_keyboard": [[
-        {
-            "text": "👤 ارتباط با آگهی‌دهنده",
-            "url": "https://t.me/advertio_bot?startapp",
-        },
-        {"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"},
-    ]]}
+    assert posted[0]["reply_markup"] == {"inline_keyboard": [
+        [{"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"}],
+        [{"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"}],
+    ]}
 
 
 @pytest.mark.asyncio
@@ -534,13 +531,10 @@ async def test_sent_ad_can_be_manually_resent_without_overwriting_original(rule_
     assert tuple(original) == ("sent", 900)
     assert tuple(resend) == (1485409432, "sent", 901)
     assert posted[0]["chat_id"] == "@turkeychannel"
-    assert posted[0]["reply_markup"] == {"inline_keyboard": [[
-        {
-            "text": "👤 ارتباط با آگهی‌دهنده",
-            "url": "https://t.me/advertio_bot?startapp",
-        },
-        {"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"},
-    ]]}
+    assert posted[0]["reply_markup"] == {"inline_keyboard": [
+        [{"text": "👤 ارتباط با آگهی‌دهنده", "url": "https://t.me/advertio_bot?startapp"}],
+        [{"text": "➕ ثبت آگهی", "url": "https://t.me/advertio_bot"}],
+    ]}
     history = routing_rules.recent_deliveries(target_id=1)
     assert any(item["delivery_kind"] == "resend" and item["telegram_message_id"] == 901
                for item in history)

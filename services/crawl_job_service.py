@@ -12,6 +12,7 @@ from channel_mirror import Repository
 from channel_mirror.capture import Capture, CaptureStopped
 from collection.crawler import CRAWL_MODE_ALL
 from collection.collector_service import CollectionService
+from services.telegram_session_guard import session_guard
 
 logger = logging.getLogger("telclaw.channel_mirror")
 
@@ -26,6 +27,15 @@ class CrawlJobService:
         self.dispatch_trigger = dispatch_trigger
         self._mirror_captures = {}
         self._scheduled_sources = {}
+        self._dispatcher = None
+
+    async def stop_mirror(self):
+        if self._dispatcher:
+            await self._dispatcher.stop()
+
+    def cancel_mirror(self):
+        if self._dispatcher:
+            self._dispatcher.cancel()
 
     def register_schedule(self, key, sources):
         self._scheduled_sources[key] = tuple(sources)
@@ -65,10 +75,11 @@ class CrawlJobService:
         capture = self._begin_mirror(channel_username, from_date, to_date, crawl_mode, should_stop)
         options = {"mirror_capture": capture} if capture is not None else {}
         try:
-            result = await self.collection.crawl_channel(
-                client, channel_username, from_date, to_date,
-                crawl_mode=crawl_mode, should_stop=should_stop, **options,
-            )
+            async with session_guard(client):
+                result = await self.collection.crawl_channel(
+                    client, channel_username, from_date, to_date,
+                    crawl_mode=crawl_mode, should_stop=should_stop, **options,
+                )
             if capture is None:
                 return result
             stopped = (isinstance(result, dict) and result.get("stopped")) or (should_stop and should_stop())
@@ -79,7 +90,8 @@ class CrawlJobService:
                 capture.abort(summary["state"])
             elif not capture.error:
                 try:
-                    await capture.prepare_albums()
+                    async with session_guard(client):
+                        await capture.prepare_albums()
                     capture.check_stop()
                     summary = self.mirror.complete_crawl(capture.run_id)
                 except CaptureStopped:
@@ -90,9 +102,18 @@ class CrawlJobService:
                 else:
                     # The durable event was committed with all deliveries. This
                     # optional nonblocking wake-up never sends or runs AI here.
-                    if summary["dispatch"] and self.dispatch_trigger:
+                    if summary["dispatch"]:
                         try:
-                            value = self.dispatch_trigger(summary["dispatch"])
+                            value = None
+                            if self.dispatch_trigger:
+                                value = self.dispatch_trigger(summary["dispatch"])
+                            else:
+                                import config
+                                if config.TELEGRAM_BOT_TOKEN:
+                                    from channel_mirror.dispatcher import Dispatcher
+                                    if self._dispatcher is None:
+                                        self._dispatcher = Dispatcher(self.mirror)
+                                    self._dispatcher.trigger(summary["dispatch"], client)
                             if inspect.isawaitable(value):
                                 if inspect.iscoroutine(value):
                                     value.close()

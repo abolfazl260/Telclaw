@@ -8,6 +8,7 @@ from datetime import date, datetime
 import aiohttp
 
 import config
+from delivery import bot_limits
 from storage import database
 from storage.data_normalizer import normalize_category_data
 
@@ -243,6 +244,10 @@ class TelegramTransferPublisher:
         return "\n".join(lines).rstrip()
 
     async def _send_message(self, text, reply_markup=None):
+        try:
+            await bot_limits.wait_turn(self.token, self.channel)
+        except bot_limits.BotCooldown as exc:
+            raise TransferTelegramPublishError(str(exc)) from exc
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
         payload = {"chat_id": self.channel, "text": text, "disable_web_page_preview": True}
         if reply_markup:
@@ -251,6 +256,8 @@ class TelegramTransferPublisher:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(url, json=payload) as response:
                 data = await response.json(content_type=None)
+                if isinstance(data, dict) and data.get('error_code') == 429:
+                    bot_limits.note_429(self.token, (data.get('parameters') or {}).get('retry_after', 60))
                 if not response.ok or not data.get("ok"):
                     description = data.get("description") if isinstance(data, dict) else None
                     raise TransferTelegramPublishError(f"Telegram sendMessage failed: HTTP {response.status} {description or ''}".strip())

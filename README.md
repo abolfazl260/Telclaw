@@ -2,7 +2,8 @@
 
 Channel Mirror captures media during existing crawls and releases its independent
 queue only after each successful source crawl. See [docs/CHANNEL_MIRROR.md](docs/CHANNEL_MIRROR.md)
-for configuration, scheduling and recovery. Telegram publishing is a following phase.
+for configuration, scheduling and recovery. [Media transport](docs/CHANNEL_MIRROR_TRANSPORT.md)
+uses the configured bot after successful crawls, with safe copy/upload and album caption recovery.
 
 ## Project Structure
 

@@ -7,6 +7,7 @@ from contextlib import ExitStack
 
 import aiohttp
 import config
+from delivery import bot_limits
 from .models import SendResult, utcnow, stamp
 from .validation import ValidationError
 
@@ -29,8 +30,8 @@ class TelegramSender:
         with self.media.repo.connection() as c:
             row = c.execute("SELECT MAX(value) FROM (SELECT rate_limited_until AS value FROM publishing_targets UNION ALL SELECT value FROM mm_runtime WHERE key='bot_cooldown')").fetchone()
         if row and row[0] and row[0] > stamp():
-            return max(1, math.ceil((datetime.fromisoformat(row[0]) - utcnow()).total_seconds()))
-        return 0
+            return max(bot_limits.cooldown_seconds(self.token), 1, math.ceil((datetime.fromisoformat(row[0]) - utcnow()).total_seconds()))
+        return bot_limits.cooldown_seconds(self.token)
 
     async def _api(self, method, payload):
         cooldown = self.cooldown_seconds()
@@ -49,6 +50,7 @@ class TelegramSender:
                     if code == 429:
                         delay = max(1, min(int((body.get('parameters') or {}).get('retry_after') or 60), 604800))
                         self.media.repo.cooldown(delay)
+                        bot_limits.note_429(self.token, delay)
                         raise PreflightRetry('Telegram permission check rate limited', delay)
                     if code >= 500:
                         raise PreflightRetry('Telegram permission check temporarily unavailable')
@@ -106,6 +108,7 @@ class TelegramSender:
                     form.add_field(media_field, handle, filename=media['original_name'], content_type=media['mime'])
                     payload = form
             try:
+                await bot_limits.wait_turn(self.token, delivery['chat_id'])
                 async with self.session_factory(timeout=aiohttp.ClientTimeout(total=45)) as session:
                     kwargs = {'data': payload} if isinstance(payload, aiohttp.FormData) else {'json': payload}
                     async with session.post(f'https://api.telegram.org/bot{self.token}/{method}', **kwargs) as response:
@@ -140,10 +143,13 @@ class TelegramSender:
                         error = str(body.get('description') or f'Telegram HTTP {code}')[:1500].replace(self.token, '[redacted]')
                         if code == 429:
                             delay = max(1, min(int((body.get('parameters') or {}).get('retry_after') or 60), 604800))
+                            bot_limits.note_429(self.token, delay)
                             return SendResult('retry', error, retry_after=delay)
                         if 500 <= code <= 599:
                             return SendResult('retry', error)
                         return SendResult('failed', error)
+            except bot_limits.BotCooldown as exc:
+                return SendResult('retry', str(exc), retry_after=exc.seconds)
             except aiohttp.ClientConnectorError:
                 return SendResult('retry', 'Connection could not be established')
             except (aiohttp.ClientError, TimeoutError, OSError):

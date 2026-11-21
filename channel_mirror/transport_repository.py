@@ -8,7 +8,7 @@ from .models import SendOutcome, stamp
 class TransportRepository:
     def claim_sendable(self, job):
         with self.connection() as conn:
-            return bool(conn.execute("""SELECT 1 FROM cm_deliveries d JOIN cm_rules r ON r.id=d.rule_id
+            return self.enabled(conn) and bool(conn.execute("""SELECT 1 FROM cm_deliveries d JOIN cm_rules r ON r.id=d.rule_id
                 WHERE d.id=? AND d.claim_token=? AND d.status='sending' AND d.lease_until>?
                 AND r.state='active' AND r.destination_chat_id=d.destination_chat_id
                 AND r.source_peer_id=?""", (job["id"], job["claim_token"], stamp(), job["source_peer_id"])).fetchone())

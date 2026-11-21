@@ -5,6 +5,7 @@ import config
 SECTIONS = (
     ('publishing', '/', 'Publishing'),
     ('message-manager', '/message-manager', 'Message Manager'),
+    ('channel-mirror', '/channel-mirror', 'Channel Mirror'),
     ('operations', '/operations', 'Operations'),
     ('cargo', '/cargo', 'Active Cargo'),
     ('assistant', '/assistant', 'AI Assistant'),

@@ -10,11 +10,13 @@ from storage import database
 
 from .models import SourcePost, SendOutcome, ValidationError, caption, required, stamp, telegram_id
 from .schema import STATEMENTS
+from .crawl_repository import CrawlRepository
 
 
-class Repository:
-    def __init__(self, connect=None):
+class Repository(CrawlRepository):
+    def __init__(self, connect=None, *, busy_timeout_ms=10000):
         self.connect = connect or database.get_connection
+        self.busy_timeout_ms = max(0, int(busy_timeout_ms))
 
     @contextmanager
     def connection(self, write=False):
@@ -22,7 +24,7 @@ class Repository:
         try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
-            conn.execute("PRAGMA busy_timeout=10000")
+            conn.execute(f"PRAGMA busy_timeout={self.busy_timeout_ms}")
             if write:
                 conn.execute("BEGIN IMMEDIATE")
             yield conn
@@ -38,6 +40,9 @@ class Repository:
         with self.connection(True) as conn:
             for sql in STATEMENTS:
                 conn.execute(sql)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(cm_source_items)")}
+            if "media_metadata" not in columns:
+                conn.execute("ALTER TABLE cm_source_items ADD COLUMN media_metadata TEXT NOT NULL DEFAULT '{}'")
 
     @staticmethod
     def _audit(conn, actor, action, entity_id, details, now):
@@ -132,41 +137,46 @@ class Repository:
             raise ValidationError("A complete SourcePost is required")
         ts = stamp(now)
         with self.connection(True) as conn:
-            row = conn.execute("SELECT id FROM cm_posts WHERE source_peer_id=? AND identity=?",
-                               (post.source_peer_id, post.identity)).fetchone()
-            if row:
-                post_id = row["id"]
-                existing = conn.execute("SELECT message_id FROM cm_source_items WHERE post_id=? ORDER BY position",
-                                        (post_id,)).fetchall()
-                if [r[0] for r in existing] != [item.message_id for item in post.items]:
-                    raise ValidationError("Complete album membership changed; refusing partial or edited album")
-            else:
-                post_id = conn.execute("""INSERT INTO cm_posts(source_peer_id,identity,grouped_id,
-                    crawl_run_id,created_at) VALUES(?,?,?,?,?)""", (post.source_peer_id, post.identity,
-                    post.items[0].grouped_id, post.crawl_run_id, ts)).lastrowid
-                try:
-                    conn.executemany("""INSERT INTO cm_source_items(post_id,source_peer_id,message_id,
-                        message_date,grouped_id,media_kind,position,crawl_run_id) VALUES(?,?,?,?,?,?,?,?)""",
-                        [(post_id, post.source_peer_id, item.message_id, stamp(item.date), item.grouped_id,
-                          item.media_kind, position, post.crawl_run_id) for position, item in enumerate(post.items)])
-                except sqlite3.IntegrityError as exc:
-                    raise ValidationError("A source message already belongs to a different post") from exc
-            # Use persisted source dates, never dates supplied by a later scan.
-            oldest = conn.execute("SELECT MIN(message_date) FROM cm_source_items WHERE post_id=?",
-                                  (post_id,)).fetchone()[0]
-            rules = conn.execute("""SELECT * FROM cm_rules WHERE source_peer_id=? AND state='active'
-                                    AND activation_watermark<? ORDER BY id""",
-                                 (post.source_peer_id, oldest)).fetchall()
-            created = []
-            for rule in rules:
-                cursor = conn.execute("""INSERT INTO cm_deliveries(post_id,rule_id,destination_chat_id,
-                    destination_username,caption,created_at,updated_at) VALUES(?,?,?,?,?,?,?)
-                    ON CONFLICT(post_id,destination_chat_id) DO NOTHING""",
-                    (post_id, rule["id"], rule["destination_chat_id"], rule["destination_username"],
-                     caption(rule["destination_username"], rule["footer"]), ts, ts))
-                if cursor.rowcount:
-                    created.append(cursor.lastrowid)
-            return created
+            return self._enqueue(conn, post, ts)
+
+    def _enqueue(self, conn, post, ts, rule_ids=None):
+        row = conn.execute("SELECT id FROM cm_posts WHERE source_peer_id=? AND identity=?",
+                           (post.source_peer_id, post.identity)).fetchone()
+        if row:
+            post_id = row["id"]
+            existing = conn.execute("SELECT message_id FROM cm_source_items WHERE post_id=? ORDER BY position",
+                                    (post_id,)).fetchall()
+            if [r[0] for r in existing] != [item.message_id for item in post.items]:
+                raise ValidationError("Complete album membership changed; refusing partial or edited album")
+        else:
+            post_id = conn.execute("""INSERT INTO cm_posts(source_peer_id,identity,grouped_id,
+                crawl_run_id,created_at) VALUES(?,?,?,?,?)""", (post.source_peer_id, post.identity,
+                post.items[0].grouped_id, post.crawl_run_id, ts)).lastrowid
+            try:
+                conn.executemany("""INSERT INTO cm_source_items(post_id,source_peer_id,message_id,
+                    message_date,grouped_id,media_kind,position,crawl_run_id,media_metadata) VALUES(?,?,?,?,?,?,?,?,?)""",
+                    [(post_id, post.source_peer_id, item.message_id, stamp(item.date), item.grouped_id,
+                      item.media_kind, position, post.crawl_run_id, json.dumps(item.media_metadata)) for position, item in enumerate(post.items)])
+            except sqlite3.IntegrityError as exc:
+                raise ValidationError("A source message already belongs to a different post") from exc
+        # Use persisted source dates, never dates supplied by a later scan.
+        oldest = conn.execute("SELECT MIN(message_date) FROM cm_source_items WHERE post_id=?",
+                              (post_id,)).fetchone()[0]
+        rules = conn.execute("""SELECT * FROM cm_rules WHERE source_peer_id=? AND state='active'
+                                AND activation_watermark<? ORDER BY id""",
+                             (post.source_peer_id, oldest)).fetchall()
+        created = []
+        for rule in rules:
+            if rule_ids is not None and rule["id"] not in rule_ids:
+                continue
+            cursor = conn.execute("""INSERT INTO cm_deliveries(post_id,rule_id,destination_chat_id,
+                destination_username,caption,created_at,updated_at) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(post_id,destination_chat_id) DO NOTHING""",
+                (post_id, rule["id"], rule["destination_chat_id"], rule["destination_username"],
+                 caption(rule["destination_username"], rule["footer"]), ts, ts))
+            if cursor.rowcount:
+                created.append(cursor.lastrowid)
+        return created
 
     @staticmethod
     def _delivery(conn, delivery_id):
@@ -178,6 +188,8 @@ class Repository:
         result["destination_message_ids"] = json.loads(result["destination_message_ids"])
         result["items"] = [dict(r) for r in conn.execute(
             "SELECT * FROM cm_source_items WHERE post_id=? ORDER BY position", (row["post_id"],))]
+        for item in result["items"]:
+            item["media_metadata"] = json.loads(item["media_metadata"])
         return result
 
     def get_delivery(self, delivery_id):

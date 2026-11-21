@@ -14,7 +14,9 @@ class CollectionService:
         to_date,
         crawl_mode=CRAWL_MODE_ALL,
         should_stop=None,
+        mirror_capture=None,
     ):
+        options = {"mirror_capture": mirror_capture} if mirror_capture is not None else {}
         return await crawl_channel(
             client,
             channel_username,
@@ -22,4 +24,5 @@ class CollectionService:
             to_date,
             crawl_mode=crawl_mode,
             should_stop=should_stop,
+            **options,
         )

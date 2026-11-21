@@ -1,7 +1,8 @@
 # Telclaw
 
-Channel Mirror's independent configuration and durable queue are documented in
-[docs/CHANNEL_MIRROR.md](docs/CHANNEL_MIRROR.md). This foundation does not send messages.
+Channel Mirror captures media during existing crawls and releases its independent
+queue only after each successful source crawl. See [docs/CHANNEL_MIRROR.md](docs/CHANNEL_MIRROR.md)
+for configuration, scheduling and recovery. Telegram publishing is a following phase.
 
 ## Project Structure
 

@@ -1,7 +1,8 @@
 """Transport-independent contracts for Channel Mirror V1."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
 import re
 
 
@@ -46,6 +47,7 @@ class SourceItem:
     date: datetime
     media_kind: str
     grouped_id: int | None = None
+    media_metadata: dict = field(default_factory=dict)
 
     def __post_init__(self):
         telegram_id(self.message_id, positive=True)
@@ -54,6 +56,16 @@ class SourceItem:
             raise ValidationError("V1 supports photos, videos and documents only")
         if self.grouped_id is not None:
             telegram_id(self.grouped_id)
+        allowed = {"file_id", "size", "mime_type", "file_name", "width", "height", "duration"}
+        if not isinstance(self.media_metadata, dict) or self.media_metadata.keys() - allowed:
+            raise ValidationError("Unsupported media metadata")
+        try:
+            encoded = json.dumps(self.media_metadata, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("Media metadata must be JSON values") from exc
+        if len(encoded) > 4096:
+            raise ValidationError("Media metadata is too large")
+        object.__setattr__(self, "media_metadata", dict(self.media_metadata))
 
 
 @dataclass(frozen=True)

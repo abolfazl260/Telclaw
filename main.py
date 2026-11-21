@@ -37,6 +37,7 @@ async def _run():
     mirror_repository = ChannelMirrorRepository()
     mirror_repository.initialize()
     mirror_repository.recover_crawls()
+    mirror_repository.recover_expired()
     # .env/config.py provides defaults; Back Office values persist as overrides.
     # Apply them before importing services that may snapshot config at import/init time.
     backoffice_settings.apply_persisted_overrides()
@@ -121,6 +122,10 @@ async def _run():
     try:
         await system_ui.run()
     finally:
+        crawler_service = getattr(system_ui, "crawler", None)
+        crawl_job = getattr(getattr(crawler_service, "scheduler", None), "crawl_job", None)
+        if crawl_job and hasattr(crawl_job, "stop_mirror"):
+            await crawl_job.stop_mirror()
         if cargo_weekly_task:
             cargo_weekly_task.cancel()
             try:

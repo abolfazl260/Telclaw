@@ -7,6 +7,7 @@ import aiohttp
 
 import config
 import routing_rules
+from delivery import bot_limits
 from storage.database import get_connection
 from delivery.telegram_transfer_publisher import TelegramTransferPublisher, TransferTelegramPublishError
 
@@ -278,7 +279,7 @@ class RoutedPublisher:
 
     async def publish_pending(self, limit=50, pairs=None, resend=False, requested_by=None):
         try:
-            if routing_rules.is_rate_limited():
+            if routing_rules.is_rate_limited() or bot_limits.cooldown_seconds(self.token):
                 return {"found": 0, "sent": 0, "failed": 0, "rejected": 0, "rate_limited": True}
             if pairs is None:
                 rule_pairs = routing_rules.pending(limit)
@@ -338,6 +339,12 @@ class RoutedPublisher:
                 if markup:
                     payload["reply_markup"] = markup
                 timeout = aiohttp.ClientTimeout(total=config.TRANSFER_TELEGRAM_TIMEOUT_SECONDS)
+                try:
+                    await bot_limits.wait_turn(self.token, rule['chat_id'])
+                except bot_limits.BotCooldown:
+                    record_result("retry", error="Telegram bot is in shared cooldown")
+                    result["rate_limited"] = True
+                    return result
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(f"https://api.telegram.org/bot{self.token}/sendMessage",
                                             json=payload) as response:
@@ -350,6 +357,7 @@ class RoutedPublisher:
                                 except (ValueError, TypeError):
                                     seconds = 60
                                 routing_rules.set_rate_limit(seconds)
+                                bot_limits.note_429(self.token, seconds)
                                 record_result("failed" if resend else "retry",
                                               error=f"Telegram rate limit: retry after {seconds}s")
                                 result["failed"] += 1

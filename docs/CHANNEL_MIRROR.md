@@ -1,11 +1,12 @@
-# Channel Mirror configuration, queue and crawl capture (#183–184)
+# Channel Mirror configuration, capture and publication (#183–185)
 
 The foundation adds configuration, media metadata, a durable queue, and review
 contracts. The existing manual/scheduled crawler now captures media metadata and
-releases it only after each successful source crawl. This **does not send any
-messages**. Transport, a sending worker and Back Office UI belong to following
-issues. There is no live listener, extra timer, historical catch-up, or source
-edit/delete synchronization.
+releases it only after each successful source crawl. The configured bot can now
+publish this queue through a finite post-crawl dispatch, described in
+[CHANNEL_MIRROR_TRANSPORT.md](CHANNEL_MIRROR_TRANSPORT.md). Rules remain disabled by
+default. Back Office controls belong to the following issue. There is no live
+listener, extra timer, historical catch-up, or source edit/delete synchronization.
 
 ## Existing architecture and isolation
 
@@ -69,8 +70,8 @@ the boundary, so an album cannot be partially backfilled across activation.
 
 V1's caption is plain text: `@destination` followed, when nonempty, by two newlines
 and the exact configured footer. The snapshot is limited to 1024 UTF-16 units.
-Source captions, text, inline buttons, and AI output are never inputs. A later
-transport must use plain-text captions without interpreting HTML/Markdown.
+Source captions, text, inline buttons, and AI output are never inputs. The
+transport uses plain-text captions without interpreting HTML/Markdown.
 
 ## Low-level media repository contract
 
@@ -116,8 +117,8 @@ before persistence, rather than inventing individual album deliveries.
 `claim(now=..., lease_seconds=300)` atomically selects one active rule's due
 waiting/retry delivery, increments attempts, records a unique lease token and
 opens its numbered attempt. It returns the frozen caption, chat ID and ordered
-source items. Separate processes cannot claim the same delivery. Nothing in this
-phase calls `claim` automatically or performs a network send.
+source items. Separate processes cannot claim the same delivery. The post-crawl
+dispatcher claims only the successfully crawled source's released deliveries.
 
 `finish(delivery_id, token, SendOutcome(...))` only accepts a matching, unexpired
 claim. Repeated completion or stale worker results return `False`. Outcomes:
@@ -135,9 +136,9 @@ outcome automatically produces `uncertain`, retaining every known ID. A disabled
 rule converts an in-flight definitely-unsent retry result to skipped. Pausing or
 disabling cannot retract a send already in flight, so its outcome remains recorded.
 
-A future worker must periodically call `recover_expired()`, including on restart.
+Startup and each event-triggered drain call `recover_expired()`.
 It marks expired sending deliveries and open attempts uncertain, never waiting or
-retry. Initialization intentionally preserves queue state. The future transport
+retry. Schema initialization intentionally preserves queue state. The transport
 must classify ambiguous network failures as uncertain, respect the claim lease,
 and stop expired workers before manually authorizing a resend. SQLite cannot
 guarantee exactly-once external delivery after a process/network failure.
@@ -214,7 +215,7 @@ crawl result's `mirror` entry. Ad collection is never rerun to retry mirroring.
 | --- | --- |
 | `cm_crawl_runs` | Persistent source/range/mode, stable peer, rule generation snapshot, run state, timestamps, renewable lease and error |
 | `cm_crawl_items` | Unreleased media metadata and verified complete album members; retained even for failed/interrupted runs |
-| `cm_dispatch_events` | Durable per-completed-channel trigger committed with that run's deliveries; explicit acknowledgement for the following transport phase |
+| `cm_dispatch_events` | Durable per-completed-channel trigger committed with that run's deliveries; explicit acknowledgement by the transport |
 
 After `status=completed`, the job verifies it was not stopped/cancelled, finishes
 album assembly, and atomically inserts all eligible posts/deliveries, marks the
@@ -237,8 +238,8 @@ there is no automatic historical catch-up or independent scan.
 `dispatch_trigger(event)` provides a synchronous, nonblocking wake-up (for example
 `Event.set()` through a lambda or `Queue.put_nowait`). Its failure leaves the
 committed event pending. It must not send inline, run AI, or return a coroutine.
-The future transport acknowledges events with `acknowledge_dispatch(event_id)`.
-This issue does not install a sending worker. Dispatch happens per completed
+The transport acknowledges events with `acknowledge_dispatch(event_id)`.
+Its finite worker starts only from a successful source crawl. Dispatch happens per completed
 channel, before the scheduler waits for remaining channels or starts its existing
 full-cycle processing/AI pipeline.
 

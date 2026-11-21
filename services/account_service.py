@@ -1,6 +1,7 @@
 """Application service for Telegram account/client lifecycle."""
 
 import sessions_manager
+from services.telegram_session_guard import session_guard
 
 
 class AccountService:
@@ -12,10 +13,11 @@ class AccountService:
 
     async def connect(self, account_name):
         client = self.create_client(account_name)
-        await client.connect()
-        if not await client.is_user_authorized():
-            await client.disconnect()
-            raise PermissionError(f"Telegram session '{account_name}' is not authorized")
+        async with session_guard(client):
+            await client.connect()
+            if not await client.is_user_authorized():
+                await client.disconnect()
+                raise PermissionError(f"Telegram session '{account_name}' is not authorized")
         return client
 
     async def register(self, session_name):
@@ -38,4 +40,5 @@ class AccountService:
 
     async def disconnect(self, client):
         if client is not None:
-            await client.disconnect()
+            async with session_guard(client):
+                await client.disconnect()

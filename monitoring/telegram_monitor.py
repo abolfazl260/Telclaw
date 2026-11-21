@@ -187,19 +187,28 @@ class TelegramMonitor:
             await self._error_dispatcher.stop()
             self._error_dispatcher=None
     async def _api(self,method,payload=None):
+        from delivery import bot_limits
+        if method.startswith(('send', 'edit', 'copy')):
+            await bot_limits.wait_turn(self.token, (payload or {}).get('chat_id'))
         async with aiohttp.ClientSession(timeout=TELEGRAM_API_TIMEOUT) as session:
             async with session.post(f"https://api.telegram.org/bot{self.token}/{method}",json=payload or {}) as response:
                 data=await response.json(content_type=None)
+                if isinstance(data, dict) and data.get('error_code') == 429:
+                    bot_limits.note_429(self.token, (data.get('parameters') or {}).get('retry_after', 60))
                 if not response.ok or not isinstance(data, dict) or not data.get("ok"):
                     raise _telegram_api_failure(method, response.status, data)
                 return data
     async def _send_document(self,chat_id,file_path,caption):
         if not self._is_admin_chat(chat_id): return
+        from delivery import bot_limits
+        await bot_limits.wait_turn(self.token, chat_id)
         form=aiohttp.FormData(); file_handle=file_path.open("rb"); form.add_field("chat_id",str(chat_id)); form.add_field("caption",caption); form.add_field("document",file_handle,filename=file_path.name)
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
                 async with session.post(f"https://api.telegram.org/bot{self.token}/sendDocument",data=form) as response:
                     data=await response.json(content_type=None)
+                    if isinstance(data, dict) and data.get('error_code') == 429:
+                        bot_limits.note_429(self.token, (data.get('parameters') or {}).get('retry_after', 60))
                     if not response.ok or not isinstance(data, dict) or not data.get("ok"):
                         raise _telegram_api_failure("sendDocument", response.status, data)
                     return data

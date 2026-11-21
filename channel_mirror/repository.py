@@ -11,9 +11,10 @@ from storage import database
 from .models import SourcePost, SendOutcome, ValidationError, caption, required, stamp, telegram_id
 from .schema import STATEMENTS
 from .crawl_repository import CrawlRepository
+from .transport_repository import TransportRepository
 
 
-class Repository(CrawlRepository):
+class Repository(CrawlRepository, TransportRepository):
     def __init__(self, connect=None, *, busy_timeout_ms=10000):
         self.connect = connect or database.get_connection
         self.busy_timeout_ms = max(0, int(busy_timeout_ms))
@@ -43,6 +44,10 @@ class Repository(CrawlRepository):
             columns = {row[1] for row in conn.execute("PRAGMA table_info(cm_source_items)")}
             if "media_metadata" not in columns:
                 conn.execute("ALTER TABLE cm_source_items ADD COLUMN media_metadata TEXT NOT NULL DEFAULT '{}'")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(cm_deliveries)")}
+            for name, definition in {"publish_stage": "TEXT NOT NULL DEFAULT 'new'", "media_sent_at": "TEXT", "caption_set_at": "TEXT"}.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE cm_deliveries ADD COLUMN {name} {definition}")
 
     @staticmethod
     def _audit(conn, actor, action, entity_id, details, now):
@@ -210,7 +215,7 @@ class Repository(CrawlRepository):
                 row["destination_message_ids"] = json.loads(row["destination_message_ids"])
             return rows
 
-    def claim(self, *, now=None, lease_seconds=300):
+    def claim(self, *, now=None, lease_seconds=300, source_peer_id=None):
         if type(lease_seconds) is not int or lease_seconds <= 0:
             raise ValidationError("Lease duration must be positive seconds")
         ts = stamp(now)
@@ -218,7 +223,8 @@ class Repository(CrawlRepository):
         with self.connection(True) as conn:
             row = conn.execute("""SELECT d.id FROM cm_deliveries d JOIN cm_rules r ON r.id=d.rule_id
                 WHERE r.state='active' AND d.status IN ('waiting','retry') AND d.attempts<d.attempt_limit
-                AND (d.next_retry IS NULL OR d.next_retry<=?) ORDER BY d.id LIMIT 1""", (ts,)).fetchone()
+                AND (? IS NULL OR r.source_peer_id=?)
+                AND (d.next_retry IS NULL OR d.next_retry<=?) ORDER BY d.id LIMIT 1""", (source_peer_id, source_peer_id, ts)).fetchone()
             if not row:
                 return None
             token = uuid.uuid4().hex
@@ -252,10 +258,16 @@ class Repository(CrawlRepository):
                 else:
                     delay = max(result.retry_after, min(3600, 30 * 2 ** min(row["attempts"] - 1, 7)))
                     retry_at = stamp(datetime.fromisoformat(ts) + timedelta(seconds=delay))
-            ids = json.dumps(result.message_ids)
+            # A successful album copy is durable even while its caption needs
+            # retry/review. Empty outcome IDs must never erase that checkpoint.
+            known = json.loads(row["destination_message_ids"]) if row["publish_stage"] in {"caption_pending", "partial"} else []
+            ids = json.dumps(result.message_ids or known)
             conn.execute("""UPDATE cm_deliveries SET status=?,next_retry=?,destination_message_ids=?,
                 error=?,updated_at=?,finished_at=?,claim_token=NULL,lease_until=NULL WHERE id=?""",
                 (status, retry_at, ids, error[:2000], ts, None if status == "retry" else ts, delivery_id))
+            if status == "sent":
+                conn.execute("""UPDATE cm_deliveries SET publish_stage='complete',
+                    media_sent_at=COALESCE(media_sent_at,?),caption_set_at=? WHERE id=?""", (ts, ts, delivery_id))
             conn.execute("""UPDATE cm_delivery_attempts SET outcome=?,error=?,destination_message_ids=?,
                 finished_at=? WHERE claim_token=? AND finished_at IS NULL""",
                 (status, error[:2000], ids, ts, claim_token))
@@ -304,6 +316,9 @@ class Repository(CrawlRepository):
                 next_retry=?,updated_at=?,finished_at=?,attempt_limit=MAX(attempt_limit,attempts+1)
                 WHERE id=?""", (action, json.dumps(ids), reason[:2000], ts if action == "retry" else None,
                 ts, None if action == "retry" else ts, delivery_id))
+            if action == "sent":
+                conn.execute("""UPDATE cm_deliveries SET publish_stage='complete',
+                    media_sent_at=COALESCE(media_sent_at,?),caption_set_at=? WHERE id=?""", (ts, ts, delivery_id))
             self._audit(conn, actor, "review_" + action, delivery_id,
                         {"previous_status": row["status"], "reason": reason,
                          "message_ids": ids, "duplicate_risk_confirmed": confirm_duplicate_risk}, ts)

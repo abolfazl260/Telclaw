@@ -148,10 +148,11 @@ class CrawlRepository:
                 raise ValidationError("Crawl run not found")
             return dict(row)
 
-    def pending_dispatches(self, limit=100):
+    def pending_dispatches(self, limit=100, source_peer_id=None):
         with self.connection() as conn:
             return [dict(r) for r in conn.execute("""SELECT * FROM cm_dispatch_events WHERE acknowledged_at IS NULL
-                    ORDER BY id LIMIT ?""", (min(1000, max(1, int(limit))),))]
+                    AND (? IS NULL OR source_peer_id=?) ORDER BY id LIMIT ?""",
+                    (source_peer_id, source_peer_id, min(1000, max(1, int(limit)))))]
 
     def acknowledge_dispatch(self, event_id, *, now=None):
         with self.connection(True) as conn:

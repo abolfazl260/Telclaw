@@ -145,6 +145,8 @@ def initialize_db():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_created ON system_activity(created_at DESC)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_system_activity_kind ON system_activity(kind, created_at DESC)")
         _create_category_tables(cursor)
+        from delivery.bot_limits import initialize as initialize_bot_limits
+        initialize_bot_limits(conn)
         cursor.execute("""CREATE TABLE IF NOT EXISTS external_category_sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT NOT NULL CHECK(category IN ('joblist','housinglist','transferlist')),

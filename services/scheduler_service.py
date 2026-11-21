@@ -446,6 +446,8 @@ class SchedulerService:
         return {k: v for k, v in self._tasks.items() if not v.done()}
 
     def stop_all(self):
+        if hasattr(self.crawl_job, "cancel_mirror"):
+            self.crawl_job.cancel_mirror()
         for key, task in list(self._tasks.items()):
             if hasattr(self.crawl_job, "unregister_schedule"):
                 self.crawl_job.unregister_schedule(key)

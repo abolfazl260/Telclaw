@@ -22,7 +22,7 @@ class CrawlRepository:
 
     def has_active_rules(self):
         with self.connection() as conn:
-            return conn.execute("SELECT 1 FROM cm_rules WHERE state='active' LIMIT 1").fetchone() is not None
+            return self.enabled(conn) and conn.execute("SELECT 1 FROM cm_rules WHERE state='active' LIMIT 1").fetchone() is not None
 
     def begin_crawl(self, source_name, from_date, to_date, crawl_mode, *, now=None):
         ts, run_id = stamp(now), uuid.uuid4().hex
@@ -113,7 +113,7 @@ class CrawlRepository:
                 groups.setdefault(key, []).append(SourceItem(item["message_id"], datetime.fromisoformat(item["message_date"]),
                     item["media_kind"], gid, json.loads(item["media_metadata"])))
             count = 0
-            if rules:
+            if rules and self.enabled(conn):
                 for (kind, _), items in groups.items():
                     count += len(self._enqueue(conn, SourcePost(row["source_peer_id"], tuple(items), run_id,
                                               album_complete=kind == "album"), ts, rule_ids=rules))
@@ -175,7 +175,7 @@ class CrawlRepository:
                     (name not in known and name == selector(row["source_name"])) for name in names)
                 status = row["state"]
                 if status == "active":
-                    status = "crawling" if row["source_peer_id"] in live_peers else (
+                    status = "globally_stopped" if not self.enabled(conn) else "crawling" if row["source_peer_id"] in live_peers else (
                         "scheduled" if enrolled else "waiting_not_scheduled")
                 item.update(crawl_status=status, scheduled=enrolled)
                 result.append(item)

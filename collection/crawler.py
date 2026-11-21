@@ -30,6 +30,19 @@ MAX_RECONNECT_ATTEMPTS = 3
 RECONNECT_BASE_DELAY_SECONDS = 1
 
 
+async def _mirror_callback(capture, method, *args):
+    if capture is None or getattr(capture, "error", ""):
+        return
+    try:
+        await getattr(capture, method)(*args)
+    except Exception as exc:
+        # Mirror storage/refetch failures must not change the ad collector.
+        try:
+            capture.fail(exc)
+        except Exception:
+            logger.warning("[MIRROR CAPTURE] callback failed", exc_info=True)
+
+
 def _client_is_connected(client):
     """Check connection state; simple test doubles may omit this API."""
     is_connected = getattr(client, "is_connected", None)
@@ -233,6 +246,7 @@ async def crawl_channel(
     to_date,
     crawl_mode=CRAWL_MODE_ALL,
     should_stop=None,
+    mirror_capture=None,
 ):
     """Collect messages whose dates fall inclusively inside ``from_date..to_date``."""
     channel_username = normalize_channel_username(channel_username)
@@ -272,6 +286,7 @@ async def crawl_channel(
         duplicate_conn = get_connection()
 
         entity = await _get_input_entity_with_reconnect(client, channel_username)
+        await _mirror_callback(mirror_capture, "bind", client, entity)
         await asyncio.sleep(random.randint(30, 60))
 
         async for message in _iter_messages_with_reconnect(client, entity, channel_username):
@@ -279,7 +294,7 @@ async def crawl_channel(
                 stopped = True
                 print(f"\n⏭ [CRAWL-SKIPPED] Operator requested stage skip; remaining messages were not checked.")
                 break
-            if not message:
+            if not message or getattr(message, "date", None) is None:
                 skipped_count += 1
                 continue
 
@@ -289,6 +304,8 @@ async def crawl_channel(
             if msg_date < from_date:
                 print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
                 break
+
+            await _mirror_callback(mirror_capture, "observe", message)
 
             forward_origin_kind = await _forward_origin_kind(client, message)
             if forward_origin_kind == "channel":

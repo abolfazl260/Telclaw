@@ -404,6 +404,13 @@ class SchedulerService:
             )
         )
         self._tasks[key] = task
+        if hasattr(self.crawl_job, "register_schedule"):
+            self.crawl_job.register_schedule(key, normalized_channels)
+            # A superseded task must not unregister its replacement's schedule.
+            def unregister(completed):
+                if self._tasks.get(key) is completed:
+                    self.crawl_job.unregister_schedule(key)
+            task.add_done_callback(unregister)
         return task
 
     def schedule_channel(
@@ -439,7 +446,9 @@ class SchedulerService:
         return {k: v for k, v in self._tasks.items() if not v.done()}
 
     def stop_all(self):
-        for task in list(self._tasks.values()):
+        for key, task in list(self._tasks.items()):
+            if hasattr(self.crawl_job, "unregister_schedule"):
+                self.crawl_job.unregister_schedule(key)
             if not task.done():
                 task.cancel()
         self._tasks.clear()

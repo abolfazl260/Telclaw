@@ -32,9 +32,11 @@ async def _run():
     # The crawler's per-channel initialize() calls are now no-ops for this DB.
     from storage.message_repository import MessageRepository
     MessageRepository().initialize()
-    # Independent, additive mirror schema. No crawl hook or sender in this phase.
+    # Additive mirror schema/recovery at startup, never per-channel migrations.
     from channel_mirror.repository import Repository as ChannelMirrorRepository
-    ChannelMirrorRepository().initialize()
+    mirror_repository = ChannelMirrorRepository()
+    mirror_repository.initialize()
+    mirror_repository.recover_crawls()
     # .env/config.py provides defaults; Back Office values persist as overrides.
     # Apply them before importing services that may snapshot config at import/init time.
     backoffice_settings.apply_persisted_overrides()

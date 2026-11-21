@@ -22,6 +22,7 @@ STATEMENTS = (
         message_date TEXT NOT NULL, grouped_id INTEGER,
         media_kind TEXT NOT NULL CHECK(media_kind IN ('photo','video','document')),
         position INTEGER NOT NULL, crawl_run_id TEXT NOT NULL,
+        media_metadata TEXT NOT NULL DEFAULT '{}',
         UNIQUE(source_peer_id,message_id), UNIQUE(post_id,position))""",
     """CREATE TABLE IF NOT EXISTS cm_deliveries (
         id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES cm_posts(id),
@@ -51,4 +52,26 @@ STATEMENTS = (
     "CREATE INDEX IF NOT EXISTS cm_queue_rule ON cm_deliveries(rule_id,status)",
     "CREATE INDEX IF NOT EXISTS cm_queue_lease ON cm_deliveries(status,lease_until)",
     "CREATE INDEX IF NOT EXISTS cm_audit_entity ON cm_audit(entity_id,id)",
+    """CREATE TABLE IF NOT EXISTS cm_crawl_runs (
+        id TEXT PRIMARY KEY, source_name TEXT NOT NULL, source_peer_id INTEGER,
+        from_date TEXT NOT NULL, to_date TEXT NOT NULL, crawl_mode TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'running'
+          CHECK(state IN ('running','completed','failed','stopped','interrupted','mirror_failed')),
+        rules_snapshot TEXT NOT NULL DEFAULT '[]',
+        started_at TEXT NOT NULL, updated_at TEXT NOT NULL, finished_at TEXT,
+        lease_until TEXT, error TEXT NOT NULL DEFAULT '', deliveries_created INTEGER NOT NULL DEFAULT 0)""",
+    """CREATE TABLE IF NOT EXISTS cm_crawl_items (
+        run_id TEXT NOT NULL REFERENCES cm_crawl_runs(id), message_id INTEGER NOT NULL,
+        message_date TEXT NOT NULL, grouped_id INTEGER, media_kind TEXT NOT NULL,
+        media_metadata TEXT NOT NULL, album_complete INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(run_id,message_id))""",
+    """CREATE TABLE IF NOT EXISTS cm_dispatch_events (
+        id INTEGER PRIMARY KEY, run_id TEXT NOT NULL UNIQUE REFERENCES cm_crawl_runs(id),
+        source_peer_id INTEGER NOT NULL, deliveries_created INTEGER NOT NULL,
+        created_at TEXT NOT NULL, acknowledged_at TEXT)""",
+    "CREATE INDEX IF NOT EXISTS cm_crawl_source ON cm_crawl_runs(source_peer_id,started_at DESC)",
+    "CREATE INDEX IF NOT EXISTS cm_crawl_name ON cm_crawl_runs(source_name,started_at DESC)",
+    "CREATE INDEX IF NOT EXISTS cm_crawl_lease ON cm_crawl_runs(state,lease_until)",
+    "CREATE INDEX IF NOT EXISTS cm_crawl_groups ON cm_crawl_items(run_id,grouped_id,message_id)",
+    "CREATE INDEX IF NOT EXISTS cm_dispatch_pending ON cm_dispatch_events(acknowledged_at,id)",
 )

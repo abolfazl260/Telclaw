@@ -1,9 +1,11 @@
-# Channel Mirror foundation (#183)
+# Channel Mirror configuration, queue and crawl capture (#183–184)
 
-This phase adds configuration, media metadata, a durable queue, and administrative
-review contracts. It **does not send any messages**. There is no Telegram client,
-worker loop, crawler hook, Back Office UI, real-time listener, historical backfill,
-or edit/delete synchronization. Those belong to the following issues.
+The foundation adds configuration, media metadata, a durable queue, and review
+contracts. The existing manual/scheduled crawler now captures media metadata and
+releases it only after each successful source crawl. This **does not send any
+messages**. Transport, a sending worker and Back Office UI belong to following
+issues. There is no live listener, extra timer, historical catch-up, or source
+edit/delete synchronization.
 
 ## Existing architecture and isolation
 
@@ -70,7 +72,11 @@ and the exact configured footer. The snapshot is limited to 1024 UTF-16 units.
 Source captions, text, inline buttons, and AI output are never inputs. A later
 transport must use plain-text captions without interpreting HTML/Markdown.
 
-## Crawl service contract (not connected yet)
+## Low-level media repository contract
+
+This direct API is for complete posts, outside crawl orchestration. Production
+crawls use the staging/completion boundary described below and never call it
+while scanning.
 
 ```python
 from datetime import datetime, timezone
@@ -157,3 +163,107 @@ legacy state isolation, disabled defaults, V1 validation, snapshots, relationshi
 fan-out, peer identity, restart deduplication, complete album identity/order,
 activation/pause/reactivation boundaries, threaded and independent-process claims,
 backoff/limits, stale leases/tokens, partial outcomes and manual review.
+
+## Existing crawler integration (#184)
+
+`CrawlJobService.run_channel()` is the shared manual/recurring boundary. With at
+least one active mirror rule it starts a durable run and passes an optional
+`mirror_capture` object through `CollectionService` to `crawl_channel`. With no
+active rules there is no capture or additional Telegram resolution. Schema setup
+stays in application startup, never in channel crawls. Direct callers of the
+low-level crawler must explicitly provide a capture; they do not auto-release it.
+
+After resolving the source, capture binds to its marked Telegram peer ID and
+snapshots the IDs/activation boundaries of its active rules. A username rename
+does not change that identity; reassignment to another peer cannot redirect a
+rule. Rules activated/resumed mid-run participate on a later run. Footer edits
+are evaluated when the delivery snapshot is created at successful completion.
+
+The scan callback executes after the existing inclusive date-range check but
+**before** forwarded-origin, bot, sender-username, ten-word, photos-only and content
+dedup filters. It reads media IDs/dates/grouped IDs, kind, and whitelisted file
+metadata only. The existing ad filters, saved raw text/captions, generic document
+typing, photo downloader, processing/AI/Advertio behavior remain intact. Empty and
+service messages are ignored. Source/channel `noforwards`, protected individual
+posts and expiring media are excluded. Stickers, voice/audio, GIF animations and
+round video notes are not ordinary V1 media documents. Video attributes or a
+`video/*` MIME type distinguish videos from regular documents.
+
+Capture writes only `cm_crawl_items`, keyed by run/message ID. It never inserts a
+delivery during the scan. Only media newer than the oldest captured rule boundary
+needs staging. There are no media downloads and no AI calls in this path.
+
+Albums are assembled after the source scan, once per grouped ID. A bounded ID
+refetch includes ten neighbors on each side of the observed group, with at most
+40 requested IDs per group. Telethon's positional list response, including `None`
+for deleted IDs, is checked before accepting the group. A group reaching a window
+edge without all ten possible members, an excessive span, malformed response, or
+network error fails capture without releasing any of that run. Protected or
+unsupported groups and surviving singletons are omitted as a whole. Complete
+photo/video members are sorted by message ID. Members outside a scan page or date
+boundary can be included to preserve the entire album; the oldest member must
+still pass each destination's activation watermark. No album is split into posts.
+
+Mirror RPCs have a 15-second deadline and reuse the existing bounded reconnect
+policy (three retries). Default crawl repositories use a 250ms SQLite busy timeout
+so mirror lock contention cannot stall the ad collector for seconds. Any bind,
+capture, album, or release failure is isolated and reported separately in the
+crawl result's `mirror` entry. Ad collection is never rerun to retry mirroring.
+
+| Additional table | Purpose |
+| --- | --- |
+| `cm_crawl_runs` | Persistent source/range/mode, stable peer, rule generation snapshot, run state, timestamps, renewable lease and error |
+| `cm_crawl_items` | Unreleased media metadata and verified complete album members; retained even for failed/interrupted runs |
+| `cm_dispatch_events` | Durable per-completed-channel trigger committed with that run's deliveries; explicit acknowledgement for the following transport phase |
+
+After `status=completed`, the job verifies it was not stopped/cancelled, finishes
+album assembly, and atomically inserts all eligible posts/deliveries, marks the
+run completed, and inserts its dispatch event. Any error rolls the entire release
+back. Paused/disabled or reactivated rules are rechecked in that transaction.
+Successful configured sources emit a trigger even when deduplication creates no
+new deliveries. Unrelated/unconfigured/protected sources emit none.
+
+Failed, operator-stopped and task-cancelled runs become `failed`, `stopped` and
+`interrupted`; mirror-only failures become `mirror_failed`. None release staged
+items. Run leases last ten minutes and refresh during capture/refetch. Startup
+`recover_crawls()` marks **only expired** running records interrupted, preserving
+live runs and all staging. This is separate from delivery-lease recovery. A
+restart or next successful overlapping scan re-observes source media and safely
+deduplicates it; unreleased records of failed runs are never blindly published.
+Recovery across dates requires an existing crawl over the affected date range;
+there is no automatic historical catch-up or independent scan.
+
+`pending_dispatches()` exposes the durable outbox. An optional injected
+`dispatch_trigger(event)` provides a synchronous, nonblocking wake-up (for example
+`Event.set()` through a lambda or `Queue.put_nowait`). Its failure leaves the
+committed event pending. It must not send inline, run AI, or return a coroutine.
+The future transport acknowledges events with `acknowledge_dispatch(event_id)`.
+This issue does not install a sending worker. Dispatch happens per completed
+channel, before the scheduler waits for remaining channels or starts its existing
+full-cycle processing/AI pipeline.
+
+### Enrolling sources and reporting status
+
+Creating/activating a mirror rule does **not** schedule a source. Add its public
+username to the appropriate existing `channels.json` category using the inventory's
+normal entry shape, such as `{"username": "source_channel", "enabled": true}`.
+Select that category/source in the existing crawl controls and start a manual run
+or recurring schedule. Entries with `enabled: false` and invite-only entries
+without a username are not enrolled by the category scheduler. A rule's date
+boundary remains authoritative even during a first crawl over older dates.
+
+The scheduler registers its selected source names with the shared `CrawlJobService`
+and removes them when tasks finish or stop. `mirror_status()` reports `scheduled`
+for a selected source, `crawling` only for a currently bound, healthy capture, and
+`waiting_not_scheduled` for an active rule without an active selected source.
+Paused/disabled rules keep those states. Persisted running records alone never
+claim a source is actively mirroring after restart. Known selector-to-peer
+resolutions take precedence over mutable names; unseen names remain pending
+resolution. The following admin UI can consume this contract without adding a
+timer or another channel inventory.
+
+`tests/test_channel_mirror_crawl.py` covers both crawl modes, unchanged ad filtering,
+forwarded/textless/no-username/bot media, complete albums across scan boundaries,
+protected content, stable identity, watermarks/reactivation, durable staging and
+outbox, failures/cancel/stop/reconnect, startup recovery, scheduler registration,
+and per-channel dispatch before the rest of the cycle's AI pipeline.

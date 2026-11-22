@@ -25,17 +25,29 @@ def _migrate_messages_table(cursor):
     cursor.execute("PRAGMA table_info(messages)"); existing={row[1] for row in cursor.fetchall()}
     for column,definition in MESSAGE_COLUMNS.items():
         if column not in existing: cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
-    cursor.execute("UPDATE messages SET collection_status=COALESCE(collection_status,'collected')")
-    cursor.execute("UPDATE messages SET processing_status=CASE processing_status WHEN 'collected' THEN 'pending' WHEN 'processed' THEN 'processed' WHEN 'processing_failed' THEN 'failed' WHEN 'ai_processed' THEN 'processed' WHEN 'ai_failed' THEN 'processed' ELSE processing_status END")
-    cursor.execute("UPDATE messages SET classification_status=CASE WHEN classification_status='processing' THEN 'processing' WHEN classification_category IS NOT NULL THEN 'processed' WHEN processing_status='processed' AND COALESCE(classification_status,'waiting')='waiting' THEN 'pending' ELSE COALESCE(classification_status,'waiting') END")
+    cursor.execute("UPDATE messages SET collection_status='collected' WHERE collection_status IS NULL")
+    cursor.execute("""UPDATE messages SET processing_status=CASE processing_status
+        WHEN 'collected' THEN 'pending'
+        WHEN 'processing_failed' THEN 'failed'
+        ELSE 'processed'
+        END
+        WHERE processing_status IN ('collected','processing_failed','ai_processed','ai_failed')""")
+    # A category can remain after a retry or failure. Only infer an
+    # outcome for rows whose classification status is uninitialized.
+    cursor.execute("""UPDATE messages SET classification_status=CASE
+        WHEN classification_category IS NOT NULL THEN 'processed'
+        WHEN processing_status='processed' THEN 'pending'
+        ELSE 'waiting'
+        END
+        WHERE classification_status IS NULL
+           OR (classification_status='waiting'
+               AND (classification_category IS NOT NULL OR processing_status='processed'))""")
     # initialize_db() runs on every startup. Modern statuses are authoritative:
     # a failed extraction often has ai_error=NULL, and must NEVER become processed
     # merely because ai_processed_at is populated. The same applies to skipped,
     # pending and in-flight processing records. Only infer legacy/uninitialized
     # states when the record is eligible for extraction.
     cursor.execute("""UPDATE messages SET ai_status=CASE
-        WHEN ai_status IN ('pending','processing','processed','failed','skipped')
-            THEN ai_status
         WHEN processing_status='processed'
              AND classification_status='processed'
              AND classification_category IN ('housinglist','transferlist','joblist')
@@ -45,13 +57,19 @@ def _migrate_messages_table(cursor):
                 WHEN ai_error IS NOT NULL THEN 'failed'
                 ELSE 'processed'
             END
-        ELSE COALESCE(ai_status,'waiting')
+        ELSE 'waiting'
         END
-        WHERE ai_status IS NULL OR ai_status NOT IN
-            ('pending','processing','processed','failed','skipped')""")
-    cursor.execute("UPDATE messages SET processing_started_at=NULL WHERE processing_status <> 'processing' OR processing_status IS NULL")
-    cursor.execute("UPDATE messages SET classification_started_at=NULL WHERE classification_status <> 'processing' OR classification_status IS NULL")
-    cursor.execute("UPDATE messages SET ai_started_at=NULL WHERE ai_status <> 'processing' OR ai_status IS NULL")
+        WHERE ai_status IS NULL
+           OR (ai_status NOT IN ('pending','processing','processed','failed','skipped')
+               AND processing_status='processed'
+               AND classification_status='processed'
+               AND classification_category IN ('housinglist','transferlist','joblist'))""")
+    cursor.execute("""UPDATE messages SET processing_started_at=NULL
+        WHERE processing_started_at IS NOT NULL AND processing_status IS NOT 'processing'""")
+    cursor.execute("""UPDATE messages SET classification_started_at=NULL
+        WHERE classification_started_at IS NOT NULL AND classification_status IS NOT 'processing'""")
+    cursor.execute("""UPDATE messages SET ai_started_at=NULL
+        WHERE ai_started_at IS NOT NULL AND ai_status IS NOT 'processing'""")
 
 def _create_category_table(cursor,table,fields):
     columns=["id INTEGER PRIMARY KEY AUTOINCREMENT","processed_message_id INTEGER UNIQUE",*[f"{n} {d}" for n,d in fields.items()],"created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP","FOREIGN KEY(processed_message_id) REFERENCES messages(id) ON DELETE CASCADE"]

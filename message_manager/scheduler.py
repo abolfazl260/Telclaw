@@ -1,26 +1,63 @@
 """Independent runtime worker; SQLite owns all durable execution state."""
 import asyncio
+from datetime import datetime
 import logging
+import time
 
 import aiohttp
 import config
-from .models import SendResult
+from .models import SendResult, utcnow
 from .telegram_sender import PreflightRetry
 from .validation import ValidationError
 
 logger = logging.getLogger(__name__)
 
+HEARTBEAT_INTERVAL_SECONDS = 60
+RECOVERY_INTERVAL_SECONDS = 300
+
 
 class Worker:
     def __init__(self, repo, sender):
         self.repo, self.sender = repo, sender
+        self._last_heartbeat_at = None
+        self._last_recovery_at = None
+
+    def _heartbeat_if_due(self):
+        now = time.monotonic()
+        if (self._last_heartbeat_at is None
+                or now - self._last_heartbeat_at >= HEARTBEAT_INTERVAL_SECONDS):
+            self.repo.worker_heartbeat()
+            self._last_heartbeat_at = now
+
+    def _recover_if_due(self):
+        now = time.monotonic()
+        if (self._last_recovery_at is None
+                or now - self._last_recovery_at >= RECOVERY_INTERVAL_SECONDS):
+            self.repo.recover()
+            self._last_recovery_at = now
+
+    def _idle_sleep_seconds(self):
+        """Sleep up to the idle poll interval, waking early for a scheduled post."""
+        delay = config.MESSAGE_MANAGER_POLL_SECONDS
+        next_due = self.repo.next_schedule_due()
+        if next_due:
+            until_due = (datetime.fromisoformat(next_due) - utcnow()).total_seconds()
+            if until_due > 0:
+                delay = min(delay, max(0.5, until_due))
+        return delay
 
     async def tick(self):
-        self.repo.worker_heartbeat()
-        self.repo.recover()
+        self._heartbeat_if_due()
+        # Recovery must still run at startup and periodically, even when idle.
+        self._recover_if_due()
+        # Do not open write transactions for materialize/claim on empty queues.
+        if not self.repo.has_due_work():
+            return 0
+
         self.repo.materialize(limit=config.MESSAGE_MANAGER_BATCH_SIZE,
             once_grace=config.MESSAGE_MANAGER_MISSED_WINDOW_SECONDS,
             recurring_grace=config.MESSAGE_MANAGER_RECURRING_GRACE_SECONDS)
+        handled = 0
         for _ in range(config.MESSAGE_MANAGER_BATCH_SIZE):
             job = self.repo.claim(spacing=config.MESSAGE_MANAGER_SEND_SPACING_SECONDS,
                 once_grace=config.MESSAGE_MANAGER_MISSED_WINDOW_SECONDS,
@@ -54,13 +91,16 @@ class Worker:
                 logger.error('Message Manager delivery failed | delivery=%s type=%s', job['id'], type(exc).__name__)
                 result = SendResult('uncertain', 'Unexpected dispatch error; verify Telegram before resending')
             self.repo.finish(job, result, max_attempts=config.MESSAGE_MANAGER_MAX_ATTEMPTS)
-            self.repo.worker_heartbeat()
+            handled += 1
+            self._heartbeat_if_due()
+        return handled
 
     async def run(self):
         cycles = 0
         while True:
+            handled = 0
             try:
-                await self.tick()
+                handled = await self.tick()
                 if cycles % 1000 == 0:
                     self.sender.media.purge_unreferenced(config.MESSAGE_MANAGER_MEDIA_RETENTION_DAYS)
                 cycles += 1
@@ -69,9 +109,15 @@ class Worker:
                 raise
             except Exception as exc:
                 self.repo.worker_heartbeat('error', type(exc).__name__)
+                # A successful next tick should promptly restore the running state.
+                self._last_heartbeat_at = None
                 logger.exception('Message Manager worker cycle failed')
             try:
-                await asyncio.sleep(config.MESSAGE_MANAGER_POLL_SECONDS)
+                # Preserve short spacing when the worker is actively draining
+                # deliveries; use slower, due-aware polling when idle.
+                delay = (config.MESSAGE_MANAGER_SEND_SPACING_SECONDS
+                         if handled else self._idle_sleep_seconds())
+                await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 self.repo.worker_heartbeat('stopped')
                 raise

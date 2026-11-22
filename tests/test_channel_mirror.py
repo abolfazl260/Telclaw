@@ -58,7 +58,6 @@ def test_default_disabled_and_explicit_activation(mirror):
         rule(mirror)
 
 
-@pytest.mark.parametrize("mode", ["text_only", "text_and_media", "anything"])
 def test_mirror_rejects_same_channel_as_source_and_destination(mirror):
     with pytest.raises(ValidationError, match="different channels"):
         mirror.create_rule(PEER, "@sourcechannel", PEER, "@sourcechannel",
@@ -87,6 +86,7 @@ def test_mirror_rejects_direct_and_multihop_cycles_on_activation(mirror):
     assert mirror.get_rule(third)["state"] == "disabled"
 
 
+@pytest.mark.parametrize("mode", ["text_only", "text_and_media", "anything"])
 def test_extension_modes_are_not_enabled(mirror, mode):
     with pytest.raises(ValidationError, match="media_only"):
         mirror.create_rule(PEER, "@source", DEST, "@destination", "", 42, mode=mode, now=NOW)

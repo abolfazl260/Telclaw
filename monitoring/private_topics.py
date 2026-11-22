@@ -1,4 +1,4 @@
-"""Optional, admin-only private topic routing for the Telegram monitoring bot.
+"""Admin-only private topic routing for the Telegram monitoring bot.
 
 The settings apply bot-wide, but only explicitly authorized administrators are
 provisioned and routed. No topics or existing messages are ever deleted.
@@ -27,9 +27,8 @@ _TOPIC_SETTINGS = {
 
 
 class PrivateTopics:
-    def __init__(self, monitor, *, enabled: bool = False):
+    def __init__(self, monitor):
         self.monitor = monitor
-        self.enabled = bool(enabled)
         self.ready = False
         self._schema_ready = False
         self._cache: dict[tuple[int, str], int] = {}
@@ -63,9 +62,7 @@ class PrivateTopics:
             self._route_key.reset(token)
 
     async def configure(self):
-        """Run once on startup, and only if explicitly enabled in config."""
-        if not self.enabled:
-            return
+        """Enable Telegram topics automatically on monitoring startup."""
         try:
             response = await self.monitor._api("getMe", {})
             current = response.get("result") or {}
@@ -73,7 +70,7 @@ class PrivateTopics:
                 await self.monitor._api("setMySettings", dict(_TOPIC_SETTINGS))
             self.ready = True
         except Exception as exc:
-            # Optional topic support must not prevent monitoring startup.
+            # Telegram API failures must not prevent monitoring startup.
             logger.warning("Private Topic Sidebar unavailable: %s", exc)
             self.ready = False
 

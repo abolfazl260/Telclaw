@@ -140,7 +140,7 @@ class _TelegramErrorHandler(logging.Handler):
 
 class TelegramMonitor:
     def __init__(self):
-        self.token=config.TELEGRAM_BOT_TOKEN; self.enabled=config.TELEGRAM_MONITOR_ENABLED and bool(self.token); self._task=None; self._offset=0; self._stopping=asyncio.Event(); self._error_handler=None; self._error_dispatcher=None; self._topics=PrivateTopics(self, enabled=config.TELEGRAM_PRIVATE_TOPICS_ENABLED)
+        self.token=config.TELEGRAM_BOT_TOKEN; self.enabled=config.TELEGRAM_MONITOR_ENABLED and bool(self.token); self._task=None; self._offset=0; self._stopping=asyncio.Event(); self._error_handler=None; self._error_dispatcher=None; self._topics=PrivateTopics(self)
     async def start(self):
         if not self.enabled: logger.info("Telegram monitor disabled"); return
         database.initialize_db(); self._stopping.clear(); self._error_dispatcher=ErrorAlertDispatcher(self); self._error_dispatcher.start(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._topics.configure(); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")

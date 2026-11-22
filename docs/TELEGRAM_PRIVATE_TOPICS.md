@@ -1,6 +1,6 @@
 # Telegram Private Topic Sidebar (three admin topics)
 
-This optional feature organizes the existing Telclaw monitoring bot's private conversations into three topics for each authorized administrator.
+Telclaw's Telegram Monitor automatically manages three private-chat topics for every authorized administrator. There is **no separate feature flag, .env toggle, or Backoffice setting** for Topic Sidebar.
 
 | Topic | Messages |
 |---|---|
@@ -8,33 +8,30 @@ This optional feature organizes the existing Telclaw monitoring bot's private co
 | هشدارها | WARNING notifications and their original-source message context |
 | خطاها | ERROR / CRITICAL notifications and their original-source message context |
 
-All report text, command permissions, and business logic are unchanged. Channel publishing is not routed to private topics.
+Report content, administrator permissions, and business logic are unchanged. Channel publishing is not routed to private topics.
 
-## Enable after code review
+## Normal operation
 
-1. Deploy the code with `TELCLAW_TELEGRAM_PRIVATE_TOPICS_ENABLED=false` (the default). No Telegram bot settings are altered while this flag is disabled.
-2. Set `TELCLAW_TELEGRAM_PRIVATE_TOPICS_ENABLED=true` and restart the monitoring bot. The bot reads its settings with `getMe`; if needed, it calls `setMySettings` with `has_topics_enabled=true`, `has_topic_sidebar=true`, and `allows_users_to_create_topics=false`. Other bot settings, including `callback_query_mode`, are not changed.
-3. Every authorized administrator sends `/start` in their own private chat. Three topics are created on first use. The IDs are stored in SQLite (`telegram_monitor_private_topics`). Repeated `/start` reuses the saved IDs.
-4. Check a routine report in Dashboard, a WARNING in Warnings, and an ERROR/CRITICAL in Errors. Responses to commands and callback buttons should appear in the originating topic.
+1. Deploy the latest Telclaw code and restart the Telegram Monitor. When its usual bot token and monitoring service are enabled, the monitor automatically checks the bot settings with `getMe` and, if needed, calls `setMySettings` to turn on `has_topics_enabled` and `has_topic_sidebar` and turn off `allows_users_to_create_topics`. Other bot settings, including `callback_query_mode`, remain unchanged.
+2. Each authorized administrator sends `/start` in their own private chat. The bot provisions any missing topics, saves thread IDs to the `telegram_monitor_private_topics` SQLite table, and reuses the saved IDs on subsequent `/start` commands.
+3. Routine reports are routed to Dashboard; WARNING to Warnings; ERROR/CRITICAL to Errors. Replies to commands and callback interactions stay in the originating topic.
 
-## Important scope and limitations
+No manual BotFather operation is needed when Telegram accepts `setMySettings`. No separate activation step in Backoffice or server `.env` is available or required.
 
-- Telegram's sidebar setting applies to the **entire bot**, but Telclaw provisions administrative topics only for authorized administrator IDs. Public commands remain available.
-- Telegram clients may show their own General topic in addition to the three named topics. The bot does not attempt to remove General or relocate old messages.
-- A Telegram API request for topic creation that times out may have succeeded; automatic retries are intentionally avoided. Operators should inspect the chat before repeating `/start` after an ambiguous network error.
-- For a confirmed HTTP 400 invalid/deleted topic, the send is retried once into the main private chat; the topic mapping is removed and a later `/start` recreates it. Network timeouts and rate-limit responses are **not** resent automatically (duplicates are possible otherwise).
-- Routing applies only to sends through the Telclaw Telegram Monitor. Other independent Telegram publishers are not modified.
+## Scope, fallback, and troubleshooting
 
-## Disable and rollback
-
-Set `TELCLAW_TELEGRAM_PRIVATE_TOPICS_ENABLED=false` and restart. The bot returns to the legacy chat-wide delivery path, without deleting topics or SQLite mappings.
-
-**Important:** Disabling this environment flag does not automatically revert Telegram's global bot settings. To disable Topic Sidebar across the bot, change the corresponding settings explicitly with `setMySettings` after considering the impact on users.
+- Telegram's topic/sidebar setting applies to the **whole bot**, including the visual experience for ordinary users. Telclaw only creates and routes the three administrator topics for authorized administrators. Public commands remain available.
+- Telegram clients may also show a built-in General topic. Previous chat messages are not moved.
+- Topic creation can succeed even if the network response times out. Automatic retries for ambiguous failures are intentionally avoided; check the chat before manually repeating `/start`.
+- An HTTP 400 response definitively identifying a deleted/invalid topic causes a one-time resend to the main private chat. The invalid mapping is dropped; the next `/start` can provision it again. Network failures and rate limits are not automatically resent.
+- If Telegram rejects `setMySettings` or its API is unavailable, the monitor continues to operate with the existing legacy chat delivery path and logs a warning; no separate feature switch is needed.
+- This functionality is part of the Telegram Monitor. If the entire monitor is not running or has no configured token, no topics can be managed.
 
 ## Tests
 
 ```bash
-python -m pytest -q tests/test_private_topics.py tests/test_telegram_monitor_access.py tests/test_admin_error_notifications.py
+python -m pytest -q tests/test_private_topics.py tests/test_telegram_topic_routing.py
+python -m pytest -q tests
 ```
 
-Check the full regression suite and the Telegram client behavior before merging and deploying.
+After deployment, verify the three topics and alert routing in an administrator's Telegram client.

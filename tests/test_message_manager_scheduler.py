@@ -171,3 +171,20 @@ def test_due_work_probe_respects_retry_backoff_and_paused_schedules(mm):
                   ('retry', stamp(datetime(2026, 11, 6, 8, 31, tzinfo=timezone.utc))))
     assert not mm.repo.has_due_work(now=datetime(2026, 11, 6, 8, 30, tzinfo=timezone.utc))
     assert mm.repo.has_due_work(now=datetime(2026, 11, 6, 8, 31, tzinfo=timezone.utc))
+
+
+@pytest.mark.asyncio
+async def test_delivery_only_tick_skips_schedule_materialization(mm, monkeypatch):
+    """A queued delivery must not reopen schedule write transactions on each send."""
+    local = utcnow().astimezone(recurrence.TEHRAN)
+    scheduled(mm, targets=(1,),
+              spec={'date': local.date().isoformat(), 'time': local.strftime('%H:%M')})
+    assert mm.repo.materialize() == 1
+    assert mm.repo.due_work() == (False, True)
+
+    def unexpected_materialize(*args, **kwargs):
+        raise AssertionError('Existing deliveries must not re-materialize schedules')
+
+    monkeypatch.setattr(mm.repo, 'materialize', unexpected_materialize)
+    assert await Worker(mm.repo, mm.sender).tick() == 1
+    assert len(mm.sender.sent) == 1

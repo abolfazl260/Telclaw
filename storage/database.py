@@ -27,7 +27,14 @@ def _migrate_messages_table(cursor):
         if column not in existing: cursor.execute(f"ALTER TABLE messages ADD COLUMN {column} {definition}")
     cursor.execute("UPDATE messages SET collection_status=COALESCE(collection_status,'collected')")
     cursor.execute("UPDATE messages SET processing_status=CASE processing_status WHEN 'collected' THEN 'pending' WHEN 'processed' THEN 'processed' WHEN 'processing_failed' THEN 'failed' WHEN 'ai_processed' THEN 'processed' WHEN 'ai_failed' THEN 'processed' ELSE processing_status END")
-    cursor.execute("UPDATE messages SET classification_status=CASE WHEN classification_status='processing' THEN 'processing' WHEN classification_category IS NOT NULL THEN 'processed' WHEN processing_status='processed' AND COALESCE(classification_status,'waiting')='waiting' THEN 'pending' ELSE COALESCE(classification_status,'waiting') END")
+    # A category can remain after a retry or failure. Only infer an
+    # outcome for rows whose classification status is uninitialized.
+    cursor.execute("""UPDATE messages SET classification_status=CASE
+        WHEN classification_category IS NOT NULL THEN 'processed'
+        WHEN processing_status='processed' THEN 'pending'
+        ELSE 'waiting'
+        END
+        WHERE classification_status IS NULL OR classification_status='waiting'""")
     # initialize_db() runs on every startup. Modern statuses are authoritative:
     # a failed extraction often has ai_error=NULL, and must NEVER become processed
     # merely because ai_processed_at is populated. The same applies to skipped,

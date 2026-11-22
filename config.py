@@ -58,10 +58,6 @@ TELEGRAM_PROXY = os.getenv("TELECLAW_TELEGRAM_PROXY", "").strip()
 # Enabled by default when a bot token is configured; operators can explicitly disable it.
 TELEGRAM_MONITOR_ENABLED = os.getenv("TELCLAW_TELEGRAM_MONITOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 TELEGRAM_BOT_TOKEN = os.getenv("TELCLAW_TELEGRAM_BOT_TOKEN", "").strip()
-# Opt-in Telegram three-topic sidebar for private administrator chats.
-TELEGRAM_PRIVATE_TOPICS_ENABLED = os.getenv(
-    "TELCLAW_TELEGRAM_PRIVATE_TOPICS_ENABLED", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
 TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES = _float_env("TELCLAW_TELEGRAM_MONITOR_REPORT_INTERVAL_MINUTES", 30, minimum=0)
 BACKOFFICE_ENABLED = os.getenv("TELCLAW_BACKOFFICE_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 BACKOFFICE_PUBLIC_URL = os.getenv("TELCLAW_BACKOFFICE_PUBLIC_URL", "").strip()

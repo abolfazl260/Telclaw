@@ -77,7 +77,7 @@ async def test_monitor_invalid_topic_falls_back_once_without_resending_timeouts(
 async def test_transfer_live_extension_preserves_command_topic(monkeypatch):
     class LocalMonitor:
         def __init__(self):
-            self._topics = PrivateTopics(self, enabled=True)
+            self._topics = PrivateTopics(self)
             self._topics.ready = True
             self.delivered_threads = []
 

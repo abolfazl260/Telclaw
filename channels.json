@@ -300,6 +300,86 @@
       "description": "Luxury housing and real-estate listings in Toronto."
     }
   ],
+  "channelCanadaHouse": [
+    {
+      "name": "Montreal News",
+      "username": "montreal_news",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Canada Home",
+      "username": "CanadaHome",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Khabar CA",
+      "username": "khabar_ca",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Khabar Canada",
+      "username": "khabarcanada",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Vancoveriha",
+      "username": "vancoveriha",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Apply Abroad Canada",
+      "username": "ApplyabroadCa",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Buy Rent Toronto",
+      "username": "buy_renttoronto",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Ask Canada",
+      "username": "AskCanada",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "MK Group Real Estate",
+      "username": "mkgrouprealestate",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Amlake Toronto",
+      "username": "Amlaketoronto",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Karyabi Canada",
+      "username": "karyabi_canada",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Canada Hiring",
+      "username": "CanadaHiring",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    },
+    {
+      "name": "Job Canada AAA",
+      "username": "jobcanadaaa",
+      "country": "Canada",
+      "description": "User-submitted Canada-related Telegram source."
+    }
+  ],
   "Canada_Flight": [
     {
       "name": "Iran Australia Flights",

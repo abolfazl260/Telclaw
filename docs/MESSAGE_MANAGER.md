@@ -62,7 +62,7 @@ This import is independent of the existing external-ad CSV importer.
 | Environment variable | Default / bound |
 | --- | --- |
 | `TELCLAW_MESSAGE_MANAGER_ENABLED` | `true`; no setting required, explicit `false` disables the module |
-| `TELCLAW_MESSAGE_MANAGER_POLL_SECONDS` | `2`, minimum `0.5` |
+| `TELCLAW_MESSAGE_MANAGER_POLL_SECONDS` | `15` seconds (maximum idle poll), minimum `0.5`; wakes earlier for the next active schedule |
 | `TELCLAW_MESSAGE_MANAGER_BATCH_SIZE` | `25`, capped at `100` |
 | `TELCLAW_MESSAGE_MANAGER_MAX_ATTEMPTS` | `3`, capped at `10` |
 | `TELCLAW_MESSAGE_MANAGER_MISSED_WINDOW_SECONDS` | `86400` |
@@ -76,7 +76,7 @@ This import is independent of the existing external-ad CSV importer.
 
 Media uploads use a dedicated authenticated, header-CSRF-protected streaming endpoint, without increasing the application's existing 2 MiB limit for ordinary forms. XLSX multipart requests remain within that limit. Configure any reverse proxy's upload limit specifically for `/message-manager/media`, and keep request/connection timeouts appropriate for your maximum file size.
 
-Retention removes only old unreferenced assets in bounded periodic batches. Assets referenced by drafts, schedule snapshots or unconfirmed import previews remain available; referenced publication media and all delivery/audit/import records are retained. Back up the database **and** private media directory together. A missing file fails that delivery; it does not trigger arbitrary remote downloading.
+Idle worker cycles first perform a read-only due-work check; only due schedules or eligible deliveries trigger the write-transaction materialization/claim path. When no work is due, the worker polls at most every 15 seconds (or the configured interval) and wakes early for the nearest active schedule. Active delivery draining keeps the existing send spacing. Heartbeat persistence is throttled to once per minute, and expired-lease recovery runs on startup and at least every five minutes. This reduces idle SQLite writes while preserving durable queue transitions, the existing missed-event grace windows, and the manual review requirement for uncertain sends. A newly activated or retried publication may be picked up at the next idle poll, so short delays are expected.\n\nRetention removes only old unreferenced assets in bounded periodic batches. Assets referenced by drafts, schedule snapshots or unconfirmed import previews remain available; referenced publication media and all delivery/audit/import records are retained. Back up the database **and** private media directory together. A missing file fails that delivery; it does not trigger arbitrary remote downloading.
 
 ## Verification and recovery / rollback
 

@@ -209,25 +209,28 @@ class Repository:
                 raise ValidationError("Invalid schedule transition")
             self.audit(c, actor, action, schedule_id)
 
-    def has_due_work(self, now=None):
-        """Read-only preflight: avoid write transactions when the queue is idle.
+    def due_work(self, now=None):
+        """Read-only hints for the next tick: (schedule_due, delivery_due).
 
-        This is only an optimization; materialize() and claim() still perform
-        their authoritative checks inside BEGIN IMMEDIATE transactions.
-        A newly added schedule is picked up by the next bounded poll.
+        Materialization and claims still enforce the authoritative state under
+        BEGIN IMMEDIATE. These hints only suppress unnecessary write transactions.
         """
         current = stamp(now)
         with self.connection() as c:
-            if c.execute("""SELECT 1 FROM mm_schedules
-                WHERE state='active' AND next_due<=? LIMIT 1""", (current,)).fetchone():
-                return True
-            return c.execute("""SELECT 1 FROM mm_deliveries d
+            schedule_due = c.execute("""SELECT 1 FROM mm_schedules
+                WHERE state='active' AND next_due<=? LIMIT 1""", (current,)).fetchone() is not None
+            delivery_due = c.execute("""SELECT 1 FROM mm_deliveries d
                 JOIN mm_occurrences o ON o.id=d.occurrence_id
                 JOIN mm_schedules s ON s.id=o.schedule_id
                 WHERE d.status IN ('waiting','retry')
                   AND (d.next_retry IS NULL OR d.next_retry<=?)
                   AND s.state IN ('active','completed')
                 LIMIT 1""", (current,)).fetchone() is not None
+            return schedule_due, delivery_due
+
+    def has_due_work(self, now=None):
+        """Check if any work is due without acquiring a SQLite write lock."""
+        return any(self.due_work(now))
 
     def next_schedule_due(self):
         """Nearest active schedule; uses the existing mm_schedule_due index."""

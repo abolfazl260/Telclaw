@@ -59,6 +59,34 @@ def test_default_disabled_and_explicit_activation(mirror):
 
 
 @pytest.mark.parametrize("mode", ["text_only", "text_and_media", "anything"])
+def test_mirror_rejects_same_channel_as_source_and_destination(mirror):
+    with pytest.raises(ValidationError, match="different channels"):
+        mirror.create_rule(PEER, "@sourcechannel", PEER, "@sourcechannel",
+                           "", 42, now=NOW)
+    assert mirror.list_rules() == []
+
+
+def test_mirror_rejects_direct_and_multihop_cycles_on_activation(mirror):
+    alpha, beta, gamma = PEER, DEST, DEST - 1
+    first = mirror.create_rule(alpha, "@channelalpha", beta, "@channelbeta",
+                               "", 42, now=NOW)
+    reverse = mirror.create_rule(beta, "@channelbeta", alpha, "@channelalpha",
+                                 "", 42, now=NOW)
+    mirror.set_rule_state(first, "active", 42, now=NOW)
+    with pytest.raises(ValidationError, match="cycle"):
+        mirror.set_rule_state(reverse, "active", 42, now=NOW)
+    assert mirror.get_rule(reverse)["state"] == "disabled"
+
+    second = mirror.create_rule(beta, "@channelbeta", gamma, "@channelgamma",
+                                "", 42, now=NOW)
+    third = mirror.create_rule(gamma, "@channelgamma", alpha, "@channelalpha",
+                               "", 42, now=NOW)
+    mirror.set_rule_state(second, "active", 42, now=NOW)
+    with pytest.raises(ValidationError, match="cycle"):
+        mirror.set_rule_state(third, "active", 42, now=NOW)
+    assert mirror.get_rule(third)["state"] == "disabled"
+
+
 def test_extension_modes_are_not_enabled(mirror, mode):
     with pytest.raises(ValidationError, match="media_only"):
         mirror.create_rule(PEER, "@source", DEST, "@destination", "", 42, mode=mode, now=NOW)

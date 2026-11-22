@@ -76,9 +76,14 @@ def test_startup_recovers_stale_stage_claims_but_keeps_fresh_claims(tmp_path, mo
     assert _row(2)["classification_started_at"] is None
     assert _row(3)["ai_status"] == "pending"
     assert _row(3)["ai_started_at"] is None
-    assert _row(4)["processing_status"] == "processing"
-    assert _row(5)["classification_status"] == "processing"
-    assert _row(6)["ai_status"] == "processing"
+    for message_id, stage in ((4, "processing"), (5, "classification"), (6, "ai")):
+        row = _row(message_id)
+        assert row[f"{stage}_status"] == "processing"
+        assert row[f"{stage}_started_at"] == fresh
+
+    assert database.recover_stale_processing_states() == {
+        "processing": 0, "classification": 0, "ai": 0,
+    }
 
 
 def test_stage_claim_is_atomic_and_records_start_time(tmp_path, monkeypatch):

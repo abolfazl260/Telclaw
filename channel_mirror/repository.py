@@ -72,6 +72,8 @@ class Repository(CrawlRepository, TransportRepository, AdminRepository):
         source_name = required(source_name, "Resolvable source name")
         destination_username = required(destination_username, "Public destination @username")
         caption(destination_username, footer)
+        if source_peer_id == destination_chat_id:
+            raise ValidationError("Mirror source and destination must be different channels")
         if mode != "media_only":
             raise ValidationError("V1 mode must be media_only")
         ts = stamp(now)
@@ -115,6 +117,20 @@ class Repository(CrawlRepository, TransportRepository, AdminRepository):
                 raise ValidationError("Only an active rule may be paused")
             watermark = before["activation_watermark"]
             if state == "active":
+                # Mirror cycles would repeatedly republish the same media across
+                # future crawls, including multi-channel A -> B -> C -> A loops.
+                # Query the active graph inside this write transaction so two
+                # concurrent activations cannot create a cycle.
+                if conn.execute("""WITH RECURSIVE downstream(peer_id) AS (
+                        SELECT ?
+                        UNION
+                        SELECT r.destination_chat_id FROM cm_rules r
+                        JOIN downstream d ON r.source_peer_id=d.peer_id
+                        WHERE r.state='active' AND r.id<>?
+                    )
+                    SELECT 1 FROM downstream WHERE peer_id=? LIMIT 1""",
+                    (before["destination_chat_id"], rule_id, before["source_peer_id"])).fetchone():
+                    raise ValidationError("Activating this rule would create a Channel Mirror cycle")
                 # Resume/reactivation must not backfill the paused/disabled gap.
                 watermark = max(ts, before["created_at"], watermark or "")
             conn.execute("""UPDATE cm_rules SET state=?,activation_watermark=?,updated_by=?,updated_at=?

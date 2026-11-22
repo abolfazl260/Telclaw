@@ -38,7 +38,7 @@ class FakeMonitor:
 @pytest.mark.asyncio
 async def test_provisions_three_topics_once_per_admin(db_path):
     monitor = FakeMonitor()
-    topics = PrivateTopics(monitor, enabled=True)
+    topics = PrivateTopics(monitor)
     await topics.configure()
     await topics.ensure_for_admin(11)
     await topics.ensure_for_admin(11)
@@ -53,11 +53,11 @@ async def test_provisions_three_topics_once_per_admin(db_path):
 @pytest.mark.asyncio
 async def test_provisioning_persists_across_restart(db_path):
     first = FakeMonitor()
-    topics = PrivateTopics(first, enabled=True)
+    topics = PrivateTopics(first)
     await topics.configure()
     await topics.ensure_for_admin(11)
     second = FakeMonitor()
-    reloaded = PrivateTopics(second, enabled=True)
+    reloaded = PrivateTopics(second)
     await reloaded.configure()
     await reloaded.ensure_for_admin(11)
     assert not any(method == "createForumTopic" for method, _ in second.calls)
@@ -67,7 +67,7 @@ async def test_provisioning_persists_across_restart(db_path):
 @pytest.mark.asyncio
 async def test_concurrent_provisioning_creates_each_topic_once(db_path):
     monitor = FakeMonitor()
-    topics = PrivateTopics(monitor, enabled=True)
+    topics = PrivateTopics(monitor)
     await topics.configure()
     await asyncio.gather(topics.ensure_for_admin(11), topics.ensure_for_admin(11))
     assert len([method for method, _ in monitor.calls if method == "createForumTopic"]) == 3
@@ -76,7 +76,7 @@ async def test_concurrent_provisioning_creates_each_topic_once(db_path):
 @pytest.mark.asyncio
 async def test_route_priority_and_restore(db_path):
     monitor = FakeMonitor()
-    topics = PrivateTopics(monitor, enabled=True)
+    topics = PrivateTopics(monitor)
     await topics.configure()
     await topics.ensure_for_admin(11)
     with topics.reply_in_thread(999):
@@ -93,7 +93,7 @@ async def test_route_priority_and_restore(db_path):
 @pytest.mark.asyncio
 async def test_invalidated_topic_is_recreated_only_on_next_start(db_path):
     monitor = FakeMonitor()
-    topics = PrivateTopics(monitor, enabled=True)
+    topics = PrivateTopics(monitor)
     await topics.configure()
     await topics.ensure_for_admin(11)
     topics.invalidate_thread(11, 102)
@@ -119,13 +119,17 @@ def test_fallback_only_after_known_invalid_topic_error(db_path):
 
 
 @pytest.mark.asyncio
-async def test_disabled_does_not_change_bot_or_provision(db_path):
-    monitor = FakeMonitor()
-    topics = PrivateTopics(monitor, enabled=False)
+async def test_telegram_settings_failure_preserves_monitor_fallback(db_path):
+    class UnavailableTelegram(FakeMonitor):
+        async def _api(self, method, payload):
+            raise RuntimeError("Telegram API unavailable")
+
+    monitor = UnavailableTelegram()
+    topics = PrivateTopics(monitor)
     await topics.configure()
     await topics.ensure_for_admin(11)
+    assert topics.ready is False
     assert topics.target_thread(11) is None
-    assert monitor.calls == []
 
 
 @pytest.mark.asyncio
@@ -138,7 +142,7 @@ async def test_existing_telegram_settings_are_preserved(db_path):
             return await super()._api(method, payload)
 
     monitor = AlreadyEnabled()
-    topics = PrivateTopics(monitor, enabled=True)
+    topics = PrivateTopics(monitor)
     await topics.configure()
     assert topics.ready
     assert not any(method == "setMySettings" for method, _ in monitor.calls)

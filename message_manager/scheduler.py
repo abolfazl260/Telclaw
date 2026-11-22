@@ -50,13 +50,15 @@ class Worker:
         self._heartbeat_if_due()
         # Recovery must still run at startup and periodically, even when idle.
         self._recover_if_due()
-        # Do not open write transactions for materialize/claim on empty queues.
-        if not self.repo.has_due_work():
+        # A due delivery does not imply any schedule needs materialization.
+        schedule_due, delivery_due = self.repo.due_work()
+        if not schedule_due and not delivery_due:
             return 0
 
-        self.repo.materialize(limit=config.MESSAGE_MANAGER_BATCH_SIZE,
-            once_grace=config.MESSAGE_MANAGER_MISSED_WINDOW_SECONDS,
-            recurring_grace=config.MESSAGE_MANAGER_RECURRING_GRACE_SECONDS)
+        if schedule_due:
+            self.repo.materialize(limit=config.MESSAGE_MANAGER_BATCH_SIZE,
+                once_grace=config.MESSAGE_MANAGER_MISSED_WINDOW_SECONDS,
+                recurring_grace=config.MESSAGE_MANAGER_RECURRING_GRACE_SECONDS)
         handled = 0
         for _ in range(config.MESSAGE_MANAGER_BATCH_SIZE):
             job = self.repo.claim(spacing=config.MESSAGE_MANAGER_SEND_SPACING_SECONDS,

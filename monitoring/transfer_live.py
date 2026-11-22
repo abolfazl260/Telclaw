@@ -516,6 +516,14 @@ def install_transfer_live_command(monitor):
 
     async def handle_update(self, update):
         message = update.get("message") or {}
+        topics = getattr(self, "_topics", None)
+        if topics is None:
+            return await handle_update_in_topic(self, update)
+        with topics.reply_in_thread(message.get("message_thread_id")):
+            return await handle_update_in_topic(self, update)
+
+    async def handle_update_in_topic(self, update):
+        message = update.get("message") or {}
         chat = message.get("chat") or {}
         chat_id = chat.get("id")
         text = (message.get("text") or "").strip().lower()

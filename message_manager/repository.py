@@ -209,6 +209,34 @@ class Repository:
                 raise ValidationError("Invalid schedule transition")
             self.audit(c, actor, action, schedule_id)
 
+    def has_due_work(self, now=None):
+        """Read-only preflight: avoid write transactions when the queue is idle.
+
+        This is only an optimization; materialize() and claim() still perform
+        their authoritative checks inside BEGIN IMMEDIATE transactions.
+        A newly added schedule is picked up by the next bounded poll.
+        """
+        current = stamp(now)
+        with self.connection() as c:
+            if c.execute("""SELECT 1 FROM mm_schedules
+                WHERE state='active' AND next_due<=? LIMIT 1""", (current,)).fetchone():
+                return True
+            return c.execute("""SELECT 1 FROM mm_deliveries d
+                JOIN mm_occurrences o ON o.id=d.occurrence_id
+                JOIN mm_schedules s ON s.id=o.schedule_id
+                WHERE d.status IN ('waiting','retry')
+                  AND (d.next_retry IS NULL OR d.next_retry<=?)
+                  AND s.state IN ('active','completed')
+                LIMIT 1""", (current,)).fetchone() is not None
+
+    def next_schedule_due(self):
+        """Nearest active schedule; uses the existing mm_schedule_due index."""
+        with self.connection() as c:
+            row = c.execute("""SELECT next_due FROM mm_schedules
+                WHERE state='active' AND next_due IS NOT NULL
+                ORDER BY next_due LIMIT 1""").fetchone()
+            return row[0] if row else None
+
     def materialize(self, now=None, limit=25, once_grace=86400, recurring_grace=300):
         now = now or utcnow()
         with self.connection(True) as c:
@@ -354,7 +382,7 @@ class Repository:
     def worker_heartbeat(self, state='running', error=''):
         with self.connection(True) as c:
             for key, value in [('worker_heartbeat', stamp()), ('worker_state', state), ('worker_error', error[:500])]:
-                c.execute('INSERT INTO mm_runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', (key, value))
+                c.execute('INSERT INTO mm_runtime VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE mm_runtime.value IS NOT excluded.value', (key, value))
 
     def dashboard(self, now=None):
         now = now or utcnow()

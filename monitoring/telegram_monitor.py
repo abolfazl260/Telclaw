@@ -10,6 +10,7 @@ import config
 from storage import database
 from services.stage_control import get_stage_control
 from monitoring.error_alerts import ErrorAlertDispatcher
+from monitoring.private_topics import PrivateTopics
 from monitoring.source_formatter import format_source_messages
 from monitoring.aboutus import build_aboutus_message, aboutus_keyboard
 from monitoring.qa import build_qa_rich_message
@@ -139,10 +140,10 @@ class _TelegramErrorHandler(logging.Handler):
 
 class TelegramMonitor:
     def __init__(self):
-        self.token=config.TELEGRAM_BOT_TOKEN; self.enabled=config.TELEGRAM_MONITOR_ENABLED and bool(self.token); self._task=None; self._offset=0; self._stopping=asyncio.Event(); self._error_handler=None; self._error_dispatcher=None
+        self.token=config.TELEGRAM_BOT_TOKEN; self.enabled=config.TELEGRAM_MONITOR_ENABLED and bool(self.token); self._task=None; self._offset=0; self._stopping=asyncio.Event(); self._error_handler=None; self._error_dispatcher=None; self._topics=PrivateTopics(self, enabled=config.TELEGRAM_PRIVATE_TOPICS_ENABLED)
     async def start(self):
         if not self.enabled: logger.info("Telegram monitor disabled"); return
-        database.initialize_db(); self._stopping.clear(); self._error_dispatcher=ErrorAlertDispatcher(self); self._error_dispatcher.start(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
+        database.initialize_db(); self._stopping.clear(); self._error_dispatcher=ErrorAlertDispatcher(self); self._error_dispatcher.start(); self._error_handler=_TelegramErrorHandler(self); self._error_handler.setFormatter(logging.Formatter("%(message)s")); logging.getLogger().addHandler(self._error_handler); await self._topics.configure(); await self._register_commands(); self._task=asyncio.create_task(self._poll_updates(),name="telegram-monitor-poll"); logger.info("Telegram monitoring bot started")
     def runtime_status(self):
         task=self._task
         return {"enabled":bool(self.enabled),"polling":bool(task and not task.done()),
@@ -187,6 +188,23 @@ class TelegramMonitor:
             await self._error_dispatcher.stop()
             self._error_dispatcher=None
     async def _api(self,method,payload=None):
+        if method.startswith("send") and isinstance(payload, dict) and "chat_id" in payload and "message_thread_id" not in payload:
+            thread = self._topics.target_thread(payload["chat_id"])
+            if thread is not None:
+                try:
+                    return await self._api_raw(method, {**payload, "message_thread_id": thread})
+                except TelegramAPIError as exc:
+                    if not self._topics.is_invalid_thread(exc):
+                        raise
+                    try:
+                        self._topics.invalidate_thread(payload["chat_id"], thread)
+                    except Exception as storage_exc:
+                        logger.warning("Topic mapping invalidation failed: %s", storage_exc)
+                    logger.warning("Telegram topic %s invalid in chat %s; falling back to main chat",
+                                   thread, payload["chat_id"])
+        return await self._api_raw(method, payload)
+
+    async def _api_raw(self,method,payload=None):
         from delivery import bot_limits
         if method.startswith(('send', 'edit', 'copy')):
             await bot_limits.wait_turn(self.token, (payload or {}).get('chat_id'))
@@ -200,9 +218,27 @@ class TelegramMonitor:
                 return data
     async def _send_document(self,chat_id,file_path,caption):
         if not self._is_admin_chat(chat_id): return
+        thread = self._topics.target_thread(chat_id)
+        try:
+            return await self._send_document_raw(chat_id,file_path,caption,thread)
+        except TelegramAPIError as exc:
+            if thread is None or not self._topics.is_invalid_thread(exc):
+                raise
+            try:
+                self._topics.invalidate_thread(chat_id,thread)
+            except Exception as storage_exc:
+                logger.warning("Topic mapping invalidation failed: %s", storage_exc)
+            logger.warning("Telegram document topic %s invalid for chat %s; using main chat",
+                           thread, chat_id)
+            return await self._send_document_raw(chat_id,file_path,caption,None)
+
+    async def _send_document_raw(self,chat_id,file_path,caption,topic_id=None):
+        if not self._is_admin_chat(chat_id): return
         from delivery import bot_limits
         await bot_limits.wait_turn(self.token, chat_id)
         form=aiohttp.FormData(); file_handle=file_path.open("rb"); form.add_field("chat_id",str(chat_id)); form.add_field("caption",caption); form.add_field("document",file_handle,filename=file_path.name)
+        if topic_id is not None:
+            form.add_field("message_thread_id",str(topic_id))
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as session:
                 async with session.post(f"https://api.telegram.org/bot{self.token}/sendDocument",data=form) as response:
@@ -322,6 +358,11 @@ class TelegramMonitor:
             [{"text":"🔄 Refresh Status","callback_data":"refresh:status"}],
         ]}
     async def _handle_callback(self,callback):
+        message = callback.get("message") or {}
+        with self._topics.reply_in_thread(message.get("message_thread_id")):
+            await self._handle_callback_in_topic(callback)
+
+    async def _handle_callback_in_topic(self,callback):
         callback_id=callback.get("id"); data=str(callback.get("data") or ""); message=callback.get("message") or {}; chat=(message.get("chat") or {}); chat_id=chat.get("id")
         if not self._is_admin_private_chat(chat,callback.get("from")): return
         if callback_id: await self._api("answerCallbackQuery",{"callback_query_id":callback_id})
@@ -338,7 +379,12 @@ class TelegramMonitor:
     async def _handle_update(self,update):
         if update.get("callback_query"):
             await self._handle_callback(update["callback_query"]); return
-        message=update.get("message") or {}; chat=message.get("chat") or {}; chat_id=chat.get("id")
+        message = update.get("message") or {}
+        with self._topics.reply_in_thread(message.get("message_thread_id")):
+            await self._handle_message_in_topic(message)
+
+    async def _handle_message_in_topic(self,message):
+        chat=message.get("chat") or {}; chat_id=chat.get("id")
         text=(message.get("text") or "").strip().lower()
         command=text.split(maxsplit=1)[0].split("@",1)[0] if text else ""
         # The public directory is the only non-admin command; never expose status or controls.
@@ -428,7 +474,12 @@ class TelegramMonitor:
                 await self._send(chat_id,f"⚠️ Forward not imported: {html.escape(detail)}")
             return
         if command == "/start":
-            database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name")); await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.\n\nبرای ثبت آگهی، پیام فورواردشدهٔ بیش از ۱۰ کلمه همراه با یوزرنیم صاحب آگهی در متن را به همین ربات ارسال کنید.")
+            database.subscribe_monitor_chat(int(chat_id),chat.get("username"),chat.get("first_name"))
+            try:
+                await self._topics.ensure_for_admin(chat_id)
+            except Exception as exc:
+                logger.warning("Private topic provisioning failed for admin %s: %s", chat_id, exc)
+            await self._send(chat_id,"✅ Telclaw monitoring فعال شد.\nاز این پس خطاها و گزارش‌های سیستم برای شما ارسال می‌شود.\n\nبرای ثبت آگهی، پیام فورواردشدهٔ بیش از ۱۰ کلمه همراه با یوزرنیم صاحب آگهی در متن را به همین ربات ارسال کنید.")
         elif command == "/stop":
             database.unsubscribe_monitor_chat(int(chat_id)); await self._send(chat_id,"⛔ دریافت اعلان خطاها و گزارش‌های Telclaw متوقف شد. برای فعال‌سازی دوباره /start را ارسال کنید.")
         elif command == "/status": await self._send(chat_id,await self._build_status_message(),reply_markup=self._stage_keyboard())
@@ -679,9 +730,10 @@ class TelegramMonitor:
             f"<b>Time:</b> {self._tehran_timestamp(datetime.utcnow().isoformat())} Tehran\n\n"
             f"<pre>{html.escape(message[:3500])}</pre>"
         )
-        await self.broadcast_admin_errors(alert)
-        if context:
-            await self._broadcast_original_message(context)
+        with self._topics.route("warning" if is_warning else "error"):
+            await self.broadcast_admin_errors(alert)
+            if context:
+                await self._broadcast_original_message(context)
     async def report(self,kind,stats):
         try:
             database.record_system_activity(kind,"INFO","telegram_monitor",f"{kind} report",stats)

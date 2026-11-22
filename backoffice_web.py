@@ -2743,4 +2743,6 @@ def create_app(console_ui=None, message_manager=None):
                     web.post("/logout", logout)])
     from backoffice_message_manager import install as install_message_manager
     install_message_manager(app, message_manager)
+    from backoffice_channel_mirror import install as install_channel_mirror
+    install_channel_mirror(app)
     return app

@@ -1,4 +1,8 @@
-# Channel Mirror configuration, capture and publication (#183–185)
+# Channel Mirror configuration, capture and publication (#183–186)
+
+The independent Back Office tab is documented in
+[CHANNEL_MIRROR_ROLLOUT.md](CHANNEL_MIRROR_ROLLOUT.md), including configuration,
+global rollback, manual review and the pending live staging checklist.
 
 The foundation adds configuration, media metadata, a durable queue, and review
 contracts. The existing manual/scheduled crawler now captures media metadata and

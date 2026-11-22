@@ -1274,3 +1274,11 @@ Update this file when a change materially alters:
 - UI-to-service execution paths.
 
 The objective is not to describe every function. The objective is to give an AI agent a reliable **map of where to investigate** so it does not modify one isolated file while missing the rest of the contract.
+# Channel Mirror administration
+
+`backoffice_channel_mirror.py` mounts authenticated/CSRF-protected `/channel-mirror`
+controls. `channel_mirror/admin.py` owns read-only reporting and the persistent
+global interlock, checked by capture, release, claims and publication fencing.
+It shares the existing Operations crawler/session and ChannelService inventory;
+it does not create another timer or reuse legacy delivery states. See
+`CHANNEL_MIRROR_ROLLOUT.md` for enrollment, uncertainty and staging acceptance.

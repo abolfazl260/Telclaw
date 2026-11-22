@@ -410,3 +410,11 @@ validation and category-specific preview/save flow.
 ## Message Manager
 
 Administrator-authored messages have a dedicated module enabled by default with multi-channel delivery, Tehran-time recurring schedules, private media and XLSX draft import. The Message Manager tab and runtime worker need no manual feature activation. See [Message Manager operator guide](MESSAGE_MANAGER.md) for delivery safety, configuration and rollback.
+# Channel Mirror
+
+The independent `/channel-mirror` tab manages validated source/destination mappings,
+fixed footer preview, explicit watermark activation, pause/disable, delivery counts,
+bounded history/manual uncertainty review and a persistent global stop switch.
+Source enrollment updates the existing inventory only after explicit confirmation;
+select/start the source through Operations. See `CHANNEL_MIRROR_ROLLOUT.md` for
+the live staging checklist and production activation procedure.

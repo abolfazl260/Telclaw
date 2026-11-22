@@ -112,11 +112,15 @@ class Worker:
                 # A successful next tick should promptly restore the running state.
                 self._last_heartbeat_at = None
                 logger.exception('Message Manager worker cycle failed')
+            # A read-only schedule lookup must never terminate the worker.
             try:
-                # Preserve short spacing when the worker is actively draining
-                # deliveries; use slower, due-aware polling when idle.
+                # Preserve short spacing when actively draining deliveries.
                 delay = (config.MESSAGE_MANAGER_SEND_SPACING_SECONDS
                          if handled else self._idle_sleep_seconds())
+            except Exception:
+                logger.exception('Message Manager next-schedule lookup failed; using idle poll interval')
+                delay = config.MESSAGE_MANAGER_POLL_SECONDS
+            try:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 self.repo.worker_heartbeat('stopped')

@@ -78,6 +78,19 @@ shown as context. Cloudflare's token balance is **Unknown** because the
 current Workers AI integration does not expose a consistent remaining-token
 counter. Per-account cooldown is shown when observed.
 
+**Cooldown diagnostics:** A provider that has been initialized but is not
+currently selected is labeled **Not selected**, rather than **Not observed**.
+Groq's local budget may show a full token estimate during a provider/credential
+cooldown: the page explicitly marks that estimate **not currently usable**.
+The provider and each credential also show the safe diagnostic cause of the
+last effective cooldown deadline (for example `tpm_limit`, `network_error`
+or `local_tpm_budget`) and when it was recorded in UTC. This is the cause
+of the deadline that actually blocks requests; a shorter later error cannot
+overwrite an existing longer cooldown. Metadata is held only in memory, so
+events before the deployment/restart are **Not recorded**, and events without
+an attributed cause are **Unknown**. A past cooldown is clearly labeled
+past; this display does not claim to verify external API readiness.
+
 The panel refreshes from an authenticated **GET
 `/settings/ai-providers/status`** endpoint every 15 seconds while the tab
 is visible, with a manual refresh button. It **never sends provider API calls**

@@ -125,6 +125,7 @@ class GroqTokenBudget:
                     reason="rate_limit",
                     status=429,
                     retry_after=60.0,
+                    cooldown_cause="local_tpm_budget",
                 )
             if now < self._blocked_until:
                 wait = self._blocked_until - now
@@ -140,6 +141,7 @@ class GroqTokenBudget:
             status=429,
             reason="rate_limit",
             retry_after=max(0.01, wait),
+            cooldown_cause="local_tpm_budget",
         )
 
     @staticmethod

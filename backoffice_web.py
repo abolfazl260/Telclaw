@@ -1360,7 +1360,7 @@ def _operation_state_box(label, state, result_label="Result"):
         if isinstance(result, dict):
             counters = "".join(
                 f'<span>{_escape(key.replace("_", " ").title())}: <strong>{_escape(result[key])}</strong></span>'
-                for key in ("found", "processed", "sent", "already_existed", "failed", "blocked", "rejected", "retry", "remaining")
+                for key in ("found", "processed", "sent", "active", "pending_review", "publication_unknown", "publication_other", "already_existed", "failed", "blocked", "rejected", "retry", "remaining")
                 if key in result
             )
             details += f'<div class="ops-result-metrics">{counters}</div>'
@@ -1617,12 +1617,14 @@ async def operations_page(request):
             "<td>" + _escape(route) + "</td>"
             "<td>" + _escape(item.get("departure_date") or "Undated") + "</td>"
             "<td>" + _escape(str(item.get("display_status") or status).replace("_", " ")) + "</td>"
+            "<td>" + _escape((item.get("remote_status") or "Unknown") if status in ("sent", "already_existed") else "—") + "</td>"
+            "<td>" + _escape(item.get("lead_id") or "—") + "</td>"
             "<td>" + _escape(item.get("blocked_reason") or item.get("error") or item.get("next_attempt_at") or "") + "</td>"
             "<td>" + retry_button + "</td></tr>"
         )
     cargo_table = (
         '<div style="overflow-x:auto"><table><thead><tr><th>Telegram ID</th><th>Source</th>'
-        '<th>Route</th><th>Trip date</th><th>API status</th><th>Error / retry</th><th>Action</th>'
+        '<th>Route</th><th>Trip date</th><th>API status</th><th>Publication at ingest</th><th>Lead ID</th><th>Error / retry</th><th>Action</th>'
         '</tr></thead><tbody>' + "".join(cargo_rows) + '</tbody></table></div>'
         if cargo_rows else '<p class="muted">No processed cargo records found in SQLite.</p>'
     )
@@ -1872,7 +1874,7 @@ async def operations_page(request):
         <p class="muted">Separate from Telegram @advertio_cargo. Category: passenger-cargo. The last 30 processed cargo records are listed below.</p>
         <p>Website API: <strong>{'enabled' if cargo_enabled else 'disabled'}</strong> · API key: <strong>{'configured' if cargo_key_ready else 'missing'}</strong> ·
         Auto-publish for new ads: <strong>{'enabled' if cargo_report.get('auto_publish') else 'disabled'}</strong></p>
-        <p class="muted">Auto-publish applies only to newly submitted listings that pass API validation and duplicate checks. It does not activate existing PendingReview listings.</p>
+        <p class="muted">When enabled, every valid cargo submission requests auto-publish, including historical backfill. Advertio may still require moderation (e.g. possible duplicates). Existing PendingReview listings are not activated by resending.</p>
         <p>AI processed: <strong>{int(cargo_report.get('processed') or 0):,}</strong> ·
         AI failed: <strong>{int(cargo_report.get('ai_failed') or 0):,}</strong> ·
         Pending AI: <strong>{int(cargo_report.get('ai_pending') or 0):,}</strong></p>
@@ -1883,6 +1885,8 @@ async def operations_page(request):
         Already existed: <strong>{int(cargo_report.get('already_existed') or 0):,}</strong> ·
         Rejected: <strong>{int(cargo_report.get('rejected') or 0):,}</strong> ·
         In-flight: <strong>{int(cargo_report.get('sending') or 0):,}</strong></p>
+        <p>Publication at ingest (all locally sent records, not live status):
+        { " · ".join(_escape(label) + ": <strong>" + str(int((cargo_report.get("publication_totals") or {}).get(key, 0))) + "</strong>" for key, label in (("active","Active"),("pending_review","PendingReview"),("publication_unknown","Unknown"),("publication_other","Other")) ) }</p>
         <p>Expired trips: <strong>{int(cargo_report.get('expired') or 0):,}</strong> ·
         Old undated posts: <strong>{int(cargo_report.get('stale') or 0):,}</strong> ·
         API requests today: <strong>{int(cargo_report.get('attempts_today') or 0):,}/{int(cargo_report.get('daily_limit') or config.ADVERTIO_CARGO_DAILY_LIMIT):,}</strong></p>

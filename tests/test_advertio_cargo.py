@@ -334,7 +334,7 @@ def test_cargo_requeue_rejected_is_targeted_and_auditable(env, monkeypatch):
 def test_new_unique_cargo_is_submitted_for_auto_publish(env, monkeypatch):
     service, client = env
     monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
-    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", {source_name({"channel_username": "cargo-one"})})
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", frozenset())
     add_post(8808)
     stats = service.deliver_pending(limit=1)
     assert stats["sent"] == 1
@@ -655,3 +655,34 @@ def test_cargo_diagnostics_keep_terminal_states_and_show_expired_filter(env):
     assert rows[9903]["display_status"] == "sent"
     assert active_cargo_report(status="expired")["rows"][0]["message_id"] == 9902
     assert active_cargo_report(status="incomplete")["rows"][0]["message_id"] == 9901
+
+
+def test_publication_outcomes_are_not_inferred_from_autopublish(env, monkeypatch):
+    from backoffice_health import _cargo_delivery_report
+    from backoffice_active_cargo import active_cargo_report
+    from contextlib import closing
+    service, client = env
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", frozenset())
+    for mid in (9911, 9912, 9913):
+        add_post(mid)
+    def create(payload):
+        client.sent.append(payload)
+        status = {"9911": "Active", "9912": "PendingReview", "9913": None}[payload["externalId"]]
+        return {"lead_id": "lead-" + payload["externalId"], "status": status, "already_existed": False}
+    monkeypatch.setattr(client, "create_lead", create)
+    result = service.deliver_pending()
+    assert result["sent"] == 3
+    assert result["active"] == result["pending_review"] == result["publication_unknown"] == 1
+    assert result["publication_other"] == 0
+    assert all(payload["autoPublish"] is True for payload in client.sent)
+    with closing(database.get_connection()) as conn:
+        report = _cargo_delivery_report(conn)
+    assert report["publication_totals"] == {"active": 1, "pending_review": 1,
+                                             "publication_unknown": 1, "publication_other": 0}
+    rows = {row["message_id"]: row for row in report["recent"]}
+    assert rows[9912]["remote_status"] == "PendingReview"
+    assert rows[9912]["lead_id"] == "lead-9912"
+    active_rows = {row["message_id"]: row for row in active_cargo_report()["rows"]}
+    assert active_rows[9911]["remote_status"] == "Active"
+    assert service.deliver_pending()["found"] == 0

@@ -493,7 +493,23 @@ def _cargo_delivery_report(conn, limit=30):
     # filter and retry window used by the actual cargo worker.
     from delivery import advertio_cargo_catalog as catalog, advertio_transport
     from delivery.advertio_cargo import cargo_queue_eligibility_sql
-    catalog.register_sql(conn, catalog.load(conn))
+    from delivery import cargo_queue_diagnostics as diagnostics
+    snapshot = catalog.load(conn)
+    catalog.register_sql(conn, snapshot)
+    diagnostics.register(conn, snapshot, today=today, cutoff=recent, now=now.isoformat())
+    diagnostic_args = diagnostics.sql_args(status, next_attempt)
+    display_status = f"cargo_display_status({diagnostic_args})"
+    report["blocked_counts"] = {key: 0 for key in diagnostics.BLOCKED_STATES}
+    report["waiting_estimate"] = report["waiting"]
+    for row in conn.execute(f"""SELECT {status} raw_state, {display_status} display_state,
+        CASE WHEN {eligibility} THEN 1 ELSE 0 END active_window, COUNT(*) n
+        FROM messages m JOIN transferlist t ON t.processed_message_id=m.id {join}
+        WHERE {expr} AND {status} IN ('waiting','retry')
+        GROUP BY 1,2,3""", (today, recent, today)):
+        if row["display_state"] in report["blocked_counts"]:
+            report["blocked_counts"][row["display_state"]] += row["n"]
+            if row["active_window"]:
+                report[row["raw_state"]] -= row["n"]
     report["catalog"] = catalog.metadata(conn)
     report["request_budget"] = advertio_transport.metadata(conn)
     report["ready_to_send"] = conn.execute(f"""
@@ -522,18 +538,8 @@ def _cargo_delivery_report(conn, limit=30):
     sql = f"""SELECT m.id row_id, m.message_id, m.channel_username, m.date message_date,
         t.origin_country, t.origin_city, t.destination_country, t.destination_city,
         t.departure_date, {status} status, {error} error, {updated} updated_at,
-        CASE
-            WHEN t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
-                 AND substr(t.departure_date,1,10)<'{today}' THEN 'Expired departure date'
-            WHEN (t.departure_date IS NULL OR TRIM(t.departure_date)='')
-                 AND substr(m.date,1,10)<'{recent}' THEN 'Outside undated backfill window'
-            WHEN t.origin_city IS NULL OR TRIM(t.origin_city)=''
-                 OR t.destination_city IS NULL OR TRIM(t.destination_city)=''
-                 OR t.origin_country IS NULL OR TRIM(t.origin_country)=''
-                 OR t.destination_country IS NULL OR TRIM(t.destination_country)=''
-                 THEN 'Incomplete origin/destination route'
-            ELSE NULL
-        END blocked_reason,
+        {display_status} display_status,
+        cargo_block_reason({diagnostic_args}) blocked_reason,
         {next_attempt} next_attempt_at, {lead_id} lead_id
         FROM messages m JOIN transferlist t ON t.processed_message_id=m.id {join}
         WHERE {expr} ORDER BY m.id DESC LIMIT ?"""

@@ -6,6 +6,7 @@ from aiohttp import web
 import config
 from backoffice_layout import SHARED_STYLE, page_header
 from backoffice_active_cargo import active_cargo_report
+from delivery.cargo_queue_diagnostics import BLOCKED_STATES
 
 
 def _esc(value):
@@ -63,6 +64,7 @@ async def cargo_page(request):
         ("already_existed", "Already existed"), ("rejected", "Rejected"),
         ("sending", "Sending"),
     ]
+    option_status += [(value, value.replace("_", " ").title()) for value in BLOCKED_STATES]
     options = lambda items, selected: "".join(
         '<option value="' + _esc(value) + '"' + (" selected" if selected == value else "") +
         ">" + _esc(label) + "</option>" for value, label in items
@@ -98,7 +100,7 @@ async def cargo_page(request):
             '<td>' + _esc(route) + '</td>' +
             '<td>' + _esc(row.get("departure_date") or "Undated") + '</td>' +
             '<td>' + _esc(row.get("posted_at") or "") + '</td>' +
-            '<td><strong>' + _esc(row["status"]) + '</strong></td>' +
+            '<td><strong>' + _esc(row.get("display_status", row["status"]).replace("_", " ")) + '</strong></td>' +
             '<td>' + _esc(details) + '</td></tr>'
         )
     tbody = "".join(rows_html) or '<tr><td colspan="8">No cargo ads match the selected filters.</td></tr>'
@@ -151,7 +153,7 @@ async def cargo_page(request):
     {page_header('cargo', 'Telclaw · Active Cargo · Advertio')}
     <p class="hint"><strong>Two different reports:</strong> the Advertio candidate pool includes future-dated trips and undated posts from the last {int(config.ADVERTIO_CARGO_BACKFILL_DAYS)} days, with no de-duplication.
       Telegram <strong>/transferlive</strong> includes only dated trips departing today or later, requiring both country codes, and removes duplicates by sender, route and date.
-      Switch report views below to compare the exact same entries. Neither report verifies Telegram deletion.</p>
+      Switch report views below to compare the exact same entries. Neither report verifies Telegram deletion. Expired, stale and invalid dates can be inspected with their status filters in the Advertio view; the overview remains the active cohort.</p>
     {''.join(notices)}
     <section class="card"><h2>Active cargo overview</h2>
       <div class="stats">
@@ -161,6 +163,10 @@ async def cargo_page(request):
         <div>Sent to API<strong>{report.get('sent', 0):,}</strong></div>
         <div>Already existed<strong>{report.get('already_existed', 0):,}</strong></div>
         <div>Rejected<strong>{report.get('rejected', 0):,}</strong></div>
+        <div>Waiting<strong>{report.get('waiting', 0):,}</strong></div>
+        <div>Incomplete route<strong>{report.get('incomplete', 0):,}</strong></div>
+        <div>Needs historical review<strong>{report.get('history_review_required', 0):,}</strong></div>
+        <div>Catalog / route blocked<strong>{sum(report.get(key, 0) for key in ('catalog_unavailable','catalog_refresh_pending','unsupported_route','ambiguous_route')):,}</strong></div>
       </div>
       <p class="muted">Catalog {_esc(catalog.get('status', 'missing'))} ·
         {_esc(catalog.get('country_count', 0))} countries · {_esc(catalog.get('city_count', 0))} cities ·
@@ -173,7 +179,7 @@ async def cargo_page(request):
     <section class="card"><h2>Search and filter active cargo</h2>
       <form method="get" action="/cargo" class="filters">
         <label>Report definition<select name="view">{options([("advertio","Advertio candidates (dated + recent undated)"),("telegram","Match Telegram /transferlive (deduplicated)")],filters['view'])}</select></label>
-        <label>API status<select name="status">{options(option_status,filters['status'])}</select></label>
+        <label>Delivery status<select name="status">{options(option_status,filters['status'])}</select></label>
         <label>Trip<select name="trip">{options([("all","All active"),("upcoming","Dated upcoming"),("undated","Recent undated")],filters['trip'])}</select></label>
         <label>Channel, city, title, Telegram ID<input type="search" name="search" value="{_esc(filters['search'])}" maxlength="100" placeholder="e.g. Tehran"></label>
         <button type="submit">Apply filters</button><a href="/cargo">Clear</a>

@@ -26,6 +26,9 @@ def extraction_response_format(model, category):
         {"type": "null"}, {"type": "array", "items": {"type": "string"}},
     ]}
     fields = {field: value for field in CATEGORY_FIELDS[category]}
+    if category == "transferlist":
+        fields["cargo_type"] = {"anyOf": [{"type": "array", "items": {"type": "string"}},
+                                           {"type": "string"}, {"type": "null"}]}
     schema = obj({
         "category": {"type": "string", "enum": [category]},
         "data": obj({category: obj(fields)}),

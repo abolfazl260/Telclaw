@@ -16,6 +16,7 @@ from delivery.advertio_client import AdvertioClient, AdvertioError
 from delivery.advertio_lifecycle import create_listing
 from delivery.advertio_source_text import description_limit, explicitly_negotiable, has_cargo_price, original_text
 from storage.database import get_connection
+from storage.cargo_types import normalize_cargo_types as _cargo_types
 
 log = logging.getLogger("telclaw.advertio.cargo")
 ITEMS = {"documents", "clothes", "electronics", "food", "other"}
@@ -82,28 +83,6 @@ def _contact(record):
     return None
 
 
-def _cargo_types(value):
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            value = parsed if isinstance(parsed, list) else value
-        except ValueError:
-            pass
-    parts = value if isinstance(value, list) else re.split(r"[,،;/+]|\band\b", str(value or ""), flags=re.I)
-    aliases = {
-        "document": "documents", "documents": "documents", "مدارک": "documents", "اسناد": "documents",
-        "clothing": "clothes", "clothes": "clothes", "لباس": "clothes", "پوشاک": "clothes",
-        "electronic": "electronics", "electronics": "electronics", "گوشی": "electronics",
-        "موبایل": "electronics", "لپ تاپ": "electronics", "لپتاپ": "electronics",
-        "food": "food", "خوراکی": "food", "مواد غذایی": "food",
-        "other": "other", "سایر": "other",
-    }
-    result = []
-    for part in parts:
-        v = aliases.get(_name(part))
-        if v and v not in result:
-            result.append(v)
-    return result
 
 
 class AdvertioCargoService:

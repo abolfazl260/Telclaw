@@ -77,3 +77,24 @@ def test_prompt_keeps_source_and_adds_encoding_rules():
     prompt=render_prompt('joblist',source)
     assert prompt.endswith(source)
     assert 'directly as Unicode characters' in prompt
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (["documents", "electronics", "documents"], ["documents", "electronics"]),
+    ("documents, clothes", ["documents", "clothes"]),
+    ('["food","other"]', ["food", "other"]),
+    (None, []), ([], []), ("general", []), ({"bad": "shape"}, []),
+])
+def test_cargo_type_compatibility(raw, expected):
+    from ai.category_schemas import validate_result, build_json_schema
+    from storage.cargo_types import normalize_cargo_types
+    assert normalize_cargo_types(raw) == expected
+    category, data = validate_result({"category": "transferlist", "data": {
+        "transferlist": {"cargo_type": raw}}})
+    assert category == "transferlist"
+    assert data["cargo_type"] == expected
+    field = build_json_schema()["properties"]["data"]["properties"]["transferlist"]["properties"]["cargo_type"]
+    assert "array" in field["type"]
+    strict = extraction_response_format("openai/gpt-oss-20b", "transferlist")
+    field = strict["json_schema"]["schema"]["properties"]["data"]["properties"]["transferlist"]["properties"]["cargo_type"]
+    assert {"type": "array", "items": {"type": "string"}} in field["anyOf"]

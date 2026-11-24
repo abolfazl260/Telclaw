@@ -385,7 +385,10 @@ def test_dashboard_ready_count_matches_queue_not_broad_waiting(env):
     finally:
         conn.close()
     assert report["ready_to_send"] == 1
-    assert report["waiting"] >= 1
+    assert report["waiting"] == 1
+    assert report["blocked_counts"]["incomplete"] == 1
+    assert report["blocked_counts"]["unsupported_route"] == 1
+    assert report["blocked_counts"]["expired"] == 1
     assert len(service.pending(limit=50)) == report["ready_to_send"]
 
 
@@ -630,3 +633,25 @@ def test_forward_first_username_overrides_later_ai_cargo_contact(env):
     payload = service.build_payload(record)
     assert payload['contactHandle'] == '@Helpero_ltd'
     assert 'posterTelegramUserId' not in payload
+
+
+def test_cargo_diagnostics_keep_terminal_states_and_show_expired_filter(env):
+    from backoffice_active_cargo import active_cargo_report
+    from backoffice_health import _cargo_delivery_report
+    service, client = env
+    add_post(9901, overrides={"destination_city": None})
+    add_post(9902, departure=(date.today() - timedelta(days=2)).isoformat())
+    add_post(9903)
+    assert service.deliver_pending(limit=1)["sent"] == 1
+    conn = database.get_connection()
+    try:
+        report = _cargo_delivery_report(conn)
+    finally:
+        conn.close()
+    rows = {row["message_id"]: row for row in report["recent"]}
+    assert rows[9901]["display_status"] == "incomplete"
+    assert "destination city" in rows[9901]["blocked_reason"]
+    assert rows[9902]["display_status"] == "expired"
+    assert rows[9903]["display_status"] == "sent"
+    assert active_cargo_report(status="expired")["rows"][0]["message_id"] == 9902
+    assert active_cargo_report(status="incomplete")["rows"][0]["message_id"] == 9901

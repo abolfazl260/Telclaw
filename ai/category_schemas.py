@@ -169,6 +169,8 @@ def normalize_job_location(data):
 
 
 def _field_schema(field):
+    if field == "cargo_type":
+        return {"type": ["array", "string", "null"], "items": {"type": "string"}}
     if field in {"features", "skills"}:
         return {"type": ["array", "null"], "items": {"type": "string"}}
     if field in {"price", "bedrooms", "bathrooms", "area", "year", "mileage", "weight", "quantity", "volume"}:
@@ -221,6 +223,9 @@ def validate_result(result):
     normalized = {key: value for key, value in data.items() if key in allowed}
     if category == "housinglist":
         normalized = _infer_housing_location(normalized)
+    elif category == "transferlist" and "cargo_type" in normalized:
+        from storage.cargo_types import normalize_cargo_types
+        normalized["cargo_type"] = normalize_cargo_types(normalized["cargo_type"])
     elif category == "joblist":
         normalized = normalize_job_location(normalized)
     return category, normalized

@@ -8,11 +8,12 @@ from datetime import datetime, timedelta, timezone
 from storage.database import get_connection
 from delivery import advertio_cargo_catalog as catalog, advertio_transport
 from delivery.advertio_cargo import cargo_queue_eligibility_sql
+from delivery import cargo_queue_diagnostics as diagnostics
 from monitoring.transfer_live import active_transferlive_cohort
 import config
 
 PAGE_SIZE = 25
-STATUSES = ("all", "ready", "waiting", "retry", "sent", "already_existed", "rejected", "sending")
+STATUSES = ("all", "ready", "waiting", "retry", "sent", "already_existed", "rejected", "sending") + diagnostics.BLOCKED_STATES
 TRIPS = ("all", "upcoming", "undated")
 VIEWS = ("advertio", "telegram")
 
@@ -58,6 +59,9 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
         next_attempt = "d.next_attempt_at" if has_delivery else "NULL"
         error = "d.error" if has_delivery else "NULL"
         lead = "d.lead_id" if has_delivery else "NULL"
+        diagnostics.register(conn, snapshot, today=today, cutoff=cutoff, now=now.isoformat())
+        diagnostic_args = diagnostics.sql_args(state, next_attempt)
+        display_status = f"cargo_display_status({diagnostic_args})"
         # Active is a date/freshness rule, NOT an assertion that a
         # Telegram post still exists. Unsupported routes remain visible in
         # the Advertio candidate view, but are not eligible for API sending.
@@ -81,10 +85,11 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
         summary = {"total": 0, "ready": 0, "transferlive": live_count,
                    "waiting": 0, "retry": 0,
                    "sent": 0, "already_existed": 0, "rejected": 0, "sending": 0}
+        summary.update(dict.fromkeys(diagnostics.BLOCKED_STATES, 0))
         summary_sql = f"""
-            SELECT {state} status, COUNT(*) count FROM messages m
+            SELECT {display_status} status, COUNT(*) count FROM messages m
             JOIN transferlist t ON t.processed_message_id=m.id
-            {join} WHERE {expr} GROUP BY {state}
+            {join} WHERE {expr} GROUP BY 1
         """
         for row in conn.execute(summary_sql, base_values):
             name = str(row["status"])
@@ -107,6 +112,9 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
 
         clauses = [expr]
         values = list(base_values)
+        if view == "advertio" and status in ("expired", "stale", "invalid_date"):
+            clauses = ["m.processing_status='processed' AND m.ai_status='processed' AND m.ai_category='transferlist'"]
+            values = []
         if status == "ready":
             clauses.append("m.processing_status='processed'")
             clauses.append("m.ai_status='processed' AND m.ai_category='transferlist'")
@@ -116,7 +124,7 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
             clauses.append(f"({next_attempt} IS NULL OR {next_attempt}<=?)")
             values.append(now.isoformat())
         elif status != "all":
-            clauses.append(f"{state}=?")
+            clauses.append(f"{display_status}=?")
             values.append(status)
         if trip == "upcoming":
             clauses.append("t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''")
@@ -144,7 +152,8 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
                    m.message_link, m.date AS posted_at, m.ai_status, m.ai_category,
                    COALESCE(NULLIF(TRIM(m.raw_text),''), NULLIF(TRIM(m.text),''), m.cleaned_text) AS route_evidence,
                    ({cargo_queue_eligibility_sql()}) AS current_trip,
-                   ({catalog.UNREVIEWED_HISTORY_SQL}) AS history_review_pending,
+                   {display_status} AS display_status,
+                   cargo_block_reason({diagnostic_args}) AS blocked_reason,
                    t.title, t.origin_city, t.origin_country,
                    t.destination_city, t.destination_country,
                    t.departure_date, t.description,
@@ -166,22 +175,8 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
             sql, [cutoff, today] + values + [PAGE_SIZE, (page - 1) * PAGE_SIZE]
         )]
         for row in rows:
-            evidence = row.pop("route_evidence")
-            reason = "Catalog unavailable"
-            if snapshot:
-                reason = next(
-                    (error for side in ("origin", "destination")
-                     if (error := snapshot.resolve(
-                         side, row[side + "_country"], row[side + "_city"], evidence
-                     )[1])),
-                    None,
-                )
-                if reason and snapshot.stale:
-                    reason = "Catalog refresh pending"
-            history_review_pending = row.pop("history_review_pending")
-            if not reason and history_review_pending:
-                reason = "Historical route requires review"
-            row["blocked_reason"] = reason
+            row.pop("route_evidence")
+            reason = row["blocked_reason"]
             row["sendable"] = (
                 bool(row.pop("current_trip")) and row["processing_status"] == "processed"
                 and row["ai_status"] == "processed" and row["ai_category"] == "transferlist"

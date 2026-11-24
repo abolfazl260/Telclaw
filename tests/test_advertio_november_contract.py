@@ -164,7 +164,7 @@ def test_negotiable_housing_uses_original_evidence_and_no_amount(property_type, 
 
 
 def test_global_budget_cooldown_and_delete_404_distinction(db, monkeypatch):
-    monkeypatch.setattr(config, "ADVERTIO_DAILY_REQUEST_LIMIT", 6)
+    monkeypatch.setattr(config, "ADVERTIO_DAILY_REQUEST_LIMIT", 7)
     stamp = [datetime(2026, 11, 24, 16, tzinfo=timezone.utc)]
     monkeypatch.setattr(transport, "now", lambda: stamp[0])
     response = SimpleNamespace(status_code=429, headers={"Retry-After": "1200"})
@@ -188,7 +188,9 @@ def test_global_budget_cooldown_and_delete_404_distinction(db, monkeypatch):
     with pytest.raises(AdvertioError) as unmapped:
         client.delete_lead("example-source", "21")
     assert unmapped.value.status == 404 and unmapped.value.retryable
-    stamp[0] += timedelta(hours=2)
+    # A generic deletion 404 must not pause unrelated traffic.
+    with transport.request_slot("housing"):
+        pass
     with pytest.raises(AdvertioError, match="local_daily_budget"):
         with transport.request_slot("housing"):
             pytest.fail("requests exceeded the shared budget")
@@ -293,3 +295,34 @@ async def test_telegram_removal_requires_explicit_empty_ids_and_live_anchor(monk
     assert not recorded
     await removal.check_source_removals(complete, channel, anchor.id)
     assert recorded == [(99, [], [71])]
+
+
+def test_housing_retry_uploads_media_under_the_frozen_source(db, monkeypatch, tmp_path):
+    from delivery.advertio_service import AdvertioDeliveryService
+
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"housing photo")
+    record = {**_record(), "media_paths": [str(image)]}
+    posted = []
+    uploads = []
+
+    def upload(path, source):
+        uploads.append(source)
+        return source + "-key"
+
+    def post(payload):
+        posted.append(payload)
+        if len(posted) == 1:
+            raise AdvertioError("transport timeout", retryable=True)
+        return {"lead_id": "lead-1"}
+
+    client = SimpleNamespace(upload_media=upload, create_lead=post)
+    monkeypatch.setattr(config, "ADVERTIO_SOURCE_NAME", "housing-original")
+    with pytest.raises(AdvertioError, match="transport timeout"):
+        AdvertioDeliveryService(client=client).deliver(record, _housing())
+    monkeypatch.setattr(config, "ADVERTIO_SOURCE_NAME", "housing-new")
+    AdvertioDeliveryService(client=client).deliver(record, _housing())
+
+    assert uploads == ["housing-original"]
+    assert [payload["sourceName"] for payload in posted] == ["housing-original"] * 2
+    assert posted[1]["mediaKeys"] == ["housing-original-key"]

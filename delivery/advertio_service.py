@@ -432,12 +432,17 @@ class AdvertioDeliveryService:
             housing_retry.check()
             try:
                 payload = self.build_payload(record, data)
-                for position, path in enumerate(self._media_paths(record)[:10]):
+
+                def upload_album(resolved):
+                    for position, path in enumerate(self._media_paths(record)[:10]):
+                        housing_retry.check()
+                        key = housing_media_key(
+                            self.client, path, resolved["sourceName"], resolved["externalId"], position
+                        )
+                        resolved["mediaKeys"].append(key)
                     housing_retry.check()
-                    key = housing_media_key(self.client, path, self.source_name, payload["externalId"], position)
-                    payload["mediaKeys"].append(key)
-                housing_retry.check()
-                return create_listing(self.client, payload, record, "housing")
+
+                return create_listing(self.client, payload, record, "housing", prepare_payload=upload_album)
             except housing_retry.HousingDeferred:
                 raise
             except AdvertioError as exc:

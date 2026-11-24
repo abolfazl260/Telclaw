@@ -72,14 +72,12 @@ class AdvertioClient:
             retry_after=self._retry_after(response),
         )
 
-    def _request(self, method, url, *, bucket=None, accept_missing=False, on_admit=None, **kwargs):
+    def _request(self, method, url, *, bucket=None, shared_not_found=True, on_admit=None, **kwargs):
         with request_slot(bucket or self.category, self.timeout, on_admit=on_admit):
             # Custom X-Ingest-Key headers must never follow redirects.
             response = getattr(requests, method)(url, allow_redirects=False, **kwargs)
             status = response.status_code
-            if status in {401, 404, 429} and not (
-                accept_missing and status == 404 and self._confirmed_absent(response)
-            ):
+            if status in {401, 429} or (status == 404 and shared_not_found):
                 record_cooldown(status, self._retry_after(response))
             return response
 
@@ -218,7 +216,7 @@ class AdvertioClient:
                 "delete",
                 f"{self.base_url}/api/ingest/leads/{key}",
                 headers=self.headers, timeout=self.timeout,
-                bucket="deletion", accept_missing=True,
+                bucket="deletion", shared_not_found=False,
             )
         except requests.RequestException as exc:
             raise AdvertioError("Advertio delete transport error", retryable=True) from exc

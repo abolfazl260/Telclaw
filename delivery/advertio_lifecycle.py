@@ -54,7 +54,7 @@ def _known_prior_attempt(category, record):
     return bool(record.get("attempts"))
 
 
-def create_listing(client, payload, record, category):
+def create_listing(client, payload, record, category, *, prepare_payload=None):
     host = getattr(client, "base_url", config.ADVERTIO_BASE_URL)
     mid, channel = record.get("message_id"), record.get("channel_id")
     local_id = record.get("message_row_id") or record.get("processed_message_id") or record.get("id")
@@ -69,6 +69,8 @@ def create_listing(client, payload, record, category):
     if frozen:
         payload = {**payload, "sourceName": frozen["source_name"], "externalId": frozen["external_id"]}
     key = (host, payload["sourceName"], payload["externalId"])
+    if prepare_payload is not None:
+        prepare_payload(payload)
     first_send = False
 
     def admitted(conn):

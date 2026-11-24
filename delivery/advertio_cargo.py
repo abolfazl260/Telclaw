@@ -16,6 +16,7 @@ from delivery.advertio_client import AdvertioClient, AdvertioError
 from delivery.advertio_lifecycle import create_listing
 from delivery.advertio_source_text import description_limit, explicitly_negotiable, has_cargo_price, original_text
 from storage.database import get_connection
+from storage.cargo_types import normalize_cargo_types as _cargo_types
 
 log = logging.getLogger("telclaw.advertio.cargo")
 ITEMS = {"documents", "clothes", "electronics", "food", "other"}
@@ -27,7 +28,6 @@ def cargo_queue_eligibility_sql():
         advertio_cargo_route_ok(t.origin_country,t.origin_city,
             t.destination_country,t.destination_city,{catalog.ROUTE_EVIDENCE_SQL})=1
         AND {catalog.TRIP_WINDOW_SQL}
-        AND NOT ({catalog.UNREVIEWED_HISTORY_SQL})
     """
 
 
@@ -82,28 +82,6 @@ def _contact(record):
     return None
 
 
-def _cargo_types(value):
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-            value = parsed if isinstance(parsed, list) else value
-        except ValueError:
-            pass
-    parts = value if isinstance(value, list) else re.split(r"[,،;/+]|\band\b", str(value or ""), flags=re.I)
-    aliases = {
-        "document": "documents", "documents": "documents", "مدارک": "documents", "اسناد": "documents",
-        "clothing": "clothes", "clothes": "clothes", "لباس": "clothes", "پوشاک": "clothes",
-        "electronic": "electronics", "electronics": "electronics", "گوشی": "electronics",
-        "موبایل": "electronics", "لپ تاپ": "electronics", "لپتاپ": "electronics",
-        "food": "food", "خوراکی": "food", "مواد غذایی": "food",
-        "other": "other", "سایر": "other",
-    }
-    result = []
-    for part in parts:
-        v = aliases.get(_name(part))
-        if v and v not in result:
-            result.append(v)
-    return result
 
 
 class AdvertioCargoService:
@@ -194,8 +172,9 @@ class AdvertioCargoService:
                        t.destination_city, t.destination_country, t.departure_date,
                        t.cargo_type, t.weight, t.weight_unit, t.price,
                        t.currency, t.contact, COALESCE(d.attempts,0) AS attempts,
-                       EXISTS (SELECT 1 FROM advertio_cargo_history_review review
-                               WHERE review.local_id=m.id) AS reviewed_backfill
+                       (advertio_cargo_history_scope(m.id,t.origin_country,t.destination_country)=1
+                        OR EXISTS (SELECT 1 FROM advertio_cargo_history_review review
+                                   WHERE review.local_id=m.id)) AS reviewed_backfill
                   FROM messages m
                   JOIN transferlist t ON t.processed_message_id=m.id
                   LEFT JOIN advertio_cargo_deliveries d ON d.processed_message_id=m.id

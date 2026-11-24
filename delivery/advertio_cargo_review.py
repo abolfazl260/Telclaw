@@ -45,8 +45,7 @@ def review_history(*, after=0, limit=50, apply_ids=()):
             raise ValueError("A fresh, successful Advertio catalog snapshot is required")
         catalog.register_sql(conn, snapshot)
         where = f"""
-          (({catalog.UNREVIEWED_HISTORY_SQL}) AND d.processed_message_id IS NULL
-           OR (d.status='rejected' AND d.lead_id IS NULL AND ({LEGACY_LOCATION_ERRORS})))
+          d.status='rejected' AND d.lead_id IS NULL AND ({LEGACY_LOCATION_ERRORS})
           AND advertio_cargo_route_ok(t.origin_country,t.origin_city,t.destination_country,
               t.destination_city,{catalog.ROUTE_EVIDENCE_SQL})=1
         """
@@ -55,7 +54,7 @@ def review_history(*, after=0, limit=50, apply_ids=()):
         rows = _rows(conn, where=where, params=apply_ids, limit=limit, after=0 if apply_ids else after)
         for row in rows:
             row.pop("evidence")
-            row["reason"] = "legacy_location_rejection" if row["status"] == "rejected" else "legacy_country_filter"
+            row["reason"] = "legacy_location_rejection"
         counts = Counter((row["reason"], row["origin_country"], row["destination_country"]) for row in rows)
         if apply_ids:
             stamp = catalog.now().isoformat()

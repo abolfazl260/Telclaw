@@ -113,7 +113,7 @@ def test_refresh_coalesces_and_city_get_is_authenticated_per_country(db, monkeyp
     assert AdvertioClient(config.ADVERTIO_BASE_URL, "placeholder").list_cities("DK") == []
 
 
-def test_historical_audit_is_bounded_read_only_and_explicit(db, monkeypatch):
+def test_historical_valid_waiting_routes_send_automatically_with_moderation(db, monkeypatch):
     row = add_post(100, overrides={"origin_country": "AT", "origin_city": "Vienna"})
     expired = add_post(101, age_days=90, overrides={"origin_country": "AT", "origin_city": "Vienna"})
     with closing(database.get_connection()) as conn, conn:
@@ -123,13 +123,19 @@ def test_historical_audit_is_bounded_read_only_and_explicit(db, monkeypatch):
     service = AdvertioCargoService(client)
     monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
     monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", {source_name({"channel_username": "cargo-one"})})
-    assert service.deliver_pending()["found"] == 0
-    assert [r["local_id"] for r in review_history(limit=1)["rows"]] == [row]
-    assert service.pending() == []
-    assert review_history(apply_ids=(row, expired))["applied"] == [row]
-    assert review_history(apply_ids=(row,))["applied"] == []
+    catalog.refresh(client, service.host)
+    assert [r["message_row_id"] for r in service.pending()] == [row]
+    from backoffice_active_cargo import active_cargo_report
+    from backoffice_health import _cargo_delivery_report
+    assert active_cargo_report(status="ready")["total"] == 1
+    with closing(database.get_connection()) as conn:
+        assert _cargo_delivery_report(conn)["ready_to_send"] == 1
+    assert review_history(limit=1)["rows"] == []
+    assert review_history(apply_ids=(row, expired))["applied"] == []
     assert service.deliver_pending()["sent"] == 1
     assert client.sent[0]["autoPublish"] is False
+    assert service.deliver_pending()["found"] == 0
+    assert len(client.sent) == 1
 
 
 @pytest.mark.parametrize("text,currency", (

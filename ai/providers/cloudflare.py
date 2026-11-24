@@ -294,13 +294,16 @@ class CloudflareProvider(AIProvider):
         shape = {"category": category, "data": {
             category: {field: None for field in CATEGORY_FIELDS[category]},
         }}
+        if category == "transferlist":
+            shape["data"][category]["cargo_type"] = []
         return self._request([
             {"role": "system", "content": render_prompt(category, text.strip())},
             {"role": "system", "content":
                 "Required JSON structure (replace field nulls only with supported facts): "
                 + json.dumps(shape) + ". The data container and data." + category
                 + " must always be objects, never null, strings or arrays. "
-                "Use null for unknown individual fields, not for the category object."},
+                "Use null for unknown individual fields, not for the category object. "
+                + ("For cargo_type return an array of supported item types, or [] when unknown." if category == "transferlist" else "")},
         ], validator=validate_extraction)
 
 

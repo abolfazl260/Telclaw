@@ -1616,8 +1616,8 @@ async def operations_page(request):
             "<td>@" + _escape(item.get("channel_username") or "") + "</td>"
             "<td>" + _escape(route) + "</td>"
             "<td>" + _escape(item.get("departure_date") or "Undated") + "</td>"
-            "<td>" + _escape(status) + "</td>"
-            "<td>" + _escape(item.get("error") or item.get("blocked_reason") or item.get("next_attempt_at") or "") + "</td>"
+            "<td>" + _escape(str(item.get("display_status") or status).replace("_", " ")) + "</td>"
+            "<td>" + _escape(item.get("blocked_reason") or item.get("error") or item.get("next_attempt_at") or "") + "</td>"
             "<td>" + retry_button + "</td></tr>"
         )
     cargo_table = (
@@ -1877,7 +1877,7 @@ async def operations_page(request):
         AI failed: <strong>{int(cargo_report.get('ai_failed') or 0):,}</strong> ·
         Pending AI: <strong>{int(cargo_report.get('ai_pending') or 0):,}</strong></p>
         <p><strong>Ready to send now: {int(cargo_report.get('ready_to_send') or 0):,}</strong> ·
-        Waiting (date-window estimate): <strong>{int(cargo_report.get('waiting') or 0):,}</strong> ·
+        Waiting (locally eligible): <strong>{int(cargo_report.get('waiting') or 0):,}</strong> ·
         Retry: <strong>{int(cargo_report.get('retry') or 0):,}</strong> ·
         Sent to API: <strong>{int(cargo_report.get('sent') or 0):,}</strong> ·
         Already existed: <strong>{int(cargo_report.get('already_existed') or 0):,}</strong> ·
@@ -1890,13 +1890,19 @@ async def operations_page(request):
         <details class="ops-help"><summary>What do these cargo statuses mean?</summary>
           <ul><li><strong>AI processed / pending / failed:</strong> extraction status before delivery.</li>
           <li><strong>Ready to send now:</strong> passes local date, route, supported-country and retry-window filters. The API still validates city names, content and duplicates.</li>
-          <li><strong>Waiting:</strong> records not yet sent, including some that may be filtered out. <strong>Retry:</strong> a temporary failure will be retried.</li>
+          <li><strong>Waiting:</strong> locally eligible unsent records; blocked records are counted separately. Global cooldown and budgets may still defer sends. <strong>Retry:</strong> a temporary failure will be retried.</li>
           <li><strong>Sent to API:</strong> the API accepted the listing. This is not proof that it is publicly visible.</li>
           <li><strong>Already existed:</strong> Advertio reported the same listing already exists; Telclaw will not create it again.</li>
           <li><strong>Rejected:</strong> fix the source data before using Requeue.</li>
           <li><strong>PendingReview:</strong> an existing listing awaiting moderation is not activated by turning auto-publish on.</li></ul>
           <p><a href="/settings">Open settings to review cargo auto-publish</a>.</p>
         </details>
+        <p>Blocked unsent records:
+        { " · ".join(_escape(key.replace("_", " ").title()) + ": <strong>" + str(int(value)) + "</strong>" for key, value in (cargo_report.get("blocked_counts") or {}).items()) or "—" }</p>
+        <p class="muted">Catalog: {_escape((cargo_report.get("catalog") or {}).get("status", "missing"))} ·
+        Last catalog error: {_escape((cargo_report.get("catalog") or {}).get("last_error") or "—")} ·
+        Shared requests remaining: {_escape((cargo_report.get("request_budget") or {}).get("remaining", "—"))} ·
+        Shared cooldown: {_escape((cargo_report.get("request_budget") or {}).get("cooldown") or "—")}</p>
         {cargo_alert_html}
         {cargo_error_html}
         {_operation_state_box("Advertio website cargo", cargo_state)}

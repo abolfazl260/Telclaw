@@ -183,6 +183,8 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
                 and not reason and row["status"] in ("waiting", "retry")
                 and (not row["next_attempt_at"] or row["next_attempt_at"] <= now.isoformat())
             )
+        from delivery import cargo_publication
+        cargo_publication.annotate(conn, rows)
         return {"rows": rows, "total": total, "page": page,
                 "pages": pages, "summary": summary, "catalog": catalog.metadata(conn),
                 "request_budget": advertio_transport.metadata(conn),

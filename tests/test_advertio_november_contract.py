@@ -113,7 +113,7 @@ def test_refresh_coalesces_and_city_get_is_authenticated_per_country(db, monkeyp
     assert AdvertioClient(config.ADVERTIO_BASE_URL, "placeholder").list_cities("DK") == []
 
 
-def test_historical_valid_waiting_routes_send_automatically_with_moderation(db, monkeypatch):
+def test_historical_valid_waiting_routes_request_autopublish(db, monkeypatch):
     row = add_post(100, overrides={"origin_country": "AT", "origin_city": "Vienna"})
     expired = add_post(101, age_days=90, overrides={"origin_country": "AT", "origin_city": "Vienna"})
     with closing(database.get_connection()) as conn, conn:
@@ -122,7 +122,7 @@ def test_historical_valid_waiting_routes_send_automatically_with_moderation(db, 
     client.extra_cities["AT"] = [city("Vienna", "vienna", "AT", "VIENNA", "وین")]
     service = AdvertioCargoService(client)
     monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
-    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", {source_name({"channel_username": "cargo-one"})})
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", frozenset())
     catalog.refresh(client, service.host)
     assert [r["message_row_id"] for r in service.pending()] == [row]
     from backoffice_active_cargo import active_cargo_report
@@ -133,7 +133,7 @@ def test_historical_valid_waiting_routes_send_automatically_with_moderation(db, 
     assert review_history(limit=1)["rows"] == []
     assert review_history(apply_ids=(row, expired))["applied"] == []
     assert service.deliver_pending()["sent"] == 1
-    assert client.sent[0]["autoPublish"] is False
+    assert client.sent[0]["autoPublish"] is True
     assert service.deliver_pending()["found"] == 0
     assert len(client.sent) == 1
 

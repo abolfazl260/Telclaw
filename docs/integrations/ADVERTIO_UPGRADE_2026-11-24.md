@@ -5,9 +5,9 @@ The [upstream Crawler Integration Guide](CRAWLER-INTEGRATION.md) is preserved ve
 ## Rollout and rollback
 
 1. Back up SQLite through the normal backup procedure, then install and restart Telclaw on the configured API host. The migration adds tables and nullable or defaulted fields. Previously sent records retain their delivery states and source IDs.
-2. Leave the reviewed-source lists empty for the first controlled batches. For approved sources, use the journey auto-publish switch with the exact source names in `TELCLAW_ADVERTIO_CARGO_REVIEWED_SOURCES` or `TELCLAW_ADVERTIO_JOBS_REVIEWED_SOURCES`. Housing uses channel usernames in `TELCLAW_ADVERTIO_HOUSING_REVIEWED_CHANNELS`. The lists are comma-separated and loaded at restart.
+2. Operator-approved Cargo policy: `TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=true` requests publication for all valid Cargo submissions, including backfill, regardless of reviewed-source lists. Advertio retains validation and possible-duplicate moderation. This is a deliberate local policy departure from the upstream initial-review guidance. Housing and Jobs still require approved sources; use `TELCLAW_ADVERTIO_JOBS_REVIEWED_SOURCES` and `TELCLAW_ADVERTIO_HOUSING_REVIEWED_CHANNELS` respectively. The lists are comma-separated and loaded at restart.
 3. Run a small delivery batch to warm the host-specific cargo snapshot. Active Cargo and Operations show coverage, timestamps, refresh failures and the shared budget from SQLite. The catalog refreshes after 24 hours. Malformed, capped and regressed results retain the previous snapshot and retry after at least 15 minutes. A missing snapshot defers cargo. A stale snapshot can send resolved routes while unresolved routes wait for refresh.
-4. Valid, unsent waiting/retry cargo records from before deployment enter the normal bounded delivery queue automatically, regardless of country. The live route and date validation still applies. Previously excluded historical routes retain moderation on submission. For previously rejected records, run a bounded historical dry run and apply only reviewed local row IDs; use `--after` to page.
+4. Valid, unsent waiting/retry cargo records from before deployment enter the normal bounded delivery queue automatically, regardless of country. The live route and date validation still applies. Historical Cargo submissions request publication when the Cargo switch is enabled. For previously rejected records, run a bounded historical dry run and apply only reviewed local row IDs; use `--after` to page.
 
    ~~~sh
    python -m scripts.advertio_review cargo-history --limit 25
@@ -16,7 +16,7 @@ The [upstream Crawler Integration Guide](CRAWLER-INTEGRATION.md) is preserved ve
    python -m scripts.advertio_review duplicates --limit 100
    ~~~
 
-5. Review accepted statuses, route counts and duplicate audits. The returned lead ID is audit evidence. Deletion uses the originally submitted source key. The receiver can keep possible duplicates in `PendingReview`.
+5. Review accepted statuses, route counts and duplicate audits. The returned lead ID and status are audit evidence. Back Office shows the last recorded ingest status, not live publication state; existing PendingReview records must be approved in Advertio, not resubmitted. Deletion uses the originally submitted source key. The receiver can keep possible duplicates in `PendingReview`.
 6. For rollback, pause Advertio delivery before reverting the deployment. Keep the host, SQLite database and successful delivery states. An older release will leave the new deletion queue pending.
 
 The shared budget defaults to 1,000 HTTP attempts per UTC day, including media, schema and location reads, lead writes, deletion and the manual health probe. Admission paces starts to about 6.7 requests per second and caps concurrent HTTP across processes at `TELCLAW_ADVERTIO_CONCURRENCY` (1–3). The daily budget protects a 5% share each for Housing, Cargo, Jobs, catalog and deletions, with the remaining capacity shared. HTTP 429 and ingest authentication or configuration faults pause shared traffic. Confirm the actual quota window with Advertio before adjusting limits.

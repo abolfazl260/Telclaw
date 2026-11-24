@@ -544,6 +544,9 @@ def _cargo_delivery_report(conn, limit=30):
         FROM messages m JOIN transferlist t ON t.processed_message_id=m.id {join}
         WHERE {expr} ORDER BY m.id DESC LIMIT ?"""
     report["recent"] = [dict(row) for row in conn.execute(sql, (min(max(int(limit),1),100),))]
+    from delivery import cargo_publication
+    cargo_publication.annotate(conn, report["recent"])
+    report["publication_totals"] = cargo_publication.totals(conn)
     if has_delivery:
         row = conn.execute("""SELECT error FROM advertio_cargo_deliveries
             WHERE error IS NOT NULL AND TRIM(error)<>'' ORDER BY updated_at DESC LIMIT 1""").fetchone()

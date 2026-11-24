@@ -17,6 +17,7 @@ from delivery.advertio_lifecycle import create_listing
 from delivery.advertio_source_text import description_limit, explicitly_negotiable, has_cargo_price, original_text
 from storage.database import get_connection
 from storage.cargo_types import normalize_cargo_types as _cargo_types
+from delivery.cargo_publication import outcome, OUTCOMES
 
 log = logging.getLogger("telclaw.advertio.cargo")
 ITEMS = {"documents", "clothes", "electronics", "food", "other"}
@@ -171,10 +172,7 @@ class AdvertioCargoService:
                        t.title, t.description, t.origin_city, t.origin_country,
                        t.destination_city, t.destination_country, t.departure_date,
                        t.cargo_type, t.weight, t.weight_unit, t.price,
-                       t.currency, t.contact, COALESCE(d.attempts,0) AS attempts,
-                       (advertio_cargo_history_scope(m.id,t.origin_country,t.destination_country)=1
-                        OR EXISTS (SELECT 1 FROM advertio_cargo_history_review review
-                                   WHERE review.local_id=m.id)) AS reviewed_backfill
+                       t.currency, t.contact, COALESCE(d.attempts,0) AS attempts
                   FROM messages m
                   JOIN transferlist t ON t.processed_message_id=m.id
                   LEFT JOIN advertio_cargo_deliveries d ON d.processed_message_id=m.id
@@ -387,9 +385,8 @@ class AdvertioCargoService:
             "province": source_province,
             "city": source_code,
             "mediaKeys": [],
-            # Every newly introduced journey begins under human moderation.
-            "autoPublish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH and source in config.ADVERTIO_CARGO_REVIEWED_SOURCES
-                                and not record.get("reviewed_backfill")),
+            # Advertio retains authority over duplicate detection and moderation.
+            "autoPublish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH),
         }
         author_id = record.get("sender_id")
         if (record.get("sender_type") == "user" and record.get("sender_is_original") in (1, None)
@@ -402,7 +399,8 @@ class AdvertioCargoService:
         self._recover_stale_sends()
         limit = min(int(limit or config.ADVERTIO_CARGO_BATCH_SIZE), self._remaining_budget())
         result = {"found": 0, "sent": 0, "already_existed": 0,
-                  "rejected": 0, "retry": 0, "budget_remaining": self._remaining_budget()}
+                  "rejected": 0, "retry": 0, "budget_remaining": self._remaining_budget(),
+                  **dict.fromkeys(OUTCOMES, 0)}
         paused_until = self._pause_until()
         if paused_until:
             result["paused_until"] = paused_until
@@ -430,6 +428,8 @@ class AdvertioCargoService:
                 status = "already_existed" if response.get("already_existed") else "sent"
                 self._result(record, status, lead_id=response["lead_id"])
                 result[status] += 1
+                if status == "sent":
+                    result[outcome(response.get("status"))] += 1
             except CargoMappingError as exc:
                 self._result(record, "rejected", error=str(exc))
                 result["rejected"] += 1

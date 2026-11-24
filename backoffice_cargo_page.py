@@ -100,7 +100,11 @@ async def cargo_page(request):
             '<td>' + _esc(route) + '</td>' +
             '<td>' + _esc(row.get("departure_date") or "Undated") + '</td>' +
             '<td>' + _esc(row.get("posted_at") or "") + '</td>' +
-            '<td><strong>' + _esc(row.get("display_status", row["status"]).replace("_", " ")) + '</strong></td>' +
+            '<td><strong>' + _esc(row.get("display_status", row["status"]).replace("_", " ")) + '</strong>'
+            + ('<div class="muted">At ingest: ' + _esc(row.get("remote_status") or "Unknown") + '</div>'
+               if row["status"] in ("sent", "already_existed") else '')
+            + ('<div class="muted">Lead ID: ' + _esc(row["lead_id"]) + '</div>' if row.get("lead_id") else '')
+            + '</td>' +
             '<td>' + _esc(details) + '</td></tr>'
         )
     tbody = "".join(rows_html) or '<tr><td colspan="8">No cargo ads match the selected filters.</td></tr>'
@@ -121,6 +125,11 @@ async def cargo_page(request):
         result_text = (
             f"<p>Last batch: found <strong>{int(found)}</strong> · sent <strong>{int(sent)}</strong> · "
             f"rejected <strong>{int(rejected)}</strong> · retry <strong>{int(retry)}</strong>.</p>"
+            + ("<p>New listings at ingest: " + " · ".join(
+                _esc(label) + ": <strong>" + str(int(result.get(key, 0))) + "</strong>"
+                for key, label in (("active", "Active"), ("pending_review", "PendingReview"),
+                                   ("publication_unknown", "Unknown"), ("publication_other", "Other"))
+            ) + "</p>" if isinstance(result, dict) and "active" in result else "")
         )
     if state.get("error"):
         result_text += '<p class="error">' + _esc(state["error"]) + '</p>'
@@ -173,7 +182,7 @@ async def cargo_page(request):
         {_esc(catalog.get('last_error') or '')}</p>
       <p class="muted">Shared requests remaining {_esc(budget.get('remaining', '—'))} ·
         Cooldown {_esc((budget.get('cooldown') or {}).get('reason', '—'))}</p>
-      <p class="muted">Sent to API means accepted, not necessarily publicly Active; older PendingReview listings still need separate resolution.</p>
+      <p class="muted">Sent to API means accepted. At-ingest publication statuses are historical API responses, not live listing state. Existing PendingReview listings need approval in Advertio.</p>
     </section>
     <section class="card"><h2>Search and filter active cargo</h2>
       <form method="get" action="/cargo" class="filters">

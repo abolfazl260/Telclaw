@@ -40,7 +40,8 @@ async def check_source_removals(client, entity, anchor):
         absent = [mid for mid in candidates if isinstance(by_id[mid], MessageEmpty)
                   and (getattr(by_id[mid], "peer_id", None) is None or same_channel(by_id[mid]))]
         await asyncio.to_thread(record_source_check, channel_id, present, absent)
-    except Exception:
+    except Exception as exc:
         # No state is inferred from a private channel, timeout, or Telegram
         # error. Keep normal collection results independent of this check.
-        log.warning("Advertio removal lookup unavailable for Telegram channel %s", channel_id)
+        log.warning("Advertio removal lookup unavailable for Telegram channel %s (%s)",
+                    channel_id, type(exc).__name__)

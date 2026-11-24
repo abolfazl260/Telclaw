@@ -284,8 +284,9 @@ async def test_telegram_removal_requires_explicit_empty_ids_and_live_anchor(monk
     async def unavailable(_request):
         raise TimeoutError
 
-    async def complete(_request):
-        return SimpleNamespace(messages=[types.MessageEmpty(id=71), anchor])
+    async def complete(request):
+        assert [item.id for item in request.id] == [71, 72]
+        return SimpleNamespace(messages=[types.MessageEmpty(71, types.PeerChannel(99)), anchor])
 
     await removal.check_source_removals(partial, channel, anchor.id)
     await removal.check_source_removals(unavailable, channel, anchor.id)

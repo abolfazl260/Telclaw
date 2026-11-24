@@ -1,5 +1,7 @@
 """Persistent Housing-only cooldown shared by queued and inline delivery."""
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from random import uniform
 import math
 from threading import RLock
 
@@ -54,3 +56,23 @@ def defer(error):
     finally:
         conn.close()
     return paused_until()
+
+
+def defer_record(record, error):
+    """Persist per-listing transient backoff for queued and inline Housing."""
+    if not isinstance(error, AdvertioError) or not error.retryable or error.deferred or error.status == 429:
+        return
+    with closing(get_connection()) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("""
+            SELECT advertio_retry_count FROM messages WHERE channel_username=? AND message_id=?
+        """, (record["channel_username"], record["message_id"])).fetchone()
+        if not row:
+            return
+        count = row["advertio_retry_count"]
+        seconds = max(error.retry_after or 0, min(21600, 60 * 2 ** min(count, 8) * uniform(0.9, 1.1)))
+        retry_at = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+        conn.execute("""
+            UPDATE messages SET advertio_retry_at=?,advertio_retry_count=advertio_retry_count+1
+            WHERE channel_username=? AND message_id=?
+        """, (retry_at, record["channel_username"], record["message_id"]))

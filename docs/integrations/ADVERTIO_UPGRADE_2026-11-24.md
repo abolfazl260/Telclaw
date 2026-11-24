@@ -1,12 +1,29 @@
 # Advertio integration upgrade — 2026-11-24
 
-Status: **planned, not implemented**. The upstream [Crawler Integration Guide](CRAWLER-INTEGRATION.md) is preserved verbatim. The live category schema wins if it differs. This plan documents the reviewed Telclaw gaps and the full ordered backlog; each linked issue has detailed scope, acceptance criteria and test requirements.
+The [upstream Crawler Integration Guide](CRAWLER-INTEGRATION.md) is preserved verbatim. The implementation for issues #196–#200 is prepared for staged testing. Issue #201 still requires Advertio backend readiness confirmation.
 
-## Contract delta and current implementation
+## Rollout and rollback
 
-Advertio expanded from 11 countries to 48 countries and 341 cities. Telclaw currently allows only 7 cargo countries (IR, CA, US, DE, IT, GB, FR), including queue and dashboard eligibility. The existing per-country cities request already uses limit=200; the cargo service has a process-local 24-hour per-country cache. A single unfiltered request cannot return all cities (200 rows, and the internal province lookup also caps at 200 of 211). The server now accepts cargo_type as a multi-select list, still accepting a legacy scalar. Telclaw already maps lists/JSON strings/delimited text to arrays, but the extraction prompt and full data lifecycle must explicitly support multiple types. Eight currency codes are supported by Advertio (CAD, USD, EUR, GBP, AED, CNY, TRY, RUB), unchanged in this release; Telclaw delivery currently accepts only the first four. No additional currency can be inferred from new countries. The five-word native-app minimum does not apply to ingest. Housing and Jobs have no new November 24 schema changes; the existing housing negotiable-price gap and shared request budget are separate follow-ups.
+1. Back up SQLite through the normal backup procedure, then install and restart Telclaw on the configured API host. The migration adds tables and nullable or defaulted fields. Previously sent records retain their delivery states and source IDs.
+2. Leave the reviewed-source lists empty for the first controlled batches. For approved sources, use the journey auto-publish switch with the exact source names in `TELCLAW_ADVERTIO_CARGO_REVIEWED_SOURCES` or `TELCLAW_ADVERTIO_JOBS_REVIEWED_SOURCES`. Housing uses channel usernames in `TELCLAW_ADVERTIO_HOUSING_REVIEWED_CHANNELS`. The lists are comma-separated and loaded at restart.
+3. Run a small delivery batch to warm the host-specific cargo snapshot. Active Cargo and Operations show coverage, timestamps, refresh failures and the shared budget from SQLite. The catalog refreshes after 24 hours. Malformed, capped and regressed results retain the previous snapshot and retry after at least 15 minutes. A missing snapshot defers cargo. A stale snapshot can send resolved routes while unresolved routes wait for refresh.
+4. With a fresh snapshot, run a bounded historical dry run. Use `--after` to page with the cursor. Apply only reviewed local row IDs. Recovered rows enter moderation when sent.
 
-Already supported by current cargo delivery: optional travel date, omission of role, past-trip filtering, Gregorian/Jalali extraction instructions, empty mediaKeys, origin-based location, canonical route/date title, and array mapping. Keep these behaviors, existing internal passenger/shipper classification and Telegram publication. No rewrite is required.
+   ~~~sh
+   python -m scripts.advertio_review cargo-history --limit 25
+   python -m scripts.advertio_review cargo-history --limit 25 --apply 123 456
+   python -m scripts.advertio_review cargo-routes --limit 100
+   python -m scripts.advertio_review duplicates --limit 100
+   ~~~
+
+5. Review accepted statuses, route counts and duplicate audits. The returned lead ID is audit evidence. Deletion uses the originally submitted source key. The receiver can keep possible duplicates in `PendingReview`.
+6. For rollback, pause Advertio delivery before reverting the deployment. Keep the host, SQLite database and successful delivery states. An older release will leave the new deletion queue pending.
+
+The shared budget defaults to 1,000 HTTP attempts per UTC day, including media, schema and location reads, lead writes, deletion and the manual health probe. Admission paces starts to about 6.7 requests per second and caps concurrent HTTP across processes at `TELCLAW_ADVERTIO_CONCURRENCY` (1–3). The daily budget protects a 5% share each for Housing, Cargo, Jobs, catalog and deletions, with the remaining capacity shared. HTTP 429 and ingest authentication or configuration faults pause shared traffic. Confirm the actual quota window with Advertio before adjusting limits.
+
+After a successful crawl, an explicit Telegram ID lookup checks up to 20 tracked posts alongside a live anchor from the same channel. Two complete checks at least six hours apart must return an explicit empty record for the same ID before a deletion is queued. Private channels, access errors and missing pages do not count. HTTP 204 and a listing-specific 404 finish the deletion. A generic 404 is retried because it can indicate a missing ingest route. Historical deliveries without a recorded original API destination and verified source identity require reconciliation.
+
+The tables below capture the original issue scope and acceptance criteria.
 
 ## P0 — Required
 

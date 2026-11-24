@@ -133,49 +133,57 @@ def _transfer_identity(row) -> tuple:
     return sender_key, origin_country, origin_city, destination_country, destination_city, departure_date
 
 
+def _active_cohort_query(conn):
+    """Shared trip deduplication. Keep the same ordering used for Telegram."""
+    conn.create_function("transfer_key", 7, lambda *values: str(_transfer_identity(dict(zip(
+        ("sender_id", "sender_username", "origin_country", "origin_city",
+         "destination_country", "destination_city", "departure_date"), values
+    )))), deterministic=True)
+    conn.create_function("transfer_country", 1, _country_code, deterministic=True)
+    return """
+        SELECT * FROM (
+          SELECT t.origin_country,t.origin_city,t.destination_country,t.destination_city,
+                 t.departure_date,m.sender_id,m.sender_username,m.id AS message_row_id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY transfer_key(m.sender_id,m.sender_username,t.origin_country,t.origin_city,
+                       t.destination_country,t.destination_city,t.departure_date)
+                   ORDER BY COALESCE(t.origin_country,t.origin_city,''),date(substr(t.departure_date,1,10)),m.id
+                 ) AS trip_rank
+            FROM transferlist t JOIN messages m ON m.id=t.processed_message_id
+           WHERE m.ai_status='processed' AND m.ai_category='transferlist'
+             AND date(substr(t.departure_date,1,10))>=date(?)
+        ) WHERE trip_rank=1
+    """, datetime.now(TEHRAN_TZ).date().isoformat()
+
+
 def _fetch_active_rows():
-    today = datetime.now(TEHRAN_TZ).date().isoformat()
     conn = database.get_connection()
     try:
-        rows = conn.execute(
-            """SELECT t.origin_country, t.origin_city, t.destination_country, t.destination_city,
-                      t.departure_date, m.sender_id, m.sender_username, m.id AS message_row_id
-               FROM transferlist t
-               JOIN messages m ON m.id = t.processed_message_id
-               WHERE m.ai_status = 'processed'
-                 AND m.ai_category = 'transferlist'
-                 AND t.departure_date IS NOT NULL
-                 AND date(substr(t.departure_date, 1, 10)) >= date(?)
-               ORDER BY COALESCE(t.origin_country, t.origin_city, ''),
-                        date(substr(t.departure_date, 1, 10)) ASC,
-                        m.id ASC""",
-            (today,),
-        ).fetchall()
-
-        unique_rows = []
-        seen = set()
-        for row in rows:
-            identity = _transfer_identity(row)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            unique_rows.append(row)
-        return unique_rows
+        query, today = _active_cohort_query(conn)
+        return conn.execute(query + """
+            ORDER BY COALESCE(origin_country,origin_city,''),date(substr(departure_date,1,10)),message_row_id
+        """, (today,)).fetchall()
     finally:
         conn.close()
 
 
 def active_transferlive_message_ids() -> tuple[int, ...]:
-    """Same de-duplicated, valid-country cohort counted by /transferlive.
-
-    This is intentionally NOT the Advertio API eligibility set: routes from
-    any valid country may appear, and a departure date is mandatory.
-    """
+    """Return the deduplicated cohort counted by /transferlive."""
     return tuple(
         int(row["message_row_id"])
         for row in _fetch_active_rows()
         if _country_code(row["origin_country"]) and _country_code(row["destination_country"])
     )
+
+
+def active_transferlive_cohort(conn, *, materialize=False):
+    query, today = _active_cohort_query(conn)
+    query += " AND transfer_country(origin_country)<>'' AND transfer_country(destination_country)<>''"
+    if materialize:
+        conn.execute("CREATE TEMP TABLE live_transfer_ids(message_row_id INTEGER PRIMARY KEY)")
+        conn.execute(f"INSERT INTO live_transfer_ids SELECT message_row_id FROM ({query})", (today,))
+        return conn.execute("SELECT COUNT(*) FROM live_transfer_ids").fetchone()[0]
+    return conn.execute(f"SELECT COUNT(*) FROM ({query})", (today,)).fetchone()[0]
 
 
 def _country_summary_rows(rows):

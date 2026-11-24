@@ -1,6 +1,6 @@
 # Telclaw → Advertio Ingest Integration (Housing)
 
-> **2026-11-24 upstream contract update — implementation pending.** The complete, unmodified [Advertio Crawler Integration Guide](integrations/CRAWLER-INTEGRATION.md) is the authoritative reference for the new contract (live schema wins). This page describes existing Telclaw behavior, not the completed upgrade. See [implementation roadmap](integrations/ADVERTIO_UPGRADE_2026-11-24.md). Keep the current configured API host until backend readiness is confirmed (#201).
+> The November 24 changes and rollout are documented in the [Advertio upgrade](integrations/ADVERTIO_UPGRADE_2026-11-24.md). The [upstream contract](integrations/CRAWLER-INTEGRATION.md) is preserved verbatim.
 
 For the independently queued `transferlist` → `passenger-cargo` API delivery, see
 [Advertio Cargo Delivery](ADVERTIO_CARGO_DELIVERY.md). Telegram cargo publishing is preserved.
@@ -159,9 +159,7 @@ Unknown optional attributes are omitted. Unknown required attributes cause the l
 
 ## Currency
 
-Telclaw's canonical platform currency is CAD. The AI layer already normalizes non-CAD currency to null rather than inventing an exchange rate. Advertio delivery then rejects a housing listing unless its price is a valid CAD value.
-
-There is deliberately no currency conversion in the crawler.
+Numeric rent uses CAD and must fall within 100–10,000. If the source explicitly offers negotiable rent and provides no amount, the adapter sends `price_negotiable=true` without `price`. Those listings start in moderation and do not match numeric price filters. Listing type, property type, bedrooms and Canadian location are still required.
 
 ## Media
 
@@ -259,6 +257,6 @@ This gives transient failures at least one scheduler-cycle delay before another 
 
 ## Future work
 
-1. Add Telegram deletion/update event handling so the Advertio DELETE operation is triggered from a verified source deletion event.
-2. Add an optional connection/test command that verifies `X-Ingest-Key` without creating a lead.
-3. Keep Advertio-specific fields in the housing schema; do not hide required country/province/city data only inside the delivery adapter.
+Confirmed source removals are supported for identities registered after this release. See the [rollout notes](integrations/ADVERTIO_UPGRADE_2026-11-24.md).
+- Add an optional connection/test command that verifies `X-Ingest-Key` without creating a lead.
+- Keep Advertio-specific fields in the housing schema; do not hide required country/province/city data only inside the delivery adapter.

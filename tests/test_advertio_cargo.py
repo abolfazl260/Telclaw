@@ -5,23 +5,47 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 import config
+from delivery import advertio_cargo_catalog as catalog
 from delivery.advertio_cargo import AdvertioCargoService, CargoMappingError, source_name
 from delivery.advertio_client import AdvertioError
 from storage import database
+
+
+CONTRACT_COUNTRIES = (
+    "IR CA US DE IT GB FR AE CN TR RU AM AU AT AZ BY BG HR CY CZ DK GE HU IQ "
+    "IE KZ KG LT MY MX MD ME NL NO OM PL QA RO SA RS SG KR ES CH TH UA UZ AF"
+).split()
 
 
 class FakeClient:
     def __init__(self):
         self.sent = []
         self.failure = None
+        self.countries = CONTRACT_COUNTRIES.copy()
+        self.catalog_calls = []
+        self.city_calls = []
+        self.extra_cities = {}
+
+    def catalog(self, path):
+        self.catalog_calls.append(path)
+        if path == "categories/passenger-cargo/attributes":
+            return [dict(key=key, optionsJson=json.dumps([{"value": c} for c in self.countries]))
+                    for key in ("origin_country", "destination_country")]
+        assert path == "locations/countries"
+        return [dict(code=code, name={"CA": "Canada", "GB": "United Kingdom", "AT": "Austria"}.get(code, code))
+                for code in self.countries]
 
     def list_cities(self, country):
+        self.city_calls.append(country)
         cities = {
-            "CA": [dict(name="Toronto", nameFa="تورنتو", code="toronto", countryCode="CA", provinceCode="ON")],
+            "CA": [
+                dict(name="Toronto", nameFa="تورنتو", code="toronto", countryCode="CA", provinceCode="ON"),
+                dict(name="Ottawa", nameFa="اتاوا", code="ottawa", countryCode="CA", provinceCode="ON"),
+            ],
             "IR": [dict(name="Tehran", nameFa="تهران", code="tehran", countryCode="IR", provinceCode="TEHRAN")],
             "US": [dict(name="Dallas", nameFa="دالاس", code="dallas", countryCode="US", provinceCode="TX")],
         }
-        return cities.get(country, [])
+        return self.extra_cities.get(country, cities.get(country, []))
 
     def create_lead(self, payload):
         self.sent.append(payload)
@@ -39,7 +63,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ADVERTIO_CARGO_DAILY_LIMIT", 250)
     database.initialize_db()
     fake = FakeClient()
-    return AdvertioCargoService(client=fake), fake
+    service = AdvertioCargoService(client=fake)
+    assert catalog.refresh(fake, service.host)
+    return service, fake
 
 
 def add_post(message_id, *, channel="cargo-one", age_days=3, departure=None, overrides=None):
@@ -141,8 +167,13 @@ def test_unknown_city_is_not_replaced_with_nearest_city(env):
     service, client = env
     add_post(38, overrides={"destination_city": "UnlistedCity"})
     stats = service.deliver_pending()
-    assert stats["rejected"] == 1
+    assert stats["found"] == 0
     assert client.sent == []
+    from delivery.advertio_cargo_review import route_diagnostics
+    diagnostic = route_diagnostics()["routes"][0]
+    assert (diagnostic["direction"], diagnostic["city"], diagnostic["reason"]) == (
+        "destination", "UnlistedCity", "unsupported_city"
+    )
 
 
 def test_429_is_retry_and_does_not_affect_telegram_state(env):
@@ -300,6 +331,7 @@ def test_cargo_requeue_rejected_is_targeted_and_auditable(env, monkeypatch):
 def test_new_unique_cargo_is_submitted_for_auto_publish(env, monkeypatch):
     service, client = env
     monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
+    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", {source_name({"channel_username": "cargo-one"})})
     add_post(8808)
     stats = service.deliver_pending(limit=1)
     assert stats["sent"] == 1
@@ -437,7 +469,7 @@ def test_telegram_transferlive_view_uses_exact_same_deduplicated_cohort(env):
     tomorrow = (date.today() + timedelta(days=10)).isoformat()
     add_post(7101, departure=tomorrow)
     add_post(7102, departure=tomorrow)  # same sender, route and date
-    add_post(7103, departure=tomorrow, overrides={"destination_city": "Ottawa"})
+    add_post(7103, departure=tomorrow, overrides={"destination_city": "Ottawa", "destination_country": "CA"})
     add_post(7104, departure=tomorrow, overrides={"origin_country": "ZZ"})
     add_post(7105, departure=tomorrow, overrides={"destination_city": None})
     add_post(7106)  # fresh undated: Advertio candidate, NOT /transferlive

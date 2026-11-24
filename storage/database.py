@@ -14,7 +14,11 @@ CATEGORY_TABLES["joblist"].update({key: "TEXT" for key in (
 )})
 CATEGORY_TABLES["joblist"]["is_job_listing"] = "INTEGER"
 CATEGORY_TABLES["joblist"]["job_type_resolution"] = "TEXT"
-MESSAGE_COLUMNS["sender_is_original"] = "INTEGER"
+MESSAGE_COLUMNS.update({
+    "sender_is_original": "INTEGER",
+    "advertio_retry_at": "TEXT",
+    "advertio_retry_count": "INTEGER NOT NULL DEFAULT 0",
+})
 
 def get_connection():
     db_path=Path(config.DB_NAME)
@@ -177,6 +181,12 @@ def initialize_db():
         conn.commit()
         from storage.advertio_jobs_queue import initialize_jobs_schema
         initialize_jobs_schema(conn)
+        from delivery.advertio_transport import initialize as initialize_transport
+        initialize_transport(conn)
+        from delivery.advertio_lifecycle import initialize as initialize_lifecycle
+        initialize_lifecycle(conn)
+        from delivery.advertio_cargo_catalog import initialize as initialize_cargo_catalog
+        initialize_cargo_catalog(conn)
     finally: conn.close()
     recover_stale_processing_states()
 
@@ -511,7 +521,7 @@ def get_ai_pending_messages(limit=100,channel_username=None): return _get_messag
 def get_advertio_pending_messages(limit=100,channel_username=None,before_datetime=None):
     conn=get_connection()
     try:
-        sql="SELECT m.*,h.* FROM messages m INNER JOIN housinglist h ON h.processed_message_id=m.id WHERE m.processing_status='processed' AND m.ai_status='processed' AND m.ai_category='housinglist' AND COALESCE(m.advertio_status,'waiting') IN ('waiting','retry')"; values=[]
+        sql="SELECT m.*,h.* FROM messages m INNER JOIN housinglist h ON h.processed_message_id=m.id WHERE m.processing_status='processed' AND m.ai_status='processed' AND m.ai_category='housinglist' AND COALESCE(m.advertio_status,'waiting') IN ('waiting','retry') AND (m.advertio_retry_at IS NULL OR m.advertio_retry_at<=?)"; values=[datetime.now(timezone.utc).isoformat()]
         if before_datetime:
             sql += """ AND (
                 (COALESCE(m.advertio_status,'waiting')='retry' AND (m.advertio_processed_at IS NULL OR m.advertio_processed_at < ?))

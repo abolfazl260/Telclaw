@@ -8,6 +8,8 @@ import asyncio
 import logging
 import random
 
+import config
+
 from colorama import Fore, init
 from telethon import errors
 from telethon.tl.types import PeerChannel, PeerUser
@@ -289,7 +291,10 @@ async def crawl_channel(
         await _mirror_callback(mirror_capture, "bind", client, entity)
         await asyncio.sleep(random.randint(30, 60))
 
+        anchor = None
         async for message in _iter_messages_with_reconnect(client, entity, channel_username):
+            if anchor is None and getattr(message, "id", None):
+                anchor = message.id
             if should_stop and should_stop():
                 stopped = True
                 print(f"\n⏭ [CRAWL-SKIPPED] Operator requested stage skip; remaining messages were not checked.")
@@ -425,6 +430,11 @@ async def crawl_channel(
 
             await asyncio.sleep(random.uniform(0.3, 1.0))
 
+        if (not stopped and config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_INGEST_KEY
+                and anchor is not None and not (should_stop and should_stop())):
+            from collection.advertio_source_removal import check_source_removals
+
+            await check_source_removals(client, entity, anchor)
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
         print(f"📅 Range: {from_date} → {to_date}")
         print(f"✅ Saved: {saved_count}")

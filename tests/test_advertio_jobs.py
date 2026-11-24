@@ -98,6 +98,7 @@ class FakeClient:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ADVERTIO_JOBS_REVIEWED_SOURCES", {source_name({"channel_id": 1001})})
     monkeypatch.setattr(config, "DB_NAME", str(tmp_path / "jobs.sqlite"))
     for key, value in dict(
         ADVERTIO_INGEST_ENABLED=True,
@@ -149,6 +150,8 @@ def record(**changes):
         company="Legacy company",
     )
     r.update(changes)
+    if "cleaned_text" in changes and "raw_text" not in changes:
+        r["raw_text"] = changes["cleaned_text"]
     return r
 
 
@@ -329,7 +332,6 @@ def test_jobs_delivery_still_requires_source_city_evidence(env):
         ("province", "AB"),
         ("cleaned_text", ""),
         ("cleaned_text", "Hiring"),
-        ("cleaned_text", "a" * 2001),
         ("ai_status", "failed"),
         ("sender_type", "bot"),
     ],
@@ -450,14 +452,14 @@ def test_ambiguous_city_and_truncated_catalog_are_blocked(env):
         s.build_payload(record())
 
 
-def test_jobs_from_any_collected_source_go_to_advertio_without_approval(env):
+def test_new_jobs_source_goes_to_review(env):
     service, client = env
     add_post(channel="new_job_ads_source")
     result = service.deliver_pending()
     assert result["sent"] == 1
     assert client.sent[0]["sourceUrl"] == "https://t.me/new_job_ads_source/101"
     assert client.sent[0]["categorySlug"] == "jobs"
-    assert client.sent[0]["autoPublish"] is True
+    assert client.sent[0]["autoPublish"] is False
 
 
 
@@ -507,14 +509,14 @@ def test_city_must_appear_in_source(env):
         ("۲۰ دلار کانادا ساعتی", 20, "CAD", "hour", 20),
         ("CAD 18-22/hour", 18, "CAD", "hour", 18),
         ("18–22 CAD/hour", 18, "CAD", "hour", 18),
-        ("18–22 CAD/hour", 22, "CAD", "hour", 22),
+        ("18–22 CAD/hour", 22, "CAD", "hour", 18),
         ("CAD 22-18/hour", 18, "CAD", "hour", 18),
         ("No pay specified", None, None, None, None),
         ("Salary negotiable", None, None, None, None),
         ("USD 20/hour", 20, "USD", "hour", None),
         ("$20/hour", 20, "CAD", "hour", 20),
-        ("CAD 20", 20, "CAD", None, 20),
-        ("CAD 20/hour", 200, "CAD", "hour", 200),
+        ("CAD 20", 20, "CAD", None, None),
+        ("CAD 20/hour", 200, "CAD", "hour", None),
         ("CAD 0/hour", 0, "CAD", "hour", None),
         ("CAD 1000001/year", 1000001, "CAD", "year", None),
         ("CAD 20/hour", float("nan"), "CAD", "hour", None),

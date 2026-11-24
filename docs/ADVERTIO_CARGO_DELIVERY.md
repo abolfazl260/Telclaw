@@ -1,6 +1,6 @@
 # Advertio passenger-cargo ingestion (Telclaw)
 
-> **2026-11-24 upstream contract update — implementation pending.** The complete, unmodified [Advertio Crawler Integration Guide](integrations/CRAWLER-INTEGRATION.md) is the authoritative reference for the new contract (live schema wins). This page describes existing Telclaw behavior, not the completed upgrade. See [implementation roadmap](integrations/ADVERTIO_UPGRADE_2026-11-24.md). Keep the current configured API host until backend readiness is confirmed (#201).
+> The November 24 changes and rollout are documented in the [Advertio upgrade](integrations/ADVERTIO_UPGRADE_2026-11-24.md). The [upstream contract](integrations/CRAWLER-INTEGRATION.md) is preserved verbatim.
 
 Status: implemented in Telclaw. This document describes the dedicated API
 destination. It does **not** replace the established Telegram `@advertio_cargo`
@@ -70,7 +70,7 @@ Abandoned `sending` rows are checked at startup and at the start of every
 restart therefore does not require another restart after the claim expires.
 The expiry is at least 30 minutes and at least three request timeouts plus two
 minutes, using the larger of the configured timeout and the cached client's
-timeout (two city catalog reads plus lead creation). Recovery changes only
+timeout for lead creation. Recovery changes only
 expired `sending` rows to `retry` and clears their retry timer; fresh claims and
 terminal outcomes remain untouched. The atomic status/time predicate and normal
 claim prevent concurrent recovery workers from sending the same row together.
@@ -89,7 +89,7 @@ have already been ingested**, or duplicates may be created.
 
 ## Validity and historical backfill
 
-Backfill is automatic, not a separate crawl. All previously AI-processed
+Backfill reads the existing SQLite queue. Previously AI-processed
 `transferlist` rows that have not succeeded or been permanently rejected
 are considered under the following rules:
 
@@ -99,18 +99,10 @@ are considered under the following rules:
   message date is within the configured `BACKFILL_DAYS` window.
 - Past-dated trips are excluded **before** batch selection (including older
   trips captured again during a new crawl); their historical rows remain intact.
-- Records with incomplete cities or countries outside the platform's seven
-  supported country codes are also excluded from batch selection, without
-  deleting or marking the original source record as rejected.
-- The manual/scheduled worker first prioritizes the closest upcoming travel
-  dates, then the newest undated messages, so small batches can make progress.
-- The Back Office's **Ready to send now** count is the exact local queue
-  eligibility count; **Waiting** is a broader historical/date-window count.
-  Final city-catalog and content validity still require an API attempt.
-- Both countries and both cities must be known and present in Advertio's
-  live location catalog. Missing/unsupported locations are not guessed.
-- `description` is the already-extracted, cleaned post text; no Telegram
-  publication formatting is reused.
+- Eligibility uses the atomic local Advertio snapshot. Each direction must resolve to a city in its allowed country. Catalog misses stay out of the queue and appear in the local diagnostics report.
+- Historical rows newly eligible outside the prior country scope require bounded review. The [rollout notes](integrations/ADVERTIO_UPGRADE_2026-11-24.md) document the dry run and approval commands.
+- Manual and scheduled delivery prioritize imminent travel, followed by newer undated messages. Back Office uses the same route and freshness rules.
+- The description comes from the original Telegram post, capped at 2,000 UTF-16 units.
 - Poster Telegram ID is sent only for `sender_type=user`. The sender
   channel's handle is **never** sent as the claimed poster's handle.
 - `mediaKeys` is empty; cargo has no media slot.
@@ -143,7 +135,7 @@ publication:
 3. `TELCLAW_ADVERTIO_INGEST_ENABLED`, the cargo switch and the ingest key
    must all be configured, and the API must be reachable. Network errors,
    invalid keys, rate limiting and schema errors are shown in the cargo queue.
-4. `autoPublish=true` publishes new unique cargo leads immediately; records
+4. Reviewed sources can request automatic publication; records
    flagged Similar still require moderation. Existing PendingReview leads
    remain pending until a separate backend approval flow handles them safely.
 
@@ -179,8 +171,7 @@ is a separate, smaller subset and should not be expected to equal either
   parent ingest switch also enables Housing; check Housing readiness first.
   Restart Telclaw after changing settings marked *restart required*.
 - **Settings → Advertio Cargo**: set the dedicated cargo switch, backfill
-  freshness window, batch size and daily request budget. Auto-publish is enabled
-  by default for new unique cargo leads; disable it for untrusted sources.
+  freshness window, batch size and daily request budget. Automatic publication also requires a reviewed source for new unique cargo leads; disable it for untrusted sources.
 - **Operations → Advertio Cargo — Website API**: separate from
   `@advertio_cargo`, shows AI processed/failed/pending, **ready to send now**,
   broad waiting/retry/rejected counts, sent/already-existed, expired/stale,
@@ -224,18 +215,5 @@ No 400 should be retried automatically. Inspect
 
 - API DNS/TLS plus backend ingest-key configuration must be verified in the
   target environment; source code alone cannot establish readiness.
-- The platform currently catalogs cargo locations in **IR, CA, US, DE,
-  IT, GB and FR**. Other routes cannot be published until its reference
-  catalog is expanded.
-- The existing Telegram publisher intentionally keeps its older required
-  travel-date eligibility. This is not a reason to block undated cargo
-  from the Advertio API.
-- Automatic Telegram deletion-event reconciliation is not yet wired to
-  `DELETE /api/ingest/leads/{sourceName}/{externalId}`. The destination's
-  30-day TTL remains a fallback; future removal handling should use
-  verified Telegram deletion events to avoid accidental data loss.
-
-**Existing production configuration wins:** The `.env` or saved Back Office
-`TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH=false` override remains authoritative;
-changing repository defaults does not overwrite deployment settings. Inspect
-Back Office → Settings → Advertio Cargo and switch it on explicitly if needed.
+- A capped, malformed or regressed catalog response keeps the previous snapshot. The upstream guide specifies a maximum of 200 cities per country request.
+- Confirmed Telegram removals for tracked identities go through the existing scheduled Advertio stage. The [rollout notes](integrations/ADVERTIO_UPGRADE_2026-11-24.md) describe confirmation and older records.

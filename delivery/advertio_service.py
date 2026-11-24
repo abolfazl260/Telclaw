@@ -8,7 +8,9 @@ from pathlib import Path
 
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
+from delivery.advertio_lifecycle import create_listing, housing_media_key
 from delivery import housing_retry
+from delivery.advertio_source_text import explicitly_negotiable, original_text
 from storage.data_normalizer import availability_rent_period, normalize_housing_area, normalize_housing_availability
 from storage.message_repository import MessageRepository
 
@@ -71,6 +73,7 @@ class AdvertioDeliveryService:
                 config.ADVERTIO_BASE_URL,
                 config.ADVERTIO_INGEST_KEY,
                 timeout=config.ADVERTIO_TIMEOUT_SECONDS,
+                category="housing",
             )
         self.client = client
         self.repository = repository or MessageRepository()
@@ -131,12 +134,14 @@ class AdvertioDeliveryService:
         return None
 
     @staticmethod
-    def _contact_handle(data, record):
-        candidates = ([record.get("sender_username")] if record.get("sender_type") == "admin_forward_text"
-                      else [data.get("contact"), record.get("sender_username")])
+    def _contact_handle(record):
+        candidates = ([record.get("sender_username")]
+                      if record.get("sender_type") in {"user", "admin_forward_text"}
+                      or record.get("sender_type") is None else [])
+        channel = str(record.get("channel_username") or "").strip().casefold().lstrip("@")
         for value in candidates:
             text = str(value or "").strip()
-            if re.fullmatch(r"@?[A-Za-z0-9_]{5,64}", text):
+            if re.fullmatch(r"@?[A-Za-z0-9_]{5,32}", text) and text.lstrip("@").casefold() != channel:
                 return text if text.startswith("@") else f"@{text}"
         return None
 
@@ -363,10 +368,14 @@ class AdvertioDeliveryService:
             missing.append("property_type")
         if bedrooms not in self.BEDROOMS:
             missing.append("bedrooms")
-        if price is None or not 100 <= price <= 10000:
-            missing.append("price")
-        if currency != "CAD":
-            missing.append("currency=CAD")
+        negotiable = data.get("price") in (None, "") and explicitly_negotiable(
+            original_text(record), housing=True
+        )
+        if not negotiable:
+            if price is None or not 100 <= price <= 10000:
+                missing.append("price")
+            if currency != "CAD":
+                missing.append("currency=CAD")
         if country_code != "CA":
             missing.append("country_code=CA")
         if not province:
@@ -377,9 +386,9 @@ class AdvertioDeliveryService:
             raise AdvertioMappingError("Required Advertio housing data is missing/invalid: " + ", ".join(missing))
 
         title = self._text(data.get("title"), 200)
-        description = self._text(data.get("description"), 2000)
+        description = self._text(original_text(record) if negotiable else data.get("description"), 2000)
         source_url = self._text(record.get("message_link"), 500)
-        contact_handle = self._contact_handle(data, record)
+        contact_handle = self._contact_handle(record)
         if not source_url and not contact_handle:
             raise AdvertioMappingError("Advertio requires sourceUrl or contactHandle")
         if not title:
@@ -389,8 +398,11 @@ class AdvertioDeliveryService:
             "listing_type": listing_type,
             "property_type": property_type,
             "bedrooms": bedrooms,
-            "price": price,
         }
+        if negotiable:
+            attributes["price_negotiable"] = True
+        else:
+            attributes["price"] = price
         attributes.update(self._optional_attributes(data, listing_type, record))
 
         return {
@@ -407,7 +419,11 @@ class AdvertioDeliveryService:
             "city": city,
             "neighborhood": self._text(data.get("neighborhood"), 100),
             "mediaKeys": [],
-            "autoPublish": bool(config.ADVERTIO_AUTO_PUBLISH),
+            "autoPublish": bool(
+                config.ADVERTIO_AUTO_PUBLISH and not negotiable
+                and str(record.get("channel_username") or "").lower().lstrip("@")
+                in config.ADVERTIO_HOUSING_REVIEWED_CHANNELS
+            ),
         }
 
     def deliver(self, record, data):
@@ -418,14 +434,19 @@ class AdvertioDeliveryService:
                 payload = self.build_payload(record, data)
                 for path in self._media_paths(record)[:10]:
                     housing_retry.check()
-                    key = self.client.upload_media(path, self.source_name)
+                    key = housing_media_key(self.client, path, self.source_name, payload["externalId"])
                     payload["mediaKeys"].append(key)
                 housing_retry.check()
-                return self.client.create_lead(payload)
+                return create_listing(self.client, payload, record, "housing")
             except housing_retry.HousingDeferred:
                 raise
             except AdvertioError as exc:
+                if exc.deferred:
+                    raise housing_retry.HousingDeferred(
+                        str(exc), retryable=True, retry_after=exc.retry_after
+                    ) from exc
                 housing_retry.defer(exc)
+                housing_retry.defer_record(record, exc)
                 raise
 
     def finalize_successful_delivery(self, record, result, *, repository=None, processed_at=None):

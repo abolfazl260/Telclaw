@@ -43,6 +43,8 @@ async def cargo_page(request):
         raise web.HTTPBadRequest(text=str(exc)) from exc
     filters = data["filters"]
     report = data["summary"]
+    catalog = data.get("catalog", {})
+    budget = data.get("request_budget", {})
     state = request.app["operations"].state("advertio_cargo")
     busy = state["status"] in {"queued", "running", "stopping"}
     enabled = bool(config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_CARGO_ENABLED
@@ -160,6 +162,12 @@ async def cargo_page(request):
         <div>Already existed<strong>{report.get('already_existed', 0):,}</strong></div>
         <div>Rejected<strong>{report.get('rejected', 0):,}</strong></div>
       </div>
+      <p class="muted">Catalog {_esc(catalog.get('status', 'missing'))} ·
+        {_esc(catalog.get('country_count', 0))} countries · {_esc(catalog.get('city_count', 0))} cities ·
+        Last sync {_esc(catalog.get('last_success') or '—')} · Next refresh {_esc(catalog.get('next_refresh') or '—')}
+        {_esc(catalog.get('last_error') or '')}</p>
+      <p class="muted">Shared requests remaining {_esc(budget.get('remaining', '—'))} ·
+        Cooldown {_esc((budget.get('cooldown') or {}).get('reason', '—'))}</p>
       <p class="muted">Sent to API means accepted, not necessarily publicly Active; older PendingReview listings still need separate resolution.</p>
     </section>
     <section class="card"><h2>Search and filter active cargo</h2>

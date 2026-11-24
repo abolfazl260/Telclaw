@@ -16,6 +16,11 @@ def isolated_db(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ADVERTIO_CARGO_ENABLED", True)
     monkeypatch.setattr(config, "ADVERTIO_INGEST_KEY", "not-a-real-secret")
     database.initialize_db()
+    from delivery.advertio_cargo_catalog import refresh
+    from delivery.advertio_cargo import AdvertioCargoService
+    from test_advertio_cargo import FakeClient
+    service = AdvertioCargoService(client=FakeClient())
+    refresh(service.client, service.host)
     database.insert_message(
         "safe_channel", 1200, "Source description",
         date.today().isoformat(), message_link="https://t.me/safe_channel/1200",

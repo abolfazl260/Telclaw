@@ -16,9 +16,9 @@ property_type, listing_type, title, description, location, country_code, provinc
 Existing housing normalization rules:
 - title must be concise, natural English. Translate non-English text; never transliterate. No URLs, hashtags, emojis, or explanations.
 - Never guess price, bedrooms, property type, city, or province.
-- Housing is Canada-only: country_code must be CA. If country is not stated, use CA.
+- Housing delivery is Canada-only. Use CA when the country is unstated, and preserve any explicit country code.
 - Infer a Canadian province from a stated city or neighborhood only when the mapping is unambiguous.
-- currency is CAD for valid housing prices.
+- Preserve any explicitly stated currency. For an explicitly negotiable rent with no amount, leave price and currency null and preserve the original wording. Never invent a price.
 - listing_type is rent or roommate.
 - property_type is apartment, condo, basement, studio, room, or house when supported by the source.
 - bedrooms uses 0, 1, 2, 3, or 4+ as a string when supported.

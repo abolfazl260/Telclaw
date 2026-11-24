@@ -4,6 +4,8 @@ import json
 import logging
 import re
 
+from delivery.advertio_source_text import CARGO_CURRENCIES
+
 import requests
 
 import config
@@ -210,14 +212,15 @@ def _normalize_currencies(result):
     category_data = data[category]
     if category == "housinglist":
         currency = category_data.get("currency")
-        if currency is not None and str(currency).strip().upper() != "CAD":
-            category_data["price"] = None
-            category_data["currency"] = None
+        # Preserve explicit foreign rent so the delivery validator can
+        # distinguish it from an unpriced negotiation.
+        if isinstance(currency, str):
+            category_data["currency"] = currency.strip().upper()
     elif category == "transferlist":
         # Do not destroy explicit USD/EUR/GBP cargo prices before they reach
         # the dedicated API adapter; the adapter still checks per-kg and source.
         currency = category_data.get("currency")
-        if currency is not None and str(currency).strip().upper() not in {"CAD", "USD", "EUR", "GBP"}:
+        if currency is not None and str(currency).strip().upper() not in CARGO_CURRENCIES:
             category_data["price"] = None
             category_data["currency"] = None
     # Jobs keeps explicit foreign compensation internally and in the original

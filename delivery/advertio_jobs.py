@@ -9,11 +9,14 @@ import time
 import uuid
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from random import uniform
 
 from delivery.jobs_discovery import discovery_report
 from ai.category_schemas import normalize_job_location
 import config
 from delivery.advertio_client import AdvertioClient, AdvertioError
+from delivery.advertio_lifecycle import create_listing
+from delivery.advertio_source_text import description_limit, job_pay_amount, original_text
 from storage.database import get_connection
 
 log = logging.getLogger("telclaw.advertio.jobs")
@@ -185,11 +188,7 @@ class JobsCatalog:
 
 
 def salary_attributes(record, text, schema):
-    """Trust AI extraction; enforce only the receiving API's numeric constraints.
-
-    CAD is the authorized default. An explicit foreign currency is never relabelled.
-    Salary period is optional in the active backend schema; omit it when unknown.
-    """
+    """Keep unsupported or incomplete quotes in the original source description."""
     currency = str(record.get("salary_currency") or "CAD").strip().upper()
     if currency != "CAD":
         return {}
@@ -206,24 +205,18 @@ def salary_attributes(record, text, schema):
         <= min(1000000, bounds.get("max", 1000000))
     ):
         return {}
-    attributes = {"salary": amount}
     period = record.get("salary_period")
-    if isinstance(period, str) and period in ENUMS["salary_period"]:
-        attributes["salary_period"] = period
-    return attributes
-
-
-def compensation_description(description, record):
-    """Make undisclosed pay visible with the current API; preserve original content.
-
-    Jobs currently has no salary_negotiable attribute. A display-only annotation
-    avoids sending an unsupported key or manufacturing a numeric salary.
-    """
-    if record.get("salary") not in (None, ""):
-        return description
-    if re.search(r"negotiable|توافقی|قابل\s*مذاکره", description, re.I):
-        return description
-    return description + "\n\nحقوق: توافقی (Negotiable)"
+    markers = {
+        "hour": r"\b(?:an hour|per hour|hourly)\b|/\s*(?:h|hr|hour)\b|ساعتی|هر ساعت",
+        "month": r"\b(?:a month|per month|monthly)\b|/\s*(?:mo|month)\b|ماهانه|هر ماه",
+        "year": r"\b(?:a year|per year|yearly|annual(?:ly)?)\b|/\s*(?:yr|year)\b|سالانه|هر سال",
+    }
+    if not isinstance(period, str) or period not in markers:
+        return {}
+    quoted = job_pay_amount(text, amount, markers[period])
+    if quoted is None or not max(1, bounds.get("min", 1)) <= quoted:
+        return {}
+    return {"salary": quoted, "salary_period": period}
 
 
 class AdvertioJobsService:
@@ -249,12 +242,9 @@ class AdvertioJobsService:
             raise JobsMappingError("not_verified_employment_listing")
         if record.get("sender_type") == "bot":
             raise JobsMappingError("bot_sender_not_allowed")
-        description = record.get("cleaned_text")
-        if not isinstance(description, str) or len(description.strip()) < 20:
-            raise JobsMappingError("insufficient_cleaned_description")
-        # Hold rather than truncate facts. UTF-16 limit matches the receiving .NET API.
-        if len(description.encode("utf-16-le")) // 2 > 2000:
-            raise JobsMappingError("description_exceeds_2000_no_truncation")
+        description = original_text(record)
+        if not description:
+            raise JobsMappingError("missing_source_description")
         attrs = {}
         for key in REQUIRED:
             value = record.get(key)
@@ -306,9 +296,6 @@ class AdvertioJobsService:
         if isinstance(arrangement, str) and arrangement in ENUMS["work_arrangement"]:
             attrs["work_arrangement"] = arrangement
         attrs.update(salary_attributes(record, description, schema))
-        description = compensation_description(description, record)
-        if len(description.encode("utf-16-le")) // 2 > 2000:
-            raise JobsMappingError("description_exceeds_2000_with_compensation_label")
         for key, value in attrs.items():
             if key not in schema:
                 raise AdvertioError("jobs_schema_changed")
@@ -379,26 +366,27 @@ class AdvertioJobsService:
             for key, pattern in SCAM_SIGNALS.items()
             if re.search(pattern, description, re.I | re.S)
         )
+        source = record.get("source_name") or source_name(record)
         payload = dict(
-            sourceName=record.get("source_name") or source_name(record),
+            sourceName=source,
             externalId=mid,
             sourceUrl=url if url_ok else None,
             contactHandle=contact,
             title=title,
-            description=description,
+            description=description_limit(description),
             categorySlug="jobs",
             attributesJson=json.dumps(attrs, ensure_ascii=False, separators=(",", ":")),
             countryCode="CA",
             province=city["provinceCode"],
             city=city["code"],
             mediaKeys=[],
-            autoPublish=bool(config.ADVERTIO_JOBS_AUTO_PUBLISH and not flags),
+            autoPublish=bool(config.ADVERTIO_JOBS_AUTO_PUBLISH and source in config.ADVERTIO_JOBS_REVIEWED_SOURCES and not flags),
         )
         if (
             original
             and isinstance(author_id, int)
             and not isinstance(author_id, bool)
-            and author_id > 0
+            and 0 < author_id < 2 ** 63
         ):
             payload["posterTelegramUserId"] = author_id
         return payload, flags
@@ -469,7 +457,7 @@ class AdvertioJobsService:
                 dict(r)
                 for r in conn.execute(
                     """SELECT j.*,m.id AS message_row_id,
-                m.message_id,m.channel_id,m.channel_username,m.message_link,m.cleaned_text,m.raw_text,
+                m.message_id,m.channel_id,m.channel_username,m.message_link,m.cleaned_text,m.raw_text,m.text,
                 m.sender_id,m.sender_username,m.sender_type,m.sender_is_original,m.ai_status,m.ai_category,
                 m.processing_status,m.classification_category,m.classification_status,
                 m.date AS message_date,d.source_name,d.external_id,d.attempts
@@ -546,6 +534,7 @@ class AdvertioJobsService:
         flags=None,
         attempt_id=None,
         http=None,
+        deferred=False,
     ):
         response = response or {}
         stamp = now().isoformat()
@@ -557,7 +546,7 @@ class AdvertioJobsService:
         with closing(get_connection()) as conn:
             conn.execute(
                 """UPDATE advertio_jobs_deliveries SET status=?,lead_id=?,remote_status=?,error_code=?,
-                next_attempt_at=?,updated_at=?,safety_flags=?,worker_token=NULL
+                next_attempt_at=?,updated_at=?,safety_flags=?,worker_token=NULL,attempts=attempts-?
                 WHERE processed_message_id=? AND status='sending' AND worker_token=?""",
                 (
                     status,
@@ -567,6 +556,7 @@ class AdvertioJobsService:
                     next_at,
                     stamp,
                     json.dumps(flags or []),
+                    int(deferred),
                     record["message_row_id"],
                     token,
                 ),
@@ -673,6 +663,7 @@ class AdvertioJobsService:
                     continue
                 result["found"] += 1
                 attempt_id = None
+                payload = None
                 flags = []
                 try:
                     if record["attempts"] >= config.ADVERTIO_JOBS_MAX_ATTEMPTS:
@@ -713,8 +704,8 @@ class AdvertioJobsService:
                             ),
                         )
                         conn.commit()
+                    response = create_listing(self.client, payload, record, "jobs")
                     attempt_id = self._attempt(record)
-                    response = self.client.create_lead(payload)
                     status = (
                         "already_existed" if response.get("already_existed") else "sent"
                     )
@@ -746,6 +737,13 @@ class AdvertioJobsService:
                         print(f"[ADVERTIO JOBS] id={record['message_row_id']} message={record['message_id']} "
                               f"status=blocked reason={exc} api_attempted=false")
                 except AdvertioError as exc:
+                    if exc.deferred:
+                        self._finish(record, token, "retry", error=str(exc), flags=flags,
+                                     delay=exc.retry_after, deferred=True)
+                        result["deferred"] = result.get("deferred", 0) + 1
+                        break
+                    if payload is not None and attempt_id is None:
+                        attempt_id = self._attempt(record)
                     reason = (
                         "http_" + str(exc.status)
                         if exc.status
@@ -757,7 +755,7 @@ class AdvertioJobsService:
                     )
                     retry = exc.retryable or exc.status in (401, 404)
                     delay = max(
-                        60, min(21600, 60 * 2 ** min(record["attempts"] + 1, 8))
+                        60, min(21600, 60 * 2 ** min(record["attempts"] + 1, 8) * uniform(0.9, 1.1))
                     )
                     if exc.retry_after is not None:
                         # Do not cap the provider's Retry-After to a shorter wait.

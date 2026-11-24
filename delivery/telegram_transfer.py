@@ -1,9 +1,21 @@
 """SQLite tracking and Telegram delivery helpers for transfer-list ads."""
 
 from datetime import datetime, timezone
+import json
 import re
 
 from storage.database import get_connection
+
+
+def cargo_type_label(value):
+    if isinstance(value, str) and value.lstrip().startswith("["):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    if isinstance(value, (list, tuple)):
+        return ", ".join(item for item in value if isinstance(item, str) and item.strip())
+    return str(value or "").strip()
 
 
 TABLE_SQL = """
@@ -364,8 +376,9 @@ def format_transfer_ad(record):
     role = _format_transfer_role(record.get("transfer_role"))
     if role:
         lines.append(f"👤 Role: {role}")
-    if record.get("cargo_type"):
-        lines.append(f"📦 Cargo Type: {record['cargo_type']}")
+    cargo = cargo_type_label(record.get("cargo_type"))
+    if cargo:
+        lines.append(f"📦 Cargo Type: {cargo}")
     if record.get("weight") is not None:
         weight = _format_number(record["weight"])
         unit = str(record.get("weight_unit") or "").strip()

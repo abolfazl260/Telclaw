@@ -2,7 +2,16 @@
 
 from pathlib import Path
 
+import pytest
+
+import config
+
 from delivery.advertio_service import AdvertioDeliveryService
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_NAME", str(tmp_path / "housing-retry.sqlite"))
 
 
 class FakeRepository:

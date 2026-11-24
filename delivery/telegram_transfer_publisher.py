@@ -9,6 +9,7 @@ import aiohttp
 
 import config
 from delivery import bot_limits
+from delivery.telegram_transfer import cargo_type_label
 from storage import database
 from storage.data_normalizer import normalize_category_data
 
@@ -208,7 +209,7 @@ class TelegramTransferPublisher:
             cls._location_line("Origin", origin, cls._value(data, "origin_country")),
             cls._location_line("Destination", destination, cls._value(data, "destination_country")),
         ])
-        cargo = cls._value(data, "cargo_type")
+        cargo = cargo_type_label(data.get("cargo_type"))
         if cargo:
             lines.append(f"📦 Cargo Type: {cargo}")
         weight = cls._format_weight(data)

@@ -70,8 +70,6 @@ def _infer_housing_location(data):
 
     if not country:
         country = "CA"
-    elif country != "CA":
-        country = "CA"
 
     city_key = city.lower()
     if city_key in _CANADIAN_CITY_PROVINCE:

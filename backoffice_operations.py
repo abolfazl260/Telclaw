@@ -501,16 +501,22 @@ class BackofficeOperations:
         def probe():
             import requests
             from urllib.parse import urlparse
+            from delivery.advertio_client import AdvertioError
+            from delivery.advertio_transport import request_slot
             base_url = str(config.ADVERTIO_BASE_URL).rstrip("/")
             endpoint = base_url + "/health"
             if urlparse(base_url).scheme != "https":
                 raise ValueError("Advertio API health requires an HTTPS base URL")
             try:
-                response = requests.get(endpoint, timeout=min(10, config.ADVERTIO_TIMEOUT_SECONDS))
+                timeout = min(10, config.ADVERTIO_TIMEOUT_SECONDS)
+                with request_slot("probe", timeout):
+                    response = requests.get(endpoint, timeout=timeout, allow_redirects=False)
+            except AdvertioError as exc:
+                return {"reachable": False, "status": exc.status, "error": str(exc)}
             except requests.RequestException as exc:
                 return {"reachable": False, "status": None,
                         "error": f"{type(exc).__name__}: {exc}"[:500]}
-            return {"reachable": bool(response.ok), "status": response.status_code,
+            return {"reachable": 200 <= response.status_code < 300, "status": response.status_code,
                     "endpoint": endpoint}
 
         async def operation(_stop_event):

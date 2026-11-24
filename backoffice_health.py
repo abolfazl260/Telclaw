@@ -491,7 +491,11 @@ def _cargo_delivery_report(conn, limit=30):
         ("waiting","retry","sending","sent","already_existed","rejected"))
     # Unlike the broad 'waiting' total, this is the same local eligibility
     # filter and retry window used by the actual cargo worker.
+    from delivery import advertio_cargo_catalog as catalog, advertio_transport
     from delivery.advertio_cargo import cargo_queue_eligibility_sql
+    catalog.register_sql(conn, catalog.load(conn))
+    report["catalog"] = catalog.metadata(conn)
+    report["request_budget"] = advertio_transport.metadata(conn)
     report["ready_to_send"] = conn.execute(f"""
         SELECT COUNT(*) FROM messages m
         JOIN transferlist t ON t.processed_message_id=m.id {join}

@@ -6,8 +6,9 @@ cannot be confirmed from SQLite. No crawl, AI or HTTP requests happen here.
 """
 from datetime import datetime, timedelta, timezone
 from storage.database import get_connection
-from delivery.advertio_cargo import COUNTRIES, cargo_queue_eligibility_sql
-from monitoring.transfer_live import active_transferlive_message_ids
+from delivery import advertio_cargo_catalog as catalog, advertio_transport
+from delivery.advertio_cargo import cargo_queue_eligibility_sql
+from monitoring.transfer_live import active_transferlive_cohort
 import config
 
 PAGE_SIZE = 25
@@ -45,7 +46,9 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
                     "filters": {"status": status, "trip": trip, "search": search, "view": view}}
         # Calculate parity directly from the SAME deduplicated /transferlive
         # cohort, not a second approximation of sender/route uniqueness.
-        live_ids = active_transferlive_message_ids()
+        snapshot = catalog.load(conn)
+        catalog.register_sql(conn, snapshot)
+        live_count = active_transferlive_cohort(conn, materialize=view == "telegram")
         has_delivery = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='advertio_cargo_deliveries'"
         ).fetchone() is not None
@@ -55,15 +58,6 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
         next_attempt = "d.next_attempt_at" if has_delivery else "NULL"
         error = "d.error" if has_delivery else "NULL"
         lead = "d.lead_id" if has_delivery else "NULL"
-        if view == "telegram":
-            # SQLite TEMP table is connection-private, not a mutation of
-            # the actual user database. Avoid a massive SQL IN parameter
-            # list, which fails on older SQLite builds above 999 IDs.
-            conn.execute("CREATE TEMP TABLE live_transfer_ids(message_row_id INTEGER PRIMARY KEY)")
-            conn.executemany(
-                "INSERT INTO live_transfer_ids(message_row_id) VALUES(?)",
-                ((value,) for value in live_ids),
-            )
         # Active is a date/freshness rule, NOT an assertion that a
         # Telegram post still exists. Unsupported routes remain visible in
         # the Advertio candidate view, but are not eligible for API sending.
@@ -84,7 +78,7 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
                 "AND m.ai_category='transferlist' AND " + active_sql
             )
             base_values = [cutoff, today]
-        summary = {"total": 0, "ready": 0, "transferlive": len(live_ids),
+        summary = {"total": 0, "ready": 0, "transferlive": live_count,
                    "waiting": 0, "retry": 0,
                    "sent": 0, "already_existed": 0, "rejected": 0, "sending": 0}
         summary_sql = f"""
@@ -147,7 +141,10 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
         page = min(page, pages)
         sql = f"""
             SELECT m.id AS row_id, m.message_id, m.channel_username, m.processing_status,
-                   m.message_link, m.date AS posted_at,
+                   m.message_link, m.date AS posted_at, m.ai_status, m.ai_category,
+                   COALESCE(NULLIF(TRIM(m.raw_text),''), NULLIF(TRIM(m.text),''), m.cleaned_text) AS route_evidence,
+                   ({cargo_queue_eligibility_sql()}) AS current_trip,
+                   ({catalog.UNREVIEWED_HISTORY_SQL}) AS history_review_pending,
                    t.title, t.origin_city, t.origin_country,
                    t.destination_city, t.destination_country,
                    t.departure_date, t.description,
@@ -166,31 +163,34 @@ def active_cargo_report(*, page=1, status="all", trip="all", search="", view="ad
             LIMIT ? OFFSET ?
         """
         rows = [dict(row) for row in conn.execute(
-            sql, values + [PAGE_SIZE, (page - 1) * PAGE_SIZE]
+            sql, [cutoff, today] + values + [PAGE_SIZE, (page - 1) * PAGE_SIZE]
         )]
         for row in rows:
-            country_ok = (
-                str(row.get("origin_country") or "").strip().upper() in COUNTRIES
-                and str(row.get("destination_country") or "").strip().upper() in COUNTRIES
-            )
-            route_ok = bool(
-                str(row.get("origin_city") or "").strip()
-                and str(row.get("destination_city") or "").strip()
-            )
-            if not country_ok:
-                row["blocked_reason"] = "Country outside Advertio catalog"
-            elif not route_ok:
-                row["blocked_reason"] = "Incomplete origin/destination"
-            else:
-                row["blocked_reason"] = None
+            evidence = row.pop("route_evidence")
+            reason = "Catalog unavailable"
+            if snapshot:
+                reason = next(
+                    (error for side in ("origin", "destination")
+                     if (error := snapshot.resolve(
+                         side, row[side + "_country"], row[side + "_city"], evidence
+                     )[1])),
+                    None,
+                )
+                if reason and snapshot.stale:
+                    reason = "Catalog refresh pending"
+            history_review_pending = row.pop("history_review_pending")
+            if not reason and history_review_pending:
+                reason = "Historical route requires review"
+            row["blocked_reason"] = reason
             row["sendable"] = (
-                row["processing_status"] == "processed"
-                and country_ok and route_ok
-                and row["status"] in ("waiting", "retry")
+                bool(row.pop("current_trip")) and row["processing_status"] == "processed"
+                and row["ai_status"] == "processed" and row["ai_category"] == "transferlist"
+                and not reason and row["status"] in ("waiting", "retry")
                 and (not row["next_attempt_at"] or row["next_attempt_at"] <= now.isoformat())
             )
         return {"rows": rows, "total": total, "page": page,
-                "pages": pages, "summary": summary,
+                "pages": pages, "summary": summary, "catalog": catalog.metadata(conn),
+                "request_budget": advertio_transport.metadata(conn),
                 "filters": {"status": status, "trip": trip, "search": search, "view": view}}
     finally:
         conn.close()

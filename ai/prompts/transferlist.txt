@@ -19,7 +19,7 @@ OUTPUT SCHEMA
     "destination_city":null,"destination_province":null,"destination_country":null,
     "airline":null,"flight_number":null,
     "departure_date":null,"departure_time":null,"arrival_date":null,"arrival_time":null,
-    "cargo_type":null,"weight":null,"weight_unit":null,"quantity":null,
+    "cargo_type":[],"weight":null,"weight_unit":null,"quantity":null,
     "volume":null,"volume_unit":null,"price":null,"currency":null,
     "contact":null,"features":null
   }}
@@ -88,3 +88,5 @@ Only these normalizations are allowed: standard city name; clearly identifiable 
 The year may be inferred only when month and day are explicitly present and only from a supplied reference date. Everything else uncertain = null.
 
 Return ONLY the JSON object.
+- cargo_type: return an array of every explicitly mentioned supported type (documents, clothes, electronics, food, other); deduplicate. Use other only for explicit miscellaneous items and [] when unknown.
+- Preserve explicit per-kg price and ISO currency. The Advertio currencies are CAD, USD, EUR, GBP, AED, CNY, TRY, RUB.

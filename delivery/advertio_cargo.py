@@ -6,39 +6,28 @@ import hashlib
 import json
 import logging
 import re
-import time
+from random import uniform
+from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 
 import config
+from delivery import advertio_cargo_catalog as catalog
 from delivery.advertio_client import AdvertioClient, AdvertioError
+from delivery.advertio_lifecycle import create_listing
+from delivery.advertio_source_text import description_limit, explicitly_negotiable, has_cargo_price, original_text
 from storage.database import get_connection
 
 log = logging.getLogger("telclaw.advertio.cargo")
-COUNTRIES = {"IR", "CA", "US", "DE", "IT", "GB", "FR"}
 ITEMS = {"documents", "clothes", "electronics", "food", "other"}
-CURRENCIES = {"CAD", "USD", "EUR", "GBP"}
 
 
 def cargo_queue_eligibility_sql():
-    """SQL for records that may be sent, shared by worker and dashboard.
-
-    Requires aliases m (messages) and t (transferlist). Parameter order:
-    (undated_message_cutoff, earliest_departure_date). The platform's city
-    catalog is authoritative: this preliminary filter never guesses a city.
-    """
-    countries = ",".join("'" + country + "'" for country in sorted(COUNTRIES))
+    """Shared route and date eligibility. Requires the local catalog SQL function."""
     return f"""
-        t.origin_city IS NOT NULL AND TRIM(t.origin_city)<>''
-        AND t.destination_city IS NOT NULL AND TRIM(t.destination_city)<>''
-        AND UPPER(TRIM(COALESCE(t.origin_country,''))) IN ({countries})
-        AND UPPER(TRIM(COALESCE(t.destination_country,''))) IN ({countries})
-        AND (
-            ((t.departure_date IS NULL OR TRIM(t.departure_date)='')
-             AND substr(m.date,1,10)>=?)
-            OR
-            (t.departure_date IS NOT NULL AND TRIM(t.departure_date)<>''
-             AND date(substr(t.departure_date,1,10))>=date(?))
-        )
+        advertio_cargo_route_ok(t.origin_country,t.origin_city,
+            t.destination_country,t.destination_city,{catalog.ROUTE_EVIDENCE_SQL})=1
+        AND {catalog.TRIP_WINDOW_SQL}
+        AND NOT ({catalog.UNREVIEWED_HISTORY_SQL})
     """
 
 
@@ -82,16 +71,14 @@ def _number(value):
 
 
 def _contact(record):
-    # Do not assign channel ownership to a publisher account.
-    explicit = "" if record.get("sender_type") == "admin_forward_text" else str(record.get("contact") or "")
-    match = re.search(r"(?<![A-Za-z0-9_])@([A-Za-z0-9_]{5,32})\b", explicit)
-    if match and match.group(1).casefold() != str(record.get("channel_username") or "").lstrip("@").casefold():
-        return "@" + match.group(1)
-    if record.get("sender_type") in {"user", "admin_forward_text"}:
-        # Text contact from an administrator forward is unverified; never add a poster ID.
-        username = str(record.get("sender_username") or "").lstrip("@")
-        if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username):
-            return "@" + username
+    sender_type = record.get("sender_type")
+    if not (sender_type == "admin_forward_text"
+            or (sender_type == "user" and record.get("sender_is_original") != 0)):
+        return None
+    username = str(record.get("sender_username") or "").lstrip("@")
+    channel = str(record.get("channel_username") or "").lstrip("@").casefold()
+    if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username) and username.casefold() != channel:
+        return "@" + username
     return None
 
 
@@ -119,23 +106,6 @@ def _cargo_types(value):
     return result
 
 
-def _explicit_currency(text, currency):
-    currency = str(currency or "").strip().upper()
-    if currency not in CURRENCIES:
-        return False
-    patterns = {
-        "CAD": r"\bCAD\b|\bC\$|Canadian dollars?|دلار\s*کانادا",
-        "USD": r"\bUSD\b|\bUS\$|US dollars?|دلار\s*(?:آمریکا|امریکا)",
-        "EUR": r"\bEUR\b|€|\beuros?\b|یورو",
-        "GBP": r"\bGBP\b|£|\bpounds?\s*sterling\b|پوند\s*(?:انگلیس|بریتانیا)",
-    }
-    return bool(re.search(patterns[currency], text, re.I))
-
-
-def _per_kg(text):
-    return bool(re.search(r"\bper\s*(?:kg|kilo(?:gram)?)\b|/\s*kg\b|\bkg\s*rate\b|کیلویی|کیلوئی|هر\s*کیلو", text, re.I))
-
-
 class AdvertioCargoService:
     def __init__(self, client=None):
         if client is None:
@@ -143,11 +113,10 @@ class AdvertioCargoService:
                 raise ValueError("TELCLAW_ADVERTIO_INGEST_KEY is required for cargo ingestion")
             client = AdvertioClient(
                 config.ADVERTIO_BASE_URL, config.ADVERTIO_INGEST_KEY,
-                timeout=config.ADVERTIO_TIMEOUT_SECONDS,
+                timeout=config.ADVERTIO_TIMEOUT_SECONDS, category="cargo",
             )
         self.client = client
-        self._cities = {}
-        self._cities_checked_at = {}
+        self.host = getattr(client, "base_url", config.ADVERTIO_BASE_URL)
         self._ensure_tables()
         self._recover_stale_sends()
 
@@ -207,7 +176,7 @@ class AdvertioCargoService:
         finally:
             conn.close()
 
-    def pending(self, limit=50, channel_username=None, before_datetime=None, row_ids=None):
+    def pending(self, limit=50, channel_username=None, before_datetime=None, row_ids=None, *, snapshot=None):
         # Backfill is automatic: all historically processed transferlist rows are
         # eligible unless delivered/rejected, expired, or older than the freshness
         # window without a future travel date.
@@ -215,15 +184,18 @@ class AdvertioCargoService:
         cutoff = (today - timedelta(days=config.ADVERTIO_CARGO_BACKFILL_DAYS)).date().isoformat()
         conn = get_connection()
         try:
+            catalog.register_sql(conn, snapshot or catalog.load(conn, self.host))
             sql = """
                 SELECT m.id AS message_row_id, m.message_id, m.channel_id,
                        m.channel_username, m.message_link, m.sender_id,
-                       m.sender_username, m.sender_type, m.raw_text,
-                       m.cleaned_text, m.date AS message_date,
+                       m.sender_username, m.sender_type, m.sender_is_original, m.raw_text,
+                       m.text, m.cleaned_text, m.date AS message_date,
                        t.title, t.description, t.origin_city, t.origin_country,
                        t.destination_city, t.destination_country, t.departure_date,
                        t.cargo_type, t.weight, t.weight_unit, t.price,
-                       t.currency, t.contact, COALESCE(d.attempts,0) AS attempts
+                       t.currency, t.contact, COALESCE(d.attempts,0) AS attempts,
+                       EXISTS (SELECT 1 FROM advertio_cargo_history_review review
+                               WHERE review.local_id=m.id) AS reviewed_backfill
                   FROM messages m
                   JOIN transferlist t ON t.processed_message_id=m.id
                   LEFT JOIN advertio_cargo_deliveries d ON d.processed_message_id=m.id
@@ -288,12 +260,12 @@ class AdvertioCargoService:
         finally:
             conn.close()
 
-    def _result(self, record, status, *, lead_id=None, error=None, retry_after=None):
+    def _result(self, record, status, *, lead_id=None, error=None, retry_after=None, attempted=True):
         now = datetime.now(timezone.utc)
-        attempts = int(record.get("attempts") or 0) + 1
+        attempts = int(record.get("attempts") or 0) + int(attempted)
         next_time = None
         if status == "retry":
-            delay = retry_after if retry_after else min(21600, 60 * (2 ** min(attempts, 8)))
+            delay = retry_after if retry_after else min(21600, 60 * (2 ** min(attempts, 8)) * uniform(0.9, 1.1))
             next_time = (now + timedelta(seconds=delay)).isoformat()
         conn = get_connection()
         try:
@@ -358,48 +330,36 @@ class AdvertioCargoService:
         finally:
             conn.close()
 
-    def _city(self, country, value):
-        country = str(country or "").strip().upper()
-        if country not in COUNTRIES:
-            raise CargoMappingError("Cargo route country outside Advertio catalog: " + country)
-        if country not in self._cities or time.monotonic() - self._cities_checked_at.get(country, 0) >= 86400:
-            # One refresh per country per day, even with 5-minute crawl cycles.
-            # Only the public API decides canonical names and province codes.
-            entries = self.client.list_cities(country)
-            if not isinstance(entries, list):
-                raise AdvertioError("Unexpected city catalog response", retryable=True)
-            if not entries:
-                raise AdvertioError("Empty Advertio location catalog for " + country, retryable=True)
-            lookup = {}
-            for city in entries:
-                for alias in (city.get("code"), city.get("name"), city.get("nameFa")):
-                    if alias:
-                        lookup[_name(alias)] = city
-            self._cities[country] = lookup
-            self._cities_checked_at[country] = time.monotonic()
-        city = self._cities[country].get(_name(value))
-        if not city:
-            raise CargoMappingError("City is not in Advertio catalog: " + country + "/" + str(value))
-        return city
-
-    def build_payload(self, record):
-        from_country = str(record.get("origin_country") or "").strip().upper()
-        to_country = str(record.get("destination_country") or "").strip().upper()
-        if not record.get("origin_city") or not record.get("destination_city"):
-            raise CargoMappingError("Cargo route requires origin and destination cities")
-        source = self._city(from_country, record["origin_city"])
-        destination = self._city(to_country, record["destination_city"])
+    def build_payload(self, record, *, snapshot=None):
+        if snapshot is None:
+            snapshot = catalog.refresh(self.client, self.host)
+        if snapshot is None:
+            raise AdvertioError("cargo_catalog_unavailable", retryable=True)
+        resolved = []
+        for side in ("origin", "destination"):
+            city, reason, country = snapshot.resolve(
+                side, record.get(side + "_country"), record.get(side + "_city"),
+                original_text(record),
+            )
+            if reason:
+                if snapshot.stale:
+                    raise AdvertioError("cargo_catalog_stale", retryable=True)
+                raise CargoMappingError(f"{side}:{reason}:{country}")
+            resolved.append(city)
+        (from_country, source_code, source_name_en, source_province), (
+            to_country, _, destination_name_en, _
+        ) = resolved
         departure = _date(record.get("departure_date"))
         if departure is not None and departure < datetime.now(timezone.utc).date():
             raise CargoMappingError("Cargo trip date has already passed")
-        description = str(record.get("description") or record.get("cleaned_text") or "").strip()
+        description = original_text(record)
         if not description:
             raise CargoMappingError("Cargo description is empty")
         attributes = {
             "origin_country": from_country,
-            "origin": source["name"],
+            "origin": source_name_en,
             "destination_country": to_country,
-            "destination": destination["name"],
+            "destination": destination_name_en,
         }
         if departure is not None:
             attributes["travel_date"] = departure.isoformat()
@@ -419,39 +379,42 @@ class AdvertioCargoService:
                 weight = None
         if weight is not None and 0.1 <= weight <= 30:
             attributes["weight_kg"] = round(weight, 3)
-        source_text = str(record.get("raw_text") or description)
+        source_text = description
         price = _number(record.get("price"))
         currency = str(record.get("currency") or "").strip().upper()
-        if price is not None and _per_kg(source_text) and _explicit_currency(source_text, currency):
+        if price is not None and has_cargo_price(source_text, price, currency):
             attributes["price"] = price
             attributes["currency"] = currency
-        elif price is None and re.search(r"توافقی|قیمت\s*توافقی|negotiable|price\s+on\s+request", source_text, re.I):
+        elif explicitly_negotiable(source_text):
             attributes["price_negotiable"] = True
         contact = _contact(record)
         url = str(record.get("message_link") or "").strip()[:500] or None
         if not contact and not url:
             raise CargoMappingError("No verified Telegram contact handle or source URL")
-        title = source["name"] + " → " + destination["name"]
+        title = source_name_en + " → " + destination_name_en
         if departure:
             title += " · " + str(departure.day) + " " + departure.strftime("%b")
+        source = source_name(record)
         payload = {
-            "sourceName": source_name(record),
+            "sourceName": source,
             "externalId": str(record["message_id"]),
             "sourceUrl": url,
             "contactHandle": contact,
             "title": title[:200],
-            "description": description[:2000],
+            "description": description_limit(description),
             "categorySlug": "passenger-cargo",
             "attributesJson": json.dumps(attributes, ensure_ascii=False, separators=(",", ":")),
             "countryCode": from_country,
-            "province": source["provinceCode"],
-            "city": source["code"],
+            "province": source_province,
+            "city": source_code,
             "mediaKeys": [],
             # Every newly introduced journey begins under human moderation.
-            "autoPublish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH),
+            "autoPublish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH and source in config.ADVERTIO_CARGO_REVIEWED_SOURCES
+                                and not record.get("reviewed_backfill")),
         }
         author_id = record.get("sender_id")
-        if record.get("sender_type") == "user" and author_id and int(author_id) > 0:
+        if (record.get("sender_type") == "user" and record.get("sender_is_original") in (1, None)
+                and str(author_id or "").isdigit() and 0 < int(author_id) < 2 ** 63):
             payload["posterTelegramUserId"] = int(author_id)
         return payload
 
@@ -467,8 +430,13 @@ class AdvertioCargoService:
             return result
         if limit <= 0:
             return result
+        if should_stop and should_stop():
+            return {**result, "stopped": True}
+        snapshot = catalog.refresh(self.client, self.host)
+        if snapshot is None:
+            return {**result, "catalog_deferred": True}
         records = self.pending(limit=limit, channel_username=channel_username,
-                               before_datetime=before_datetime, row_ids=row_ids)
+                               before_datetime=before_datetime, row_ids=row_ids, snapshot=snapshot)
         result["found"] = len(records)
         for record in records:
             if should_stop and should_stop():
@@ -477,9 +445,9 @@ class AdvertioCargoService:
             if not self._claim(record["message_row_id"]):
                 continue
             try:
-                payload = self.build_payload(record)
+                payload = self.build_payload(record, snapshot=snapshot)
+                response = create_listing(self.client, payload, record, "cargo")
                 self._record_api_attempt(record["message_row_id"])
-                response = self.client.create_lead(payload)
                 status = "already_existed" if response.get("already_existed") else "sent"
                 self._result(record, status, lead_id=response["lead_id"])
                 result[status] += 1
@@ -489,17 +457,24 @@ class AdvertioCargoService:
                 log.warning("Cargo mapping rejected message=%s channel=%s: %s",
                             record["message_id"], record["channel_username"], exc)
             except AdvertioError as exc:
+                if exc.deferred:
+                    self._result(record, "retry", error=str(exc), retry_after=exc.retry_after,
+                                 attempted=False)
+                    result["deferred"] = result.get("deferred", 0) + 1
+                    break
+                self._record_api_attempt(record["message_row_id"])
                 retry = exc.retryable or exc.status in (401, 404)
                 status = "retry" if retry else "rejected"
-                self._result(record, status, error=str(exc),
-                             retry_after=21600 if exc.status in (401, 404, 429) else None)
+                delay = exc.retry_after or (3600 if exc.status in (401, 404)
+                                            else 60 if exc.status == 429 else None)
+                self._result(record, status, error=str(exc), retry_after=delay)
                 result[status] += 1
                 log.warning("Cargo ingest %s message=%s http=%s: %s",
                             status, record["message_id"], exc.status, exc)
                 if retry:
                     # Stop all cargo requests until the destination recovers; a
                     # per-row retry timer alone would hammer other waiting rows.
-                    seconds = 21600 if exc.status in (401, 404, 429) else 600
+                    seconds = delay or 600
                     result["paused_until"] = self._pause(seconds)
                     break
             except Exception as exc:

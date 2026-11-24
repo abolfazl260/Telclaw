@@ -41,12 +41,6 @@ def initialize_jobs_schema(conn):
         );
         CREATE INDEX IF NOT EXISTS idx_jobs_attempt_date ON advertio_jobs_attempts(attempted_at);
         CREATE TABLE IF NOT EXISTS advertio_jobs_meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS advertio_request_log (
-            id INTEGER PRIMARY KEY,
-            category TEXT NOT NULL,
-            attempted_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_advertio_request_day ON advertio_request_log(attempted_at,category);
     """)
     # Freeze the deployment boundary ONCE, including when Jobs is disabled.
     # Old AI rows do not silently turn into a historical publishing campaign.

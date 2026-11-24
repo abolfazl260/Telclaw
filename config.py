@@ -182,6 +182,11 @@ ADVERTIO_BASE_URL = os.getenv("TELCLAW_ADVERTIO_BASE_URL", "https://api.advertio
 ADVERTIO_INGEST_KEY = os.getenv("TELCLAW_ADVERTIO_INGEST_KEY", "").strip()
 ADVERTIO_SOURCE_NAME = os.getenv("TELCLAW_ADVERTIO_SOURCE_NAME", "telegram-rent").strip()
 ADVERTIO_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_AUTO_PUBLISH", "false").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_HOUSING_REVIEWED_CHANNELS = frozenset(
+    channel.strip().lower().lstrip("@")
+    for channel in os.getenv("TELCLAW_ADVERTIO_HOUSING_REVIEWED_CHANNELS", "").split(",")
+    if channel.strip()
+)
 ADVERTIO_CONCURRENCY = max(1, min(3, _int_env("TELCLAW_ADVERTIO_CONCURRENCY", 3, minimum=1)))
 ADVERTIO_TIMEOUT_SECONDS = _float_env("TELCLAW_ADVERTIO_TIMEOUT_SECONDS", 60, minimum=1)
 
@@ -189,6 +194,9 @@ ADVERTIO_TIMEOUT_SECONDS = _float_env("TELCLAW_ADVERTIO_TIMEOUT_SECONDS", 60, mi
 # explicitly disabled; housing, Telegram routing and legacy status are untouched.
 ADVERTIO_CARGO_ENABLED = os.getenv("TELCLAW_ADVERTIO_CARGO_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 ADVERTIO_CARGO_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_CARGO_AUTO_PUBLISH", "true").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_CARGO_REVIEWED_SOURCES = frozenset(
+    source.strip() for source in os.getenv("TELCLAW_ADVERTIO_CARGO_REVIEWED_SOURCES", "").split(",") if source.strip()
+)
 ADVERTIO_CARGO_BACKFILL_DAYS = _int_env("TELCLAW_ADVERTIO_CARGO_BACKFILL_DAYS", 30, minimum=1)
 ADVERTIO_CARGO_BATCH_SIZE = max(1, min(100, _int_env("TELCLAW_ADVERTIO_CARGO_BATCH_SIZE", 50, minimum=1)))
 ADVERTIO_CARGO_DAILY_LIMIT = max(1, min(500, _int_env("TELCLAW_ADVERTIO_CARGO_DAILY_LIMIT", 250, minimum=1)))
@@ -204,6 +212,9 @@ TRANSFER_TELEGRAM_TIMEOUT_SECONDS = _float_env("TELCLAW_TRANSFER_TELEGRAM_TIMEOU
 # Jobs is opt-in; auto-publish is the product default once enabled.
 ADVERTIO_JOBS_ENABLED = os.getenv("TELCLAW_ADVERTIO_JOBS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 ADVERTIO_JOBS_AUTO_PUBLISH = os.getenv("TELCLAW_ADVERTIO_JOBS_AUTO_PUBLISH", "true").lower() in {"1", "true", "yes", "on"}
+ADVERTIO_JOBS_REVIEWED_SOURCES = frozenset(
+    source.strip() for source in os.getenv("TELCLAW_ADVERTIO_JOBS_REVIEWED_SOURCES", "").split(",") if source.strip()
+)
 ADVERTIO_JOBS_BACKFILL_ENABLED = os.getenv("TELCLAW_ADVERTIO_JOBS_BACKFILL_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 ADVERTIO_JOBS_BACKFILL_DAYS = _int_env("TELCLAW_ADVERTIO_JOBS_BACKFILL_DAYS", 7, minimum=1)
 ADVERTIO_JOBS_FRESHNESS_DAYS = _int_env("TELCLAW_ADVERTIO_JOBS_FRESHNESS_DAYS", 7, minimum=1)

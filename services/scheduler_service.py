@@ -206,6 +206,18 @@ class SchedulerService:
                     await self.monitor.report("advertio_jobs", jobs_stats)
                 except Exception:
                     logger.error("Independent Advertio Jobs queue failed")
+            if (config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_INGEST_KEY
+                    and not self.stage_control.is_skip_requested("advertio")):
+                from delivery.advertio_lifecycle import deliver_deletions
+
+                try:
+                    stats = await asyncio.to_thread(
+                        deliver_deletions, should_stop=lambda: self.stage_control.is_skip_requested("advertio")
+                    )
+                    if any(stats.values()):
+                        await self.monitor.report("advertio_deletions", stats)
+                except Exception:
+                    logger.exception("Advertio deletion queue failed")
             self.stage_control.consume_skip("advertio")
 
             return processing_stats, classification_stats, extraction_stats

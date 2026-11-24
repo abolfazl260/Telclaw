@@ -1,6 +1,6 @@
 # Advertio Jobs delivery
 
-> **2026-11-24 upstream contract update — implementation pending.** The complete, unmodified [Advertio Crawler Integration Guide](integrations/CRAWLER-INTEGRATION.md) is the authoritative reference for the new contract (live schema wins). This page describes existing Telclaw behavior, not the completed upgrade. See [implementation roadmap](integrations/ADVERTIO_UPGRADE_2026-11-24.md). Keep the current configured API host until backend readiness is confirmed (#201).
+> The November 24 changes and rollout are documented in the [Advertio upgrade](integrations/ADVERTIO_UPGRADE_2026-11-24.md). The [upstream contract](integrations/CRAWLER-INTEGRATION.md) is preserved verbatim.
 
 Implementation branch: `feat/advertio-jobs-auto-ingest`, based on maintained default
 `main` at `7bfa9358f267944201e2a2799a6f2764009256b4` (includes merged provider fixes and
@@ -20,11 +20,7 @@ Canadian provinces and Toronto city search. The live schema is captured in
 `tests/fixtures/advertio_jobs_schema.json`; tests never fetch production data.
 
 The receiving API needs **no backend changes**. Its active schema is authoritative.
-Older advice to start every category with `autoPublish=false` is superseded **for
-eligible Jobs** by the explicit product decision in this task. Housing and Cargo
-flags are unchanged. The approximate 1,000 shared daily request budget is a local
-initial ceiling, **not a verified production capacity or current edge policy**.
-Confirm that policy with the Advertio operator before rollout.
+The October smoke evidence predates the November rollout. New and changed sources go to review under the current configuration.
 
 ## Architecture and independence
 
@@ -158,62 +154,11 @@ No neighborhood is substituted for a different catalog city.
 
 ## Compensation and description
 
-Salary extraction is AI-led: the prompt asks for the amount (lower end of a range),
-actual payment period where identifiable, and currency. Unspecified currency defaults
-to CAD by explicit product decision; an explicit other currency is preserved without
-conversion. The adapter no longer reparses the source with restrictive salary regexes.
-It trusts extraction while still enforcing finite numeric amounts and the active API
-bounds (currently 1–1,000,000). A salary and the word negotiable may coexist: keep the
-amount. Unknown payment periods are omitted; the active backend permits salary without
-salary_period, and the frontend can display the CAD amount without a period suffix.
-
-When AI extracts no salary, the outgoing description gains the display-only footer
-`حقوق: توافقی (Negotiable)`, unless the original already says negotiable/توافقی/قابل مذاکره.
-The original source text is retained verbatim as the prefix and is never overwritten
-in SQLite. This makes the fallback visible in listing details using today's contract:
-**there is no new structured salary_negotiable attribute or feed-card Negotiable badge**.
-A dedicated badge/filter requires an Advertio change; the current API rejects that key.
-Explicit foreign amounts and amounts outside API bounds remain in the original text
-without a false negotiable label. They are not submitted as CAD numeric attributes.
-
-No AI summary replaces the cleaned description. Established cleaning is unchanged.
-Description must have at least 20 nonblank characters. Both the original and the final
-description with any footer must fit 2,000 UTF-16 code units; an over-limit record is
-blocked, never truncated. Title still respects the 200-character envelope limit.
-
-## Example request
-
-Authentication: `X-Ingest-Key` from server configuration; never paste it into UI/logs.
-
-```json
-{
-  "sourceName": "tg-jobs-0123456789abcdef",
-  "externalId": "512",
-  "sourceUrl": "https://t.me/reviewed_jobs/512",
-  "contactHandle": null,
-  "title": "Hiring · Line cook · Toronto",
-  "description": "Hiring a part-time line cook in Toronto. CAD 20/hour. Apply through the original Telegram post.",
-  "categorySlug": "jobs",
-  "attributesJson": "{\"role\":\"employer\",\"job_category\":\"restaurant_food\",\"job_type\":\"part_time\",\"job_title\":\"Line cook\",\"salary\":20,\"salary_period\":\"hour\"}",
-  "countryCode": "CA",
-  "province": "ON",
-  "city": "toronto",
-  "mediaKeys": [],
-  "autoPublish": true
-}
-```
-
-Poster user ID is optional and emitted only for a proven original human author.
-There is no call to the native `POST /api/leads` endpoint.
+Structured compensation requires a CAD amount and pay period supported by the source. A range uses the lower end, and the full quote stays in the description. The description comes from the source post, with a 2,000 UTF-16 unit cap. Posts without pay have no structured salary.
 
 ## Automatic publishing and safety
 
-Eligible AI-validated Jobs from any collected source request `autoPublish=true` by
-default; no channel/source allowlist is required. The Jobs, parent ingest and API-key
-gates still apply to scheduled and manual batches. Employment evidence,
-mandatory fields, Canadian location, original source URL/contact verification,
-freshness, bot-author exclusion and scam moderation remain mandatory.
-The destination is the Advertio ingest API, not a Telegram publishing channel.
+The Jobs, parent ingest and API-key gates apply to scheduled and manual batches. New sources enter moderation. Automatic publication requires both the Jobs auto-publish flag and its exact source in `TELCLAW_ADVERTIO_JOBS_REVIEWED_SOURCES`. Employment evidence, Canadian location, original source URL or contact, freshness, bot-author exclusion and scam moderation continue to apply.
 
 Conservative source-text rules flag application/recruitment/training/equipment fees,
 suspicious crypto/gift-card/check transfers, banking-password requests and identity
@@ -278,13 +223,7 @@ explicit identity migration; do not delete/recreate their queue rows.
   fixed source identity. A timeout can occur after creation; it never proves absence.
 - Unexpected failures: sanitized retry and 10-minute queue cooldown.
 
-Jobs HTTP request ceiling defaults to 200/day, batch to 25 evaluations. A shared
-AdvertioClient request ledger reserves daily capacity atomically before I/O for
-Housing, Cargo and Jobs; media and catalogs count too. A shared semaphore caps
-process HTTP concurrency at existing ADVERTIO_CONCURRENCY. Requests made outside
-AdvertioClient (for example the Back Office health probe) are not in that ledger.
-Daily boundaries are UTC. Receiver-side limits can still be lower and return 429.
-Jobs can use fewer than 200 ingests because its public catalog requests count.
+Jobs defaults to 200 lead requests per UTC day and 25 evaluations per batch. Reference requests consume the shared allowance. The SQLite limiter covers all journeys and persists reservations, concurrent slots and upstream cooldown across processes.
 
 Back Office → Operations → **Advertio Jobs** shows gates/key presence, AI counts,
 all queue counts, cached eligible vs unassessed records, actual recorded remote
@@ -396,12 +335,7 @@ Telegram delivery. Keep a database backup before any separate code rollback.
   in production by this change**. No ingest key or deployment-server access was
   supplied in this development environment. Unit tests use controlled HTTP fakes.
   Those staged rollout checks remain required before calling the release deployed.
-- Telclaw has no reliable Telegram delete/withdrawal event reconciliation. Therefore
-  this feature performs **no automatic deletion or source deactivation**. A crawl miss,
-  partial scan, AI failure or disconnection never issues DELETE. Full deletion sync
-  is not claimed. A future verified event reconciler must call only the per-post
-  `DELETE /api/ingest/leads/{sourceName}/{externalId}` for the positively confirmed
-  original post; cross-source duplicates may have no mapping and return 404.
+- This release tracks successful source identities for bounded Telegram removal checks and per-post deletion. See [rollout notes](integrations/ADVERTIO_UPGRADE_2026-11-24.md) for confirmation, retry and older rows.
 - No Telegram edit/upsert or later remote moderation-status polling is introduced.
 - Scam rules and supported employment phrases are deliberately conservative. Salary
   semantics are delegated to AI and can be wrong; numerical API validation is not a

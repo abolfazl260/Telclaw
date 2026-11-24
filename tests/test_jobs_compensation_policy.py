@@ -1,4 +1,4 @@
-"""AI-led salary extraction policy and contract-compatible negotiable display."""
+"""AI-led salary extraction policy and preservation of the quoted pay."""
 
 import json
 import pytest
@@ -20,12 +20,12 @@ def test_unspecified_currency_defaults_to_cad(env):
     assert "Negotiable" not in p["description"]
 
 
-def test_pay_without_period_keeps_amount(env):
+def test_pay_without_period_omits_structured_amount(env):
     p, _ = env[0].build_payload(
         record(salary=4000, salary_currency=None, salary_period=None)
     )
     attrs = json.loads(p["attributesJson"])
-    assert attrs["salary"] == 4000 and "salary_period" not in attrs
+    assert not {"salary", "salary_period"} & attrs.keys()
 
 
 @pytest.mark.parametrize(
@@ -35,11 +35,11 @@ def test_pay_without_period_keeps_amount(env):
         "استخدام تمام وقت انباردار در تورنتو. لطفا پیام بدهید.",
     ],
 )
-def test_missing_salary_visible_as_negotiable(env, text):
+def test_missing_salary_preserves_source(env, text):
     p, _ = env[0].build_payload(
         record(cleaned_text=text, salary=None, salary_currency=None, salary_period=None)
     )
-    assert p["description"] == text + "\n\nحقوق: توافقی (Negotiable)"
+    assert p["description"] == text
     attrs = json.loads(p["attributesJson"])
     assert not {"salary", "salary_period", "salary_negotiable"} & attrs.keys()
     assert p["autoPublish"] is True
@@ -92,15 +92,14 @@ def test_prompt_short_policy():
     assert "actual explicit currency only" not in prompt
 
 
-def test_negotiable_footer_does_not_truncate_source(env):
-    from delivery.advertio_jobs import JobsMappingError
+def test_description_is_capped_without_splitting_unicode(env):
+    text = "Hiring full-time warehouse staff in Toronto. " + ("😀" * 1100)
+    payload, _ = env[0].build_payload(record(raw_text=text, salary=None))
+    assert text.startswith(payload["description"])
+    assert 1998 <= len(payload["description"].encode("utf-16-le")) // 2 <= 2000
 
-    text = "Hiring full-time warehouse staff in Toronto. " + ("x" * 1945)
-    with pytest.raises(JobsMappingError, match="with_compensation_label"):
-        env[0].build_payload(record(cleaned_text=text, salary=None))
 
-
-def test_delivery_annotation_never_overwrites_original(env):
+def test_delivery_never_overwrites_original(env):
     from contextlib import closing
     from storage.database import get_connection
     from test_advertio_jobs import add_post
@@ -114,4 +113,4 @@ def test_delivery_annotation_never_overwrites_original(env):
         original = conn.execute(
             "SELECT cleaned_text FROM messages WHERE id=?", (mid,)
         ).fetchone()[0]
-    assert client.sent[0]["description"] == original + "\n\nحقوق: توافقی (Negotiable)"
+    assert client.sent[0]["description"] == original

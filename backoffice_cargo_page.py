@@ -165,7 +165,6 @@ async def cargo_page(request):
         <div>Rejected<strong>{report.get('rejected', 0):,}</strong></div>
         <div>Waiting<strong>{report.get('waiting', 0):,}</strong></div>
         <div>Incomplete route<strong>{report.get('incomplete', 0):,}</strong></div>
-        <div>Needs historical review<strong>{report.get('history_review_required', 0):,}</strong></div>
         <div>Catalog / route blocked<strong>{sum(report.get(key, 0) for key in ('catalog_unavailable','catalog_refresh_pending','unsupported_route','ambiguous_route')):,}</strong></div>
       </div>
       <p class="muted">Catalog {_esc(catalog.get('status', 'missing'))} ·

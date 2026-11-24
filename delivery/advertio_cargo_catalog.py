@@ -17,7 +17,7 @@ from storage.transfer_city_aliases import TRANSFER_CITY_ALIASES, TRANSFER_COUNTR
 CITY_LIMIT = 200
 TTL = timedelta(hours=24)
 RETRY = timedelta(minutes=15)
-# Previous deployment boundary only. New rows always use the live catalog.
+# Historical scope is retained only for moderation/audit, never queue admission.
 PREVIOUS_COUNTRIES = frozenset(("IR", "CA", "US", "DE", "IT", "GB", "FR"))
 ROUTE_EVIDENCE_SQL = "COALESCE(NULLIF(TRIM(m.raw_text),''),NULLIF(TRIM(m.text),''),m.cleaned_text)"
 TRIP_WINDOW_SQL = """(

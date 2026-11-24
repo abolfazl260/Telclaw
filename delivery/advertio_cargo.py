@@ -28,7 +28,6 @@ def cargo_queue_eligibility_sql():
         advertio_cargo_route_ok(t.origin_country,t.origin_city,
             t.destination_country,t.destination_city,{catalog.ROUTE_EVIDENCE_SQL})=1
         AND {catalog.TRIP_WINDOW_SQL}
-        AND NOT ({catalog.UNREVIEWED_HISTORY_SQL})
     """
 
 
@@ -173,8 +172,9 @@ class AdvertioCargoService:
                        t.destination_city, t.destination_country, t.departure_date,
                        t.cargo_type, t.weight, t.weight_unit, t.price,
                        t.currency, t.contact, COALESCE(d.attempts,0) AS attempts,
-                       EXISTS (SELECT 1 FROM advertio_cargo_history_review review
-                               WHERE review.local_id=m.id) AS reviewed_backfill
+                       (advertio_cargo_history_scope(m.id,t.origin_country,t.destination_country)=1
+                        OR EXISTS (SELECT 1 FROM advertio_cargo_history_review review
+                                   WHERE review.local_id=m.id)) AS reviewed_backfill
                   FROM messages m
                   JOIN transferlist t ON t.processed_message_id=m.id
                   LEFT JOIN advertio_cargo_deliveries d ON d.processed_message_id=m.id

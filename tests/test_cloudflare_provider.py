@@ -147,9 +147,10 @@ def test_cloudflare_retries_invalid_category_structure(monkeypatch, category, in
     assert "nested object structure" in calls[1]["messages"][-1]["content"]
     template_message = calls[0]["messages"][-1]["content"]
     template = json.JSONDecoder().raw_decode(template_message[template_message.index("{"):])[0]
-    assert template == {"category": category, "data": {
-        category: dict.fromkeys(CATEGORY_FIELDS[category]),
-    }}
+    expected_fields = dict.fromkeys(CATEGORY_FIELDS[category])
+    if category == "transferlist":
+        expected_fields["cargo_type"] = []
+    assert template == {"category": category, "data": {category: expected_fields}}
 
 
 @pytest.mark.parametrize("invalid_result", [

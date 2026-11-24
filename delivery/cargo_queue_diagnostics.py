@@ -4,12 +4,12 @@ from datetime import date
 from delivery import advertio_cargo_catalog as catalog
 
 BLOCKED_STATES = ("incomplete", "catalog_unavailable", "catalog_refresh_pending",
-                  "unsupported_route", "ambiguous_route", "history_review_required",
+                  "unsupported_route", "ambiguous_route",
                   "expired", "stale", "invalid_date")
 
 
 def diagnose(snapshot, *, status, departure, posted, origin_country, origin_city,
-             destination_country, destination_city, evidence, history, next_attempt,
+             destination_country, destination_city, evidence, next_attempt,
              today, cutoff, now):
     """Return (display status, actionable reason) for a locally processed row."""
     if status not in ("waiting", "retry"):
@@ -44,8 +44,6 @@ def diagnose(snapshot, *, status, departure, posted, origin_country, origin_city
             return "catalog_refresh_pending", "Catalog refresh pending: " + details
         state = "ambiguous_route" if any(reason == "ambiguous_city" for reason, _ in failures) else "unsupported_route"
         return state, details
-    if history:
-        return "history_review_required", "Historical route requires review"
     if next_attempt and next_attempt > now:
         return status, "Retry not due until " + next_attempt
     return status, None
@@ -54,17 +52,16 @@ def diagnose(snapshot, *, status, departure, posted, origin_country, origin_city
 def register(conn, snapshot, *, today, cutoff, now):
     """Register report-only SQL functions over the same snapshot as queue admission."""
     def evaluate(status, departure, posted, origin_country, origin_city,
-                 destination_country, destination_city, evidence, history, next_attempt):
+                 destination_country, destination_city, evidence, next_attempt):
         return diagnose(snapshot, status=status, departure=departure, posted=posted,
                         origin_country=origin_country, origin_city=origin_city,
                         destination_country=destination_country, destination_city=destination_city,
-                        evidence=evidence, history=history, next_attempt=next_attempt,
+                        evidence=evidence, next_attempt=next_attempt,
                         today=today, cutoff=cutoff, now=now)
-    conn.create_function("cargo_display_status", 10, lambda *args: evaluate(*args)[0], deterministic=True)
-    conn.create_function("cargo_block_reason", 10, lambda *args: evaluate(*args)[1], deterministic=True)
+    conn.create_function("cargo_display_status", 9, lambda *args: evaluate(*args)[0], deterministic=True)
+    conn.create_function("cargo_block_reason", 9, lambda *args: evaluate(*args)[1], deterministic=True)
 
 
 def sql_args(state, next_attempt):
     return (f"{state},t.departure_date,m.date,t.origin_country,t.origin_city,"
-            f"t.destination_country,t.destination_city,{catalog.ROUTE_EVIDENCE_SQL},"
-            f"({catalog.UNREVIEWED_HISTORY_SQL}),{next_attempt}")
+            f"t.destination_country,t.destination_city,{catalog.ROUTE_EVIDENCE_SQL},{next_attempt}")

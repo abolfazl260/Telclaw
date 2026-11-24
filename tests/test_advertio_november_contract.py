@@ -243,3 +243,52 @@ def test_cargo_json_types_keep_readable_telegram_display():
 
     assert cargo_type_label('["documents","food"]') == "documents, food"
     assert cargo_type_label("historical cargo") == "historical cargo"
+
+
+def test_housing_reuses_each_uploaded_album_slot_after_deferral(db, tmp_path):
+    from delivery.advertio_lifecycle import housing_media_key
+
+    first = tmp_path / "first.jpg"
+    second = tmp_path / "second.jpg"
+    first.write_bytes(b"equal photo bytes")
+    second.write_bytes(b"equal photo bytes")
+    calls = []
+
+    def upload(path, source):
+        calls.append(path.name)
+        return f"{source}-{path.name}"
+
+    client = SimpleNamespace(upload_media=upload)
+    for _ in range(2):
+        assert [
+            housing_media_key(client, path, "housing-test", "100", position)
+            for position, path in enumerate((first, second))
+        ] == ["housing-test-first.jpg", "housing-test-second.jpg"]
+    assert calls == ["first.jpg", "second.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_removal_requires_explicit_empty_ids_and_live_anchor(monkeypatch):
+    types = pytest.importorskip("telethon.tl.types")
+    from collection import advertio_source_removal as removal
+
+    recorded = []
+    monkeypatch.setattr(removal, "deletion_candidates", lambda _: [71])
+    monkeypatch.setattr(removal, "record_source_check", lambda *args: recorded.append(args))
+    channel = types.InputChannel(99, 1)
+    anchor = SimpleNamespace(id=72, peer_id=types.PeerChannel(99))
+
+    async def partial(_request):
+        return SimpleNamespace(messages=[anchor])
+
+    async def unavailable(_request):
+        raise TimeoutError
+
+    async def complete(_request):
+        return SimpleNamespace(messages=[types.MessageEmpty(id=71), anchor])
+
+    await removal.check_source_removals(partial, channel, anchor.id)
+    await removal.check_source_removals(unavailable, channel, anchor.id)
+    assert not recorded
+    await removal.check_source_removals(complete, channel, anchor.id)
+    assert recorded == [(99, [], [71])]

@@ -63,6 +63,8 @@ def defer_record(record, error):
     if not isinstance(error, AdvertioError) or not error.retryable or error.deferred or error.status == 429:
         return
     with closing(get_connection()) as conn, conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='messages'").fetchone():
+            return
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("""
             SELECT advertio_retry_count FROM messages WHERE channel_username=? AND message_id=?

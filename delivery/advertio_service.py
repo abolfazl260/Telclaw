@@ -432,9 +432,9 @@ class AdvertioDeliveryService:
             housing_retry.check()
             try:
                 payload = self.build_payload(record, data)
-                for path in self._media_paths(record)[:10]:
+                for position, path in enumerate(self._media_paths(record)[:10]):
                     housing_retry.check()
-                    key = housing_media_key(self.client, path, self.source_name, payload["externalId"])
+                    key = housing_media_key(self.client, path, self.source_name, payload["externalId"], position)
                     payload["mediaKeys"].append(key)
                 housing_retry.check()
                 return create_listing(self.client, payload, record, "housing")
@@ -601,5 +601,7 @@ class AdvertioDeliveryService:
     def delete_original_post_listing(self, external_id):
         return self.client.delete_lead(self.source_name, str(external_id))
 
-    def deactivate_source(self):
-        return self.client.deactivate_source(self.source_name)
+    def deactivate_source(self, *, confirm_source):
+        if self.source_name == "telegram-rent":
+            raise AdvertioMappingError("Use individual listing deletion for the shared Housing source")
+        return self.client.deactivate_source(self.source_name, confirm_source=confirm_source)

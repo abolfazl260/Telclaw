@@ -1,6 +1,7 @@
 """HTTP client for the Advertio Ingest API contract (ADR-0009)."""
 
 import math
+import re
 from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -228,7 +229,9 @@ class AdvertioClient:
         self._raise_for_response(response)
         raise AdvertioError("Unexpected Advertio delete HTTP status", retryable=True)
 
-    def deactivate_source(self, source_name):
+    def deactivate_source(self, source_name, *, confirm_source):
+        if confirm_source != source_name or not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,31}", source_name):
+            raise AdvertioError("Confirm the exact Advertio source before deactivation")
         try:
             response = self._request(
                 "delete",

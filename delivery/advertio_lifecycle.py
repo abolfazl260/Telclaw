@@ -225,8 +225,8 @@ def deliver_deletions(client=None, limit=20, should_stop=None):
     return result
 
 
-def housing_media_key(client, path, source, external_id):
-    # Reuse only exact bytes for the same destination, source and post.
+def housing_media_key(client, path, source, external_id, position):
+    # Reuse exact bytes at the same position in this post's album.
     try:
         with Path(path).open("rb") as media:
             content = media.read(8 * 1024 * 1024 + 1)
@@ -234,7 +234,7 @@ def housing_media_key(client, path, source, external_id):
         raise AdvertioError("Advertio housing media is unavailable", retryable=True) from exc
     if len(content) > 8 * 1024 * 1024:
         raise AdvertioError("Advertio media file exceeds the 8 MB limit")
-    digest = sha256(content).hexdigest()
+    digest = f"{position}:{sha256(content).hexdigest()}"
     host = getattr(client, "base_url", config.ADVERTIO_BASE_URL)
     identity = (host, source, external_id, digest)
     freshness = (now() - timedelta(hours=12)).isoformat()

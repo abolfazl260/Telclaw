@@ -311,8 +311,11 @@ def test_backoffice_cargo_report_explains_expired_and_stale(env):
 def test_cargo_requeue_rejected_is_targeted_and_auditable(env, monkeypatch):
     from backoffice_operations import BackofficeOperations
     service, client = env
-    row_id = add_post(903, overrides={"destination_city": "unlisted"})
+    row_id = add_post(903)
+    client.failure = AdvertioError("upstream rejected this payload", status=400)
     assert service.deliver_pending()["rejected"] == 1
+    client.failure = None
+    client.sent.clear()
     monkeypatch.setattr("backoffice_operations.database.record_system_activity", lambda *a, **k: None)
     controller = BackofficeOperations(console_ui=None)
     assert controller.requeue_rejected_cargo(row_id) == row_id

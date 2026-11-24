@@ -11,7 +11,7 @@ import pytest
 
 import config
 from delivery import advertio_cargo_catalog as catalog, advertio_transport as transport
-from delivery.advertio_cargo import AdvertioCargoService, _cargo_types, source_name
+from delivery.advertio_cargo import AdvertioCargoService, _cargo_types
 from delivery.advertio_cargo_review import review_history
 from delivery.advertio_client import AdvertioClient, AdvertioError
 from delivery.advertio_lifecycle import (
@@ -122,14 +122,13 @@ def test_historical_audit_is_bounded_read_only_and_explicit(db, monkeypatch):
     client.extra_cities["AT"] = [city("Vienna", "vienna", "AT", "VIENNA", "وین")]
     service = AdvertioCargoService(client)
     monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
-    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", {source_name({"channel_username": "cargo-one"})})
     assert service.deliver_pending()["found"] == 0
     assert [r["local_id"] for r in review_history(limit=1)["rows"]] == [row]
     assert service.pending() == []
     assert review_history(apply_ids=(row, expired))["applied"] == [row]
     assert review_history(apply_ids=(row,))["applied"] == []
     assert service.deliver_pending()["sent"] == 1
-    assert client.sent[0]["autoPublish"] is False
+    assert client.sent[0]["autoPublish"] is True
 
 
 @pytest.mark.parametrize("text,currency", (

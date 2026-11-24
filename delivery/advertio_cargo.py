@@ -193,9 +193,7 @@ class AdvertioCargoService:
                        t.title, t.description, t.origin_city, t.origin_country,
                        t.destination_city, t.destination_country, t.departure_date,
                        t.cargo_type, t.weight, t.weight_unit, t.price,
-                       t.currency, t.contact, COALESCE(d.attempts,0) AS attempts,
-                       EXISTS (SELECT 1 FROM advertio_cargo_history_review review
-                               WHERE review.local_id=m.id) AS reviewed_backfill
+                       t.currency, t.contact, COALESCE(d.attempts,0) AS attempts
                   FROM messages m
                   JOIN transferlist t ON t.processed_message_id=m.id
                   LEFT JOIN advertio_cargo_deliveries d ON d.processed_message_id=m.id
@@ -408,9 +406,7 @@ class AdvertioCargoService:
             "province": source_province,
             "city": source_code,
             "mediaKeys": [],
-            # Every newly introduced journey begins under human moderation.
-            "autoPublish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH and source in config.ADVERTIO_CARGO_REVIEWED_SOURCES
-                                and not record.get("reviewed_backfill")),
+            "autoPublish": bool(config.ADVERTIO_CARGO_AUTO_PUBLISH),
         }
         author_id = record.get("sender_id")
         if (record.get("sender_type") == "user" and record.get("sender_is_original") in (1, None)

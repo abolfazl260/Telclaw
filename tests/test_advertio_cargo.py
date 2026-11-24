@@ -334,7 +334,6 @@ def test_cargo_requeue_rejected_is_targeted_and_auditable(env, monkeypatch):
 def test_new_unique_cargo_is_submitted_for_auto_publish(env, monkeypatch):
     service, client = env
     monkeypatch.setattr(config, "ADVERTIO_CARGO_AUTO_PUBLISH", True)
-    monkeypatch.setattr(config, "ADVERTIO_CARGO_REVIEWED_SOURCES", {source_name({"channel_username": "cargo-one"})})
     add_post(8808)
     stats = service.deliver_pending(limit=1)
     assert stats["sent"] == 1

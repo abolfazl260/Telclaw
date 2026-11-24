@@ -135,7 +135,7 @@ publication:
 3. `TELCLAW_ADVERTIO_INGEST_ENABLED`, the cargo switch and the ingest key
    must all be configured, and the API must be reachable. Network errors,
    invalid keys, rate limiting and schema errors are shown in the cargo queue.
-4. Reviewed sources can request automatic publication; records
+4. The cargo auto-publish switch requests automatic publication; records
    flagged Similar still require moderation. Existing PendingReview leads
    remain pending until a separate backend approval flow handles them safely.
 
@@ -171,7 +171,7 @@ is a separate, smaller subset and should not be expected to equal either
   parent ingest switch also enables Housing; check Housing readiness first.
   Restart Telclaw after changing settings marked *restart required*.
 - **Settings → Advertio Cargo**: set the dedicated cargo switch, backfill
-  freshness window, batch size and daily request budget. Automatic publication also requires a reviewed source for new unique cargo leads; disable it for untrusted sources.
+  freshness window, batch size and daily request budget. The cargo auto-publish switch controls publication for all eligible cargo sources.
 - **Operations → Advertio Cargo — Website API**: separate from
   `@advertio_cargo`, shows AI processed/failed/pending, **ready to send now**,
   broad waiting/retry/rejected counts, sent/already-existed, expired/stale,

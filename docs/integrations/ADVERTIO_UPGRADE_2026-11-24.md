@@ -5,9 +5,9 @@ The [upstream Crawler Integration Guide](CRAWLER-INTEGRATION.md) is preserved ve
 ## Rollout and rollback
 
 1. Back up SQLite through the normal backup procedure, then install and restart Telclaw on the configured API host. The migration adds tables and nullable or defaulted fields. Previously sent records retain their delivery states and source IDs.
-2. Leave the reviewed-source lists empty for the first controlled batches. For approved sources, use the journey auto-publish switch with the exact source names in `TELCLAW_ADVERTIO_CARGO_REVIEWED_SOURCES` or `TELCLAW_ADVERTIO_JOBS_REVIEWED_SOURCES`. Housing uses channel usernames in `TELCLAW_ADVERTIO_HOUSING_REVIEWED_CHANNELS`. The lists are comma-separated and loaded at restart.
+2. Cargo uses the existing auto-publish switch for all eligible sources. Housing and Jobs retain separate reviewed-source lists.
 3. Run a small delivery batch to warm the host-specific cargo snapshot. Active Cargo and Operations show coverage, timestamps, refresh failures and the shared budget from SQLite. The catalog refreshes after 24 hours. Malformed, capped and regressed results retain the previous snapshot and retry after at least 15 minutes. A missing snapshot defers cargo. A stale snapshot can send resolved routes while unresolved routes wait for refresh.
-4. With a fresh snapshot, run a bounded historical dry run. Use `--after` to page with the cursor. Apply only reviewed local row IDs. Recovered rows enter moderation when sent.
+4. With a fresh snapshot, run a bounded historical dry run. Use `--after` to page with the cursor. Apply only reviewed local row IDs. Recovered rows follow the cargo auto-publish switch.
 
    ~~~sh
    python -m scripts.advertio_review cargo-history --limit 25

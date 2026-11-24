@@ -1,5 +1,7 @@
 # Advertio Ingest API — قرارداد سرویس مقصد برای Telclaw
 
+> **Historical reference — superseded as API contract.** See the complete [Advertio upstream guide dated 2026-11-24](CRAWLER-INTEGRATION.md) and [Telclaw upgrade roadmap](ADVERTIO_UPGRADE_2026-11-24.md). This historical document is retained in full; conflicting API details must not be treated as current.
+
 **مخاطب:** توسعه‌دهنده‌ای که در انتهای pipeline خروجی Telclaw را به Advertio ارسال می‌کند.
 
 **وضعیت سمت سرور:** ساخته و تست‌شده؛ این سند قرارداد integration است، نه پیشنهاد طراحی.

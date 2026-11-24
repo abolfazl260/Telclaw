@@ -1,5 +1,7 @@
 # Advertio Jobs delivery
 
+> **2026-11-24 upstream contract update — implementation pending.** The complete, unmodified [Advertio Crawler Integration Guide](integrations/CRAWLER-INTEGRATION.md) is the authoritative reference for the new contract (live schema wins). This page describes existing Telclaw behavior, not the completed upgrade. See [implementation roadmap](integrations/ADVERTIO_UPGRADE_2026-11-24.md). Keep the current configured API host until backend readiness is confirmed (#201).
+
 Implementation branch: `feat/advertio-jobs-auto-ingest`, based on maintained default
 `main` at `7bfa9358f267944201e2a2799a6f2764009256b4` (includes merged provider fixes and
 startup performance fixes). `Stage` was inspected; its four divergent commits are

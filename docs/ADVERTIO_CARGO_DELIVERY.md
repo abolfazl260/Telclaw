@@ -1,5 +1,7 @@
 # Advertio passenger-cargo ingestion (Telclaw)
 
+> **2026-11-24 upstream contract update — implementation pending.** The complete, unmodified [Advertio Crawler Integration Guide](integrations/CRAWLER-INTEGRATION.md) is the authoritative reference for the new contract (live schema wins). This page describes existing Telclaw behavior, not the completed upgrade. See [implementation roadmap](integrations/ADVERTIO_UPGRADE_2026-11-24.md). Keep the current configured API host until backend readiness is confirmed (#201).
+
 Status: implemented in Telclaw. This document describes the dedicated API
 destination. It does **not** replace the established Telegram `@advertio_cargo`
 publisher or the housing ingestion adapter.

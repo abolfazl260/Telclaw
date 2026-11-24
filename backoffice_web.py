@@ -1874,7 +1874,7 @@ async def operations_page(request):
         <p class="muted">Separate from Telegram @advertio_cargo. Category: passenger-cargo. The last 30 processed cargo records are listed below.</p>
         <p>Website API: <strong>{'enabled' if cargo_enabled else 'disabled'}</strong> · API key: <strong>{'configured' if cargo_key_ready else 'missing'}</strong> ·
         Auto-publish for new ads: <strong>{'enabled' if cargo_report.get('auto_publish') else 'disabled'}</strong></p>
-        <p class="muted">When enabled, every valid cargo submission requests auto-publish, including historical backfill. Advertio may still require moderation (e.g. possible duplicates). Existing PendingReview listings are not activated by resending.</p>
+        <p class="muted">When enabled, every valid cargo submission requests auto-publish, including historical backfill. Advertio may still require moderation (e.g. possible duplicates). Auto-publish does not activate existing PendingReview listings, even if they are resubmitted.</p>
         <p>AI processed: <strong>{int(cargo_report.get('processed') or 0):,}</strong> ·
         AI failed: <strong>{int(cargo_report.get('ai_failed') or 0):,}</strong> ·
         Pending AI: <strong>{int(cargo_report.get('ai_pending') or 0):,}</strong></p>

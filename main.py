@@ -28,6 +28,8 @@ async def _transfer_publisher_loop(publisher):
 
 
 async def _run():
+    from services.retention import configure_logging, run_maintenance
+    configure_logging(config.ERROR_LOG_FILE)
     # Prepare schema, default aliases and legacy content fingerprints once.
     # The crawler's per-channel initialize() calls are now no-ops for this DB.
     from storage.message_repository import MessageRepository
@@ -119,9 +121,15 @@ async def _run():
         message_manager_task = asyncio.create_task(message_manager.worker.run(), name="message-manager")
         logger.info("Message Manager independent worker started")
 
+    maintenance_task = asyncio.create_task(run_maintenance(), name="retention-maintenance")
     try:
         await system_ui.run()
     finally:
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
         crawler_service = getattr(system_ui, "crawler", None)
         crawl_job = getattr(getattr(crawler_service, "scheduler", None), "crawl_job", None)
         if crawl_job and hasattr(crawl_job, "stop_mirror"):

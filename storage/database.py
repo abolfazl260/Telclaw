@@ -34,7 +34,7 @@ def initialize_journal_mode():
     """Run once on startup before opening concurrent service connections."""
     conn = _open_connection()
     try:
-        return sqlite_policy.initialize_mode(conn, requested=config.SQLITE_WAL_ENABLED)
+        return sqlite_policy.initialize_mode(conn, db_path=config.DB_NAME)
     finally:
         conn.close()
 

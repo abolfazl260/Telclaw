@@ -32,12 +32,15 @@ async def _run():
     configure_logging(config.ERROR_LOG_FILE)
     # Change persistent journal mode before schema migration and worker startup.
     mode = database.initialize_journal_mode()
-    from storage.sqlite_policy import wal_supported
+    from storage.sqlite_policy import eligibility
     import sqlite3
+    filesystem, reason = eligibility(config.DB_NAME)
+    if mode != "wal" and reason == "eligible":
+        reason = "wal_activation_failed"
     print(f"[SQLITE] version={sqlite3.sqlite_version} journal_mode={mode} "
-          f"wal_requested={config.SQLITE_WAL_ENABLED} wal_version_supported={wal_supported()}")
-    if config.SQLITE_WAL_ENABLED and not wal_supported():
-        print("[SQLITE] WAL not enabled: runtime lacks the required upstream corruption fix.")
+          f"filesystem={filesystem} wal_status={reason}")
+    if mode != "wal":
+        print(f"[SQLITE WARNING] WAL not enabled; using {mode}: {reason}")
     # Prepare schema, default aliases and legacy content fingerprints once.
     # The crawler's per-channel initialize() calls are now no-ops for this DB.
     from storage.message_repository import MessageRepository

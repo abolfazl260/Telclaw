@@ -67,6 +67,8 @@ class CrawlJobService:
         to_date,
         crawl_mode=CRAWL_MODE_ALL,
         should_stop=None,
+        incremental=False,
+        checkpoint_floor=None,
     ):
         print(f"\n{'=' * 60}")
         print(f"📥 COLLECTION: {channel_username}")
@@ -74,6 +76,14 @@ class CrawlJobService:
 
         capture = self._begin_mirror(channel_username, from_date, to_date, crawl_mode, should_stop)
         options = {"mirror_capture": capture} if capture is not None else {}
+        if incremental:
+            # A failed mirror setup must never cause history to be skipped.
+            try:
+                safe = capture is not None or not self.mirror or not self.mirror.has_active_rules()
+            except Exception:
+                safe = False
+            if safe:
+                options.update(incremental=True, checkpoint_floor=checkpoint_floor)
         try:
             async with session_guard(client):
                 result = await self.collection.crawl_channel(

@@ -244,6 +244,16 @@ def _channel_report(conn):
             "configured_category": meta.get("configured_category") or "",
             "crawl_state": "not crawled",
         })
+    if _table_exists(conn, "crawl_checkpoints"):
+        checkpoints = {}
+        for item in conn.execute("""SELECT channel_username, last_message_id, last_success_at,
+            last_new_count, last_scan_mode, crawl_mode FROM crawl_checkpoints
+            ORDER BY last_success_at DESC"""):
+            checkpoints.setdefault(item[0], dict(item))
+        for row in rows:
+            key = str(row.get("channel_username") or "").strip().lstrip("@").casefold()
+            if key in checkpoints:
+                row["checkpoint"] = checkpoints[key]
     return rows
 
 

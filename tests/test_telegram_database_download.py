@@ -88,6 +88,7 @@ async def test_large_database_is_sent_in_ordered_40_mib_parts_with_wal_data(tmp_
     restored.write_bytes(b"".join(item[2] for item in documents))
     with sqlite3.connect(restored) as conn:
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
         assert conn.execute("SELECT value FROM records").fetchone()[0] == payload
     assert len(notices) == 1
     assert "Join the .part files in numeric order" in notices[0]

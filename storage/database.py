@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import config
+from storage import sqlite_policy
 
 MESSAGE_COLUMNS = {"raw_text":"TEXT","cleaned_text":"TEXT","processing_status":"TEXT NOT NULL DEFAULT 'pending'","processing_started_at":"TEXT","collection_status":"TEXT NOT NULL DEFAULT 'collected'","ai_status":"TEXT NOT NULL DEFAULT 'waiting'","ai_started_at":"TEXT","pipeline_version":"TEXT","cleaned_at":"TEXT","ai_category":"TEXT","ai_processed_at":"TEXT","ai_error":"TEXT","channel_id":"INTEGER","channel_name":"TEXT","sender_id":"INTEGER","sender_username":"TEXT","sender_type":"TEXT","has_media":"INTEGER NOT NULL DEFAULT 0","media_type":"TEXT","file_unique_id":"TEXT","media_group_id":"TEXT","media_path":"TEXT","media_paths":"TEXT","message_link":"TEXT","media_reference":"TEXT","advertio_status":"TEXT NOT NULL DEFAULT 'waiting'","advertio_lead_id":"TEXT","advertio_error":"TEXT","advertio_processed_at":"TEXT","classification_status":"TEXT NOT NULL DEFAULT 'waiting'","classification_started_at":"TEXT","classification_category":"TEXT","classification_error":"TEXT","classification_processed_at":"TEXT","classification_attempts":"INTEGER NOT NULL DEFAULT 0"}
 CATEGORY_TABLES = {"housinglist":{"property_type":"TEXT","listing_type":"TEXT","title":"TEXT","description":"TEXT","location":"TEXT","country_code":"TEXT","province":"TEXT","city":"TEXT","neighborhood":"TEXT","price":"REAL","currency":"TEXT","rent_period":"TEXT","bedrooms":"TEXT","bathrooms":"INTEGER","area":"REAL","area_unit":"TEXT","furnished":"TEXT","availability":"TEXT","property_condition":"TEXT","contact":"TEXT","features":"TEXT"},"transferlist":{"title":"TEXT","description":"TEXT","origin_city":"TEXT","origin_province":"TEXT","origin_country":"TEXT","destination_city":"TEXT","destination_province":"TEXT","destination_country":"TEXT","airline":"TEXT","flight_number":"TEXT","departure_date":"TEXT","departure_time":"TEXT","arrival_date":"TEXT","arrival_time":"TEXT","transport_type":"TEXT","cargo_type":"TEXT","weight":"REAL","weight_unit":"TEXT","quantity":"REAL","volume":"REAL","volume_unit":"TEXT","price":"REAL","currency":"TEXT","contact":"TEXT","features":"TEXT"},"joblist":{"job_title":"TEXT","company":"TEXT","location":"TEXT","employment_type":"TEXT","salary":"REAL","salary_currency":"TEXT","salary_period":"TEXT","experience":"TEXT","education":"TEXT","skills":"TEXT","remote":"INTEGER","job_type":"TEXT","description":"TEXT","application_method":"TEXT","contact":"TEXT"}}
@@ -20,10 +21,32 @@ MESSAGE_COLUMNS.update({
     "advertio_retry_count": "INTEGER NOT NULL DEFAULT 0",
 })
 
+def _open_connection():
+    db_path = Path(config.DB_NAME)
+    if db_path.parent != Path("."):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path), timeout=sqlite_policy.BUSY_TIMEOUT_MS / 1000)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def initialize_journal_mode():
+    """Run once on startup before opening concurrent service connections."""
+    conn = _open_connection()
+    try:
+        return sqlite_policy.initialize_mode(conn, db_path=config.DB_NAME)
+    finally:
+        conn.close()
+
+
 def get_connection():
-    db_path=Path(config.DB_NAME)
-    if db_path.parent!=Path("."): db_path.parent.mkdir(parents=True,exist_ok=True)
-    conn=sqlite3.connect(str(db_path)); conn.row_factory=sqlite3.Row; conn.execute("PRAGMA foreign_keys = ON"); return conn
+    conn = _open_connection()
+    try:
+        sqlite_policy.configure_connection(conn)
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 def _migrate_messages_table(cursor):
     cursor.execute("PRAGMA table_info(messages)"); existing={row[1] for row in cursor.fetchall()}

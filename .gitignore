@@ -39,3 +39,6 @@ Thumbs.db
 
 # Private Message Manager uploads
 private/message-manager/
+
+# Retention-managed log rotations and level-specific log files
+*.log.*

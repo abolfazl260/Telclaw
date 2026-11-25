@@ -6,13 +6,9 @@ import config
 from telethon.errors import FloodWaitError
 
 # تنظیمات پایه برای کتابخانه logging پایتون جهت ذخیره خطاهای ماژول‌ها در فایل مجزا
-logging.basicConfig(
-    filename=config.ERROR_LOG_FILE,
-    filemode='a',
-    format='%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
-    level=logging.ERROR,
-    encoding='utf-8'
-)
+from services.retention import configure_logging
+
+configure_logging(config.ERROR_LOG_FILE)
 
 def log_exception(e, custom_message="An error occurred"):
     """ثبت خطا در فایل log بدون نمایش در ترمینال اصلی"""

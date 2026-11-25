@@ -330,7 +330,8 @@ async def crawl_channel(
             msg_date = message.date.date()
             if msg_date > to_date:
                 continue
-            if msg_date < effective_from:
+            if msg_date < effective_from and not (
+                    use_checkpoint and previous and message.id > previous_id and msg_date >= floor):
                 print(f"\n🏁 Reached start date {effective_from}. Stopping channel.")
                 break
 
@@ -452,6 +453,13 @@ async def crawl_channel(
                         store_content_hash(duplicate_conn, row["id"], raw_text)
                     print("   💾 [RAW-SAVED] SQLite")
                 else:
+                    # INSERT OR IGNORE can suppress constraints other than
+                    # uniqueness; do not checkpoint a missing source record.
+                    if use_checkpoint and not duplicate_conn.execute(
+                        "SELECT 1 FROM messages WHERE channel_username=? AND message_id=? AND channel_id=?",
+                        (channel_username, message.id, peer_id),
+                    ).fetchone():
+                        raise RuntimeError("Source message was not persisted")
                     skipped_count += 1
                     print("   ⏭ [DUPLICATE] already stored")
             except Exception as exc:

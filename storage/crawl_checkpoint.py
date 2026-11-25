@@ -47,7 +47,7 @@ def plan(conn, channel, peer_id, mode, floor, end, now=None):
     catchup = max(floor, min(recent, last.date() - timedelta(days=1)))
     if now - reconciled >= RECONCILE_INTERVAL:
         return previous, 0, catchup, "reconcile"
-    return previous, previous["last_message_id"], catchup, "incremental"
+    return previous, previous["last_message_id"], floor, "incremental"
 
 
 def save(conn, channel, peer_id, mode, floor, previous, newest, scanned, new_count,

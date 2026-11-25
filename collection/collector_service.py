@@ -15,8 +15,12 @@ class CollectionService:
         crawl_mode=CRAWL_MODE_ALL,
         should_stop=None,
         mirror_capture=None,
+        incremental=False,
+        checkpoint_floor=None,
     ):
         options = {"mirror_capture": mirror_capture} if mirror_capture is not None else {}
+        if incremental:
+            options.update(incremental=True, checkpoint_floor=checkpoint_floor)
         return await crawl_channel(
             client,
             channel_username,

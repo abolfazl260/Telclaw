@@ -17,7 +17,7 @@ class FakeCrawlJob:
 
     async def run_channel(
         self, client, channel_username, from_date, to_date, *,
-        crawl_mode, should_stop,
+        crawl_mode, should_stop, incremental=False, checkpoint_floor=None,
     ):
         self.visits.append(channel_username)
         return {"saved": 1, "stopped": channel_username == self.stop_on}

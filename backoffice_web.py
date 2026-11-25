@@ -1238,7 +1238,10 @@ async def health_page(request):
         <td>{_escape(row.get('first_message') or '—')}</td>
         <td>{_escape(row.get('last_message') or '—')}</td>
         <td>{int(row.get('failed') or 0):,}</td>
-        <td>{_health_badge(row.get('crawl_state') or 'unknown')}</td></tr>"""
+        <td>{_health_badge(row.get('crawl_state') or 'unknown')}</td>
+        <td>{_escape(str((row.get('checkpoint') or {}).get('last_message_id', '—')))}</td>
+        <td>{_escape(str((row.get('checkpoint') or {}).get('last_new_count', '—')))}</td>
+        <td>{_escape((row.get('checkpoint') or {}).get('last_scan_mode', '—'))}</td></tr>"""
         for row in report["channels"]
     )
     activity_rows = "".join(
@@ -1321,8 +1324,8 @@ async def health_page(request):
 
     <section><h2>Crawled channels</h2><p class="muted">Configured sources are included even when no message has been stored yet.</p>
     <div class="scroll"><table><thead><tr><th>Channel</th><th>Name</th><th>Source group</th><th>Configured</th>
-    <th>Messages</th><th>First</th><th>Last</th><th>Failed</th><th>State</th></tr></thead>
-    <tbody>{channel_rows or '<tr><td colspan="9">No configured or crawled channels.</td></tr>'}</tbody></table></div></section>
+    <th>Messages</th><th>First</th><th>Last</th><th>Failed</th><th>State</th><th>Checkpoint ID</th><th>New IDs</th><th>Scan mode</th></tr></thead>
+    <tbody>{channel_rows or '<tr><td colspan="12">No configured or crawled channels.</td></tr>'}</tbody></table></div></section>
 
     <section><h2>Robot &amp; system activity</h2><p class="muted">Crawler, processing, AI and error reports are persisted here from now on.</p>
     <div class="scroll"><table><thead><tr><th>Time (UTC)</th><th>Kind</th><th>Level</th><th>Source</th><th>Message</th><th>Details</th></tr></thead>

@@ -293,6 +293,8 @@ class SchedulerService:
                         cycle_to_date,
                         crawl_mode=crawl_mode,
                         should_stop=lambda: self.stage_control.is_skip_requested("crawl"),
+                        incremental=True,
+                        checkpoint_floor=from_date,
                     )
 
                     crawl_stats = self._normalize_crawl_stats(crawl_result)

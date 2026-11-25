@@ -7,6 +7,7 @@ Cleaning, classification and property extraction belong to processing.
 import asyncio
 import logging
 import random
+from datetime import date
 
 import config
 
@@ -19,6 +20,7 @@ from services.telegram_message_links import build_telegram_message_link
 from services.message_service import MessageService
 from storage.content_duplicate import find_duplicate, store_content_hash
 from storage.database import get_connection
+from storage import crawl_checkpoint
 
 init(autoreset=True)
 logger = logging.getLogger('telclaw.crawler')
@@ -94,7 +96,7 @@ async def _get_input_entity_with_reconnect(client, channel_username):
             await _retry_telegram_connection(client, channel_username, retries, exc)
 
 
-async def _iter_messages_with_reconnect(client, entity, channel_username):
+async def _iter_messages_with_reconnect(client, entity, channel_username, *, min_id=0):
     """Resume descending message history after a bounded reconnect attempt.
 
     Telethon's offset_id is exclusive, so restarting below the last yielded ID
@@ -107,6 +109,8 @@ async def _iter_messages_with_reconnect(client, entity, channel_username):
             if not _client_is_connected(client):
                 raise ConnectionError("Telegram client is disconnected")
             kwargs = {"offset_id": last_message_id} if last_message_id is not None else {}
+            if min_id:
+                kwargs["min_id"] = min_id
             async for message in client.iter_messages(entity, **kwargs):
                 if message is not None:
                     last_message_id = message.id
@@ -249,6 +253,8 @@ async def crawl_channel(
     crawl_mode=CRAWL_MODE_ALL,
     should_stop=None,
     mirror_capture=None,
+    incremental=False,
+    checkpoint_floor=None,
 ):
     """Collect messages whose dates fall inclusively inside ``from_date..to_date``."""
     channel_username = normalize_channel_username(channel_username)
@@ -282,6 +288,7 @@ async def crawl_channel(
     weak_text_count = 0
     media_metadata_count = 0
     stopped = False
+    storage_failed = 0
     duplicate_conn = None
     try:
         repository.initialize()
@@ -292,7 +299,24 @@ async def crawl_channel(
         await asyncio.sleep(random.randint(30, 60))
 
         anchor = None
-        async for message in _iter_messages_with_reconnect(client, entity, channel_username):
+        newest = 0
+        scanned = new_count = edited = 0
+        peer_id = getattr(entity, "channel_id", None) or getattr(entity, "id", None)
+        floor = checkpoint_floor or from_date
+        # Mirror rules have their own activation/history semantics; keep their
+        # source scans unchanged until a shared durable cursor is available.
+        use_checkpoint = (incremental and peer_id and to_date == date.today()
+                          and not (mirror_capture and (getattr(mirror_capture, "rules", None)
+                                                      or getattr(mirror_capture, "error", None))))
+        previous, min_id, scan_mode = None, 0, "full"
+        effective_from = from_date
+        if use_checkpoint:
+            previous, min_id, effective_from, scan_mode = crawl_checkpoint.plan(
+                duplicate_conn, channel_username, peer_id, crawl_mode, floor, to_date)
+        previous_id = (previous or {}).get("last_message_id", 0)
+        print(f"[CRAWL CURSOR] mode={scan_mode} min_id={min_id} from={effective_from}")
+        options = {"min_id": min_id} if min_id else {}
+        async for message in _iter_messages_with_reconnect(client, entity, channel_username, **options):
             if anchor is None and getattr(message, "id", None):
                 anchor = message.id
             if should_stop and should_stop():
@@ -306,10 +330,18 @@ async def crawl_channel(
             msg_date = message.date.date()
             if msg_date > to_date:
                 continue
-            if msg_date < from_date:
-                print(f"\n🏁 Reached start date {from_date}. Stopping channel.")
+            if msg_date < effective_from and not (
+                    use_checkpoint and previous and message.id > previous_id and msg_date >= floor):
+                print(f"\n🏁 Reached start date {effective_from}. Stopping channel.")
                 break
 
+            scanned += 1
+            newest = max(newest, int(message.id))
+            new_count += int(message.id > previous_id)
+            if scan_mode in ("baseline", "reconcile") and getattr(message, "edit_date", None):
+                edited += int(crawl_checkpoint.record_edit(
+                    duplicate_conn, channel_username, peer_id, message.id,
+                    message.edit_date, _extract_message_text(message)))
             await _mirror_callback(mirror_capture, "observe", message)
 
             forward_origin_kind = await _forward_origin_kind(client, message)
@@ -421,20 +453,33 @@ async def crawl_channel(
                         store_content_hash(duplicate_conn, row["id"], raw_text)
                     print("   💾 [RAW-SAVED] SQLite")
                 else:
+                    # INSERT OR IGNORE can suppress constraints other than
+                    # uniqueness; do not checkpoint a missing source record.
+                    if use_checkpoint and not duplicate_conn.execute(
+                        "SELECT 1 FROM messages WHERE channel_username=? AND message_id=? AND channel_id=?",
+                        (channel_username, message.id, peer_id),
+                    ).fetchone():
+                        raise RuntimeError("Source message was not persisted")
                     skipped_count += 1
                     print("   ⏭ [DUPLICATE] already stored")
             except Exception as exc:
+                storage_failed += 1
                 skipped_count += 1
                 logger.error("[CRAWL STORAGE ERROR] channel=%s message_id=%s error=%s", channel_username, message.id, exc)
                 print(f"   ⚠️ [RAW-ERROR] Storage error: {exc}")
 
             await asyncio.sleep(random.uniform(0.3, 1.0))
 
-        if (not stopped and config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_INGEST_KEY
+        stopped = stopped or bool(should_stop and should_stop())
+        if (not stopped and not storage_failed and config.ADVERTIO_INGEST_ENABLED and config.ADVERTIO_INGEST_KEY
                 and anchor is not None and not (should_stop and should_stop())):
             from collection.advertio_source_removal import check_source_removals
 
             await check_source_removals(client, entity, anchor)
+        stopped = stopped or bool(should_stop and should_stop())
+        if use_checkpoint and not stopped and not storage_failed:
+            crawl_checkpoint.save(duplicate_conn, channel_username, peer_id, crawl_mode,
+                                  floor, previous, newest, scanned, new_count, scan_mode)
         print(f"\n📊 CHANNEL RESULT: {channel_username}")
         print(f"📅 Range: {from_date} → {to_date}")
         print(f"✅ Saved: {saved_count}")
@@ -449,7 +494,7 @@ async def crawl_channel(
         print(f"❓ Unverifiable forwarded posts skipped: {forwarded_unknown_skipped_count}")
         print(f"👤 No-username messages skipped: {no_username_count}")
         print(f"⏭ Skipped: {skipped_count}")
-        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "forwarded_bot_skipped": forwarded_bot_skipped_count, "forwarded_unknown_skipped": forwarded_unknown_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "completed", "from_date": str(from_date), "to_date": str(to_date)}
+        return {"saved": saved_count, "duplicates_skipped": duplicate_skipped_count, "media_saved": media_metadata_count, "filtered": filtered_count, "bot_skipped": bot_filtered_count, "forwarded_channel_skipped": forwarded_channel_skipped_count, "forwarded_bot_skipped": forwarded_bot_skipped_count, "forwarded_unknown_skipped": forwarded_unknown_skipped_count, "no_username": no_username_count, "weak_text": weak_text_count, "skipped": skipped_count, "stopped": stopped, "status": "skipped" if stopped else "failed" if storage_failed else "completed", "from_date": str(from_date), "to_date": str(to_date), "storage_failed": storage_failed, "scan_mode": scan_mode, "scanned": scanned, "new_messages": new_count, "edits_detected": edited, "checkpoint": max(previous_id, newest) if use_checkpoint and not stopped and not storage_failed else previous_id}
     except errors.ChannelInvalidError:
         logger.error("[CRAWL ERROR] Invalid channel: %s", channel_username)
         print(f"\n❌ Invalid channel: {channel_username}")

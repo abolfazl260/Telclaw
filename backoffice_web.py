@@ -1302,6 +1302,8 @@ async def health_page(request):
     <tr><th>Monitor update offset</th><td>{int(monitor['offset']):,}</td></tr></tbody></table></section>
     <section><h2>Database</h2><p>SQLite quick check: {_health_badge(db['quick_check'])}</p>
     <p>Database file: <strong>{_fmt_bytes(db['file_size'])}</strong> · allocated: <strong>{_fmt_bytes(db['allocated_bytes'])}</strong></p>
+    <p>SQLite version: <strong>{_escape(db.get('sqlite_version') or '—')}</strong> · Journal mode: <strong>{_escape(str(db.get('journal_mode') or '—').upper())}</strong></p>
+    <p>WAL requested: {'yes' if db.get('wal_requested') else 'no'} · Version eligible: {'yes' if db.get('wal_version_supported') else 'no'} · WAL: {_fmt_bytes(db.get('wal_bytes'))} · SHM: {_fmt_bytes(db.get('shm_bytes'))}</p>
     <div class="scroll"><table><thead><tr><th>Table</th><th>Rows</th></tr></thead><tbody>
     {database_rows or '<tr><td colspan="2">No tracked tables.</td></tr>'}</tbody></table></div></section>
     </div>

@@ -90,6 +90,10 @@ def _snapshot_sqlite_database(source_path, snapshot_path):
     with closing(sqlite3.connect(f"{source_path.as_uri()}?mode=ro", uri=True)) as source:
         with closing(sqlite3.connect(str(snapshot_path))) as target:
             source.backup(target)
+            # The exported snapshot must be restorable as one standalone file,
+            # including on runtimes where WAL is deliberately disabled.
+            if target.execute("PRAGMA journal_mode=DELETE").fetchone()[0].lower() != "delete":
+                raise RuntimeError("Could not finalize standalone SQLite snapshot")
 
 
 def _write_database_part(snapshot_path, part_path, offset, size):

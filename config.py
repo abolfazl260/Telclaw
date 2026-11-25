@@ -42,6 +42,8 @@ API_ID = int(_required_env("TELEGRAM_API_ID"))
 API_HASH = _required_env("TELEGRAM_API_HASH")
 SESSION_DIR = os.getenv("TELCLAW_SESSION_DIR", "sessions")
 DB_NAME = os.getenv("TELCLAW_DB_NAME", "telclaw.db")
+# Opt in only after confirming local storage and a patched SQLite runtime.
+SQLITE_WAL_ENABLED = os.getenv("TELCLAW_SQLITE_WAL_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 CHANNELS_JSON = os.getenv("TELCLAW_CHANNELS_FILE", "channels.json")
 ERROR_LOG_FILE = os.getenv("TELCLAW_ERROR_LOG", "crawler_errors.log")
 MAX_MEDIA_SIZE = _int_env("TELCLAW_MAX_MEDIA_SIZE", 2 * 1024 * 1024, minimum=1)

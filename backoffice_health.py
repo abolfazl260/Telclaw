@@ -86,7 +86,22 @@ def _database_report(conn):
         file_size = Path(config.DB_NAME).stat().st_size
     except OSError:
         pass
+    from storage.sqlite_policy import wal_supported
+    import sqlite3
+    def sidecar_size(suffix):
+        try:
+            return Path(str(config.DB_NAME) + suffix).stat().st_size
+        except FileNotFoundError:
+            return 0
+        except OSError:
+            return None
     return {
+        "journal_mode": str(conn.execute("PRAGMA journal_mode").fetchone()[0]),
+        "sqlite_version": sqlite3.sqlite_version,
+        "wal_requested": config.SQLITE_WAL_ENABLED,
+        "wal_version_supported": wal_supported(),
+        "wal_bytes": sidecar_size("-wal"),
+        "shm_bytes": sidecar_size("-shm"),
         "quick_check": quick_check,
         "healthy": quick_check.lower() == "ok",
         "file_size": file_size,
